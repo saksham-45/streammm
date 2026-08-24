@@ -1,0 +1,4 @@
+#!/bin/bash
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+cd /Users/saksham/streammm || exit 1
+exec /Users/saksham/streammm/target/release/streamaid -c /Users/saksham/streammm/config.json

@@ -9,9 +9,10 @@ pub mod hub;
 pub mod protocol;
 pub mod publisher;
 pub mod server;
+pub mod snapshot;
 pub mod ws;
 
 pub use config::Config;
 pub use encoder::build_ffmpeg_argv;
 pub use hub::Hub;
-pub use protocol::{pack_media, unpack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG};
+pub use protocol::{pack_media, unpack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};

@@ -8,6 +8,10 @@
     "enabled": true,
     "logs": { "head_sampling_rate": 1 }
   },
+  "vars": {
+    "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+    "DEEPSEEK_MODEL": "deepseek-v4-flash-vision-exp"
+  },
   "durable_objects": {
     "bindings": [{ "name": "STREAM_ROOM", "class_name": "StreamRoom" }]
   },

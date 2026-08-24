@@ -69,6 +69,7 @@ main {
 
 aside h2 { font-size: 15px; margin: 0 0 8px; }
 aside h3 { font-size: 13px; margin: 16px 0 6px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
+#llm-note { font-size: 12px; color: #9a9a9a; margin-bottom: 8px; line-height: 1.4; }
 #latest-summary {
   background: #1a1a1a;
   border: 1px solid #333;
@@ -78,6 +79,9 @@ aside h3 { font-size: 13px; margin: 16px 0 6px; color: #aaa; text-transform: upp
   font-size: 14px;
   line-height: 1.45;
 }
+.qa { border: 1px solid #333; background: #111; border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.qa .q { font-weight: 600; }
+.qa .a { margin-top: 4px; }
 .question {
   background: #1a1a1a;
   border: 1px solid #333;

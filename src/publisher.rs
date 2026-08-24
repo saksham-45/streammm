@@ -2,13 +2,34 @@
 
 use crate::config::Config;
 use crate::hub::Hub;
-use crate::protocol::pack_media;
+use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+const PING_EVERY: Duration = Duration::from_secs(10);
+
+type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+async fn send_bin(ws: &mut Ws, payload: Vec<u8>) -> anyhow::Result<()> {
+    tokio::time::timeout(SEND_TIMEOUT, ws.send(Message::Binary(payload.into())))
+        .await
+        .map_err(|_| anyhow::anyhow!("publisher send timeout"))??;
+    Ok(())
+}
+
+async fn send_ping(ws: &mut Ws, msg: Message) -> anyhow::Result<()> {
+    tokio::time::timeout(SEND_TIMEOUT, ws.send(msg))
+        .await
+        .map_err(|_| anyhow::anyhow!("publisher ping timeout"))??;
+    Ok(())
+}
 
 pub fn next_backoff(prev: Duration) -> Duration {
     let doubled = prev.saturating_mul(2);
@@ -88,17 +109,25 @@ async fn run_session(hub: &Hub, url: &str, token: &str) -> anyhow::Result<()> {
     let (mut ws, _) = tokio_tungstenite::connect_async(u.as_str()).await?;
     let sub = hub.subscribe(8);
     if let Some(init) = hub.init_segment() {
-        let (w, h) = hub.size();
-        let packed = pack_media(crate::protocol::TYPE_INIT, &init);
-        let _ = (w, h);
-        ws.send(Message::Binary(packed.into())).await?;
+        send_bin(&mut ws, pack_media(TYPE_INIT, &init)).await?;
     }
+    if let Some(lat) = hub.latest() {
+        if lat.kind == TYPE_FRAG {
+            send_bin(&mut ws, pack_media(TYPE_FRAG, &lat.data)).await?;
+        }
+    }
+    let mut ping = tokio::time::interval(PING_EVERY);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             media = sub.recv() => {
-                let Some(m) = media else { break; };
-                let packed = pack_media(m.kind, &m.data);
-                ws.send(Message::Binary(packed.into())).await?;
+                let Some(m) = media else {
+                    anyhow::bail!("publisher hub closed");
+                };
+                send_bin(&mut ws, pack_media(m.kind, &m.data)).await?;
+            }
+            _ = ping.tick() => {
+                send_ping(&mut ws, Message::Ping(bytes::Bytes::new())).await?;
             }
             incoming = ws.next() => {
                 match incoming {
@@ -106,14 +135,13 @@ async fn run_session(hub: &Hub, url: &str, token: &str) -> anyhow::Result<()> {
                     Some(Err(e)) => return Err(e.into()),
                     Some(Ok(Message::Close(_))) => anyhow::bail!("publisher websocket close"),
                     Some(Ok(Message::Ping(p))) => {
-                        ws.send(Message::Pong(p)).await?;
+                        send_ping(&mut ws, Message::Pong(p)).await?;
                     }
                     _ => {}
                 }
             }
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]

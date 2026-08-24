@@ -4,7 +4,7 @@ use crate::capture::{enumerate_devices, Capture};
 use crate::config::{self, Config};
 use crate::headers::stream_header_map;
 use crate::hub::Hub;
-use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG};
+use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};
 use crate::publisher::Publisher;
 use crate::ws::{accept_key, decode_frame, encode_frame, OP_BIN, OP_CLOSE, OP_PING, OP_PONG};
 use axum::body::Body;
@@ -65,6 +65,7 @@ impl App {
         let cfg = self.cfg.lock().clone();
         self.capture.start(cfg.clone());
         self.publisher.start();
+        crate::snapshot::spawn(self.hub.clone());
         let app = self.clone();
         tokio::spawn(async move {
             loop {
@@ -113,6 +114,7 @@ impl App {
                 "fps_actual": self.hub.fps() * cap.frames_per_fragment as f64,
                 "running": cap.running,
                 "error": cap.error,
+                "last_media_age_s": self.hub.last_media_age_s(),
             },
             "stream": {
                 "mode": cfg.encoder.mode,
@@ -290,21 +292,37 @@ async fn api_analysis(State(app): State<Arc<App>>, req: Request) -> Response {
     if !authorize(&app, req.headers(), req.uri()) {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    Json(Vec::<Value>::new()).into_response()
+    Json(json!({
+        "last": null,
+        "history": [],
+        "llm": {
+            "configured": false,
+            "has_snapshot": false,
+            "analyzing": false,
+            "note": "Screen analysis and Q&A run on the Cloudflare Worker watch page. Set wrangler secret DEEPSEEK_API_KEY."
+        }
+    }))
+    .into_response()
 }
 
 async fn api_ask(State(app): State<Arc<App>>, req: Request) -> Response {
     if !authorize(&app, req.headers(), req.uri()) {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    json_err(StatusCode::BAD_GATEWAY, "LLM disabled")
+    json_err(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Ask the screen on the Cloudflare watch page after DEEPSEEK_API_KEY is set",
+    )
 }
 
 async fn api_analyze(State(app): State<Arc<App>>, req: Request) -> Response {
     if !authorize(&app, req.headers(), req.uri()) {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    json_err(StatusCode::BAD_GATEWAY, "LLM disabled")
+    json_err(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Analyze-now lives on the Cloudflare Worker",
+    )
 }
 
 async fn api_quality(State(app): State<Arc<App>>, req: Request) -> Response {
@@ -496,6 +514,9 @@ where
         tokio::select! {
             media = sub.recv() => {
                 let Some(m) = media else { break; };
+                if m.kind == TYPE_SNAP {
+                    continue;
+                }
                 send_bin(&mut stream, &pack_media(m.kind, &m.data)).await?;
             }
             n = stream.read(&mut tmp) => {

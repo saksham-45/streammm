@@ -1,6 +1,6 @@
 //! One encode, N subscribers. Drop-oldest when a client queue is full.
 
-use crate::protocol::{TYPE_FRAG, TYPE_INIT, TYPE_JPEG};
+use crate::protocol::{TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};
 use bytes::Bytes;
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
@@ -32,6 +32,7 @@ struct Inner {
     next_id: u64,
     gen: u64,
     ts: VecDeque<Instant>,
+    last_at: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -58,6 +59,7 @@ impl Hub {
                 next_id: 1,
                 gen: 0,
                 ts: VecDeque::new(),
+                last_at: None,
             })),
         }
     }
@@ -73,6 +75,7 @@ impl Hub {
         g.init = Some(data);
         g.width = w;
         g.height = h;
+        g.last_at = Some(Instant::now());
         Self::fanout(&mut g, media);
     }
 
@@ -84,8 +87,11 @@ impl Hub {
             height: h,
         };
         let mut g = self.inner.lock();
-        if kind != TYPE_INIT {
+        // TYPE_SNAP is for the Worker LLM only. Fan it out (publisher needs it)
+        // but never treat it as the live fragment — that would black-screen late joins.
+        if kind != TYPE_INIT && kind != TYPE_SNAP {
             let now = Instant::now();
+            g.last_at = Some(now);
             g.ts.push_back(now);
             while g.ts.front().is_some_and(|t| now.duration_since(*t).as_secs_f64() > 2.0) {
                 g.ts.pop_front();
@@ -142,6 +148,10 @@ impl Hub {
         (g.width, g.height)
     }
 
+    pub fn last_media_age_s(&self) -> Option<f64> {
+        self.inner.lock().last_at.map(|t| t.elapsed().as_secs_f64())
+    }
+
     pub fn fps(&self) -> f64 {
         let mut g = self.inner.lock();
         let now = Instant::now();
@@ -164,6 +174,7 @@ impl Hub {
         g.latest = None;
         g.init = None;
         g.ts.clear();
+        g.last_at = None;
         g.gen += 1;
         for c in g.subs.values() {
             c.lock().q.clear();
@@ -226,7 +237,7 @@ pub fn next_seq() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::TYPE_FRAG;
+    use crate::protocol::{TYPE_FRAG, TYPE_SNAP};
 
     #[test]
     fn drop_oldest_on_full_queue() {
@@ -243,6 +254,12 @@ mod tests {
     }
 
     #[test]
+    fn empty_hub_has_no_media_age() {
+        let hub = Hub::new();
+        assert!(hub.last_media_age_s().is_none());
+    }
+
+    #[test]
     fn init_stored_and_latest_updated() {
         let hub = Hub::new();
         hub.publish_init(Bytes::from_static(b"init"), 1920, 1080);
@@ -250,5 +267,23 @@ mod tests {
         assert_eq!(&hub.init_segment().unwrap()[..], b"init");
         assert_eq!(&hub.latest().unwrap().data[..], b"f1");
         assert_eq!(hub.size(), (1920, 1080));
+        assert!(hub.last_media_age_s().unwrap() < 1.0);
+    }
+
+    #[test]
+    fn snapshot_fans_out_but_does_not_replace_latest_fragment() {
+        let hub = Hub::new();
+        let sub = hub.subscribe(8);
+        hub.publish_init(Bytes::from_static(b"init"), 1920, 1080);
+        hub.publish_unit(TYPE_FRAG, Bytes::from_static(b"f1"), 0, 0);
+        hub.publish_unit(TYPE_SNAP, Bytes::from_static(b"\xff\xd8"), 0, 0);
+        assert_eq!(hub.latest().unwrap().kind, TYPE_FRAG);
+        assert_eq!(&hub.latest().unwrap().data[..], b"f1");
+        let mut kinds = Vec::new();
+        while let Some(m) = sub.try_recv() {
+            kinds.push(m.kind);
+        }
+        assert!(kinds.contains(&TYPE_SNAP));
+        assert!(kinds.contains(&TYPE_FRAG));
     }
 }

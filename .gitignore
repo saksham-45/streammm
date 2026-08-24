@@ -7,3 +7,5 @@ config.json
 /cloudflare/.stream_token
 /cloudflare/.dev.vars
 web/.watch-url
+/logs
+macos/Streamaid.app/Contents/_CodeSignature/

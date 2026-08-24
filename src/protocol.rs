@@ -3,6 +3,8 @@
 pub const TYPE_INIT: u8 = 1;
 pub const TYPE_FRAG: u8 = 2;
 pub const TYPE_JPEG: u8 = 3;
+/// Analysis snapshot for the Worker LLM. Viewers must ignore this type.
+pub const TYPE_SNAP: u8 = 4;
 
 pub fn pack_media(kind: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + payload.len());
@@ -28,6 +30,7 @@ mod tests {
             (TYPE_INIT, &b"ftyp....moov"[..]),
             (TYPE_FRAG, &b"moof....mdat"[..]),
             (TYPE_JPEG, &b"\xff\xd8\xff"[..]),
+            (TYPE_SNAP, &b"\xff\xd8snap"[..]),
         ] {
             let packed = pack_media(kind, blob);
             assert_eq!(packed[0], kind);

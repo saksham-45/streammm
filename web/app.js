@@ -7,6 +7,7 @@ const PENDING_CAP = 2;
 const TYPE_INIT = 1;
 const TYPE_FRAG = 2;
 const TYPE_JPEG = 3;
+const TYPE_SNAP = 4;
 
 function getCookie(name) {
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -80,10 +81,12 @@ function renderStatus(s) {
 }
 
 function wsUrl() {
+  // Same-origin UI always plays the local hub unless ?watch= is set.
+  // cloudflare.watch_url is for the edge player, not this page — using it
+  // here made localhost go black when the Worker publisher dropped.
   const q = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
   const fromQuery = q.get("watch");
-  const watch = cfg && cfg.cloudflare && cfg.cloudflare.watch_url;
-  const base = fromQuery || watch || url("/stream.ws");
+  const base = fromQuery || url("/stream.ws");
   const u = new URL(base, typeof location !== "undefined" ? location.href : "http://127.0.0.1/");
   u.protocol = u.protocol.replace("http", "ws");
   return u.toString();
@@ -145,14 +148,17 @@ function handleNewStream() {
 
 function maybeLiveSeek() {
   const video = $("stream-video");
-  if (liveSeeked || !sb || !sb.buffered.length || !video) return;
+  if (!sb || !sb.buffered.length || !video) return;
   const start = sb.buffered.start(0);
   const end = sb.buffered.end(sb.buffered.length - 1);
-  if (end - start < 0.2) return;
-  liveSeeked = true;
-  video.currentTime = Math.max(start, end - LIVE_EDGE_S);
-  seekDeadline = (typeof performance !== "undefined" ? performance.now() : 0) + 1500;
-  video.play().catch(function () {});
+  if (end - start < 0.05) return;
+  // Capture PTS can be hours in; playing at t=0 is a black screen.
+  if (!liveSeeked || video.currentTime < start - 0.25) {
+    liveSeeked = true;
+    video.currentTime = Math.max(start, end - LIVE_EDGE_S);
+    seekDeadline = (typeof performance !== "undefined" ? performance.now() : 0) + 1500;
+    video.play().catch(function () {});
+  }
 }
 
 function catchUp() {
@@ -222,10 +228,11 @@ function rebuildMse() {
 
 function scheduleMseReconnect() {
   if (mseReconnectTimer) return;
+  const delay = Math.min(1000 * Math.pow(2, Math.min(wsFails, 3)), 8000);
   mseReconnectTimer = setTimeout(function () {
     mseReconnectTimer = null;
     startMse();
-  }, 1000);
+  }, delay);
 }
 
 function onWsMessage(ev) {
@@ -233,6 +240,7 @@ function onWsMessage(ev) {
   if (!buf.length) return;
   const type = buf[0];
   const payload = buf.slice(1);
+  if (type === TYPE_SNAP) return;
   if (type === TYPE_JPEG) {
     drawJpeg(payload);
     return;
@@ -241,6 +249,73 @@ function onWsMessage(ev) {
     enqueue(type, payload);
     pump();
   }
+}
+
+function workerHttp(path) {
+  const w = cfg && cfg.cloudflare && cfg.cloudflare.watch_url;
+  if (!w) return null;
+  try {
+    const u = new URL(w);
+    u.protocol = u.protocol === "wss:" ? "https:" : "http:";
+    u.pathname = path;
+    return u.toString();
+  } catch (e) {
+    return null;
+  }
+}
+
+function renderEdgeAnalysis(body) {
+  const note = $("llm-note");
+  const st = (body && body.llm) || {};
+  if (note) {
+    if (!st.configured) {
+      note.textContent = "Worker ready. Attach DeepSeek later: npx wrangler secret put DEEPSEEK_API_KEY";
+    } else if (!st.has_snapshot) {
+      note.textContent = "Waiting for a screenshot from this origin (~8s)…";
+    } else {
+      note.textContent = "DeepSeek " + (st.model || "") + (st.analyzing ? " — analyzing" : " — ready");
+    }
+  }
+  const last = body && body.last;
+  const sum = $("latest-summary");
+  if (sum && last) {
+    sum.textContent = last.error ? ("error: " + last.error) : (last.summary || "No analysis yet.");
+  }
+  const qs = $("questions");
+  if (qs) {
+    qs.innerHTML = "";
+    ((last && last.questions) || []).forEach(function (q) {
+      const d = document.createElement("div");
+      d.className = "qa";
+      const qe = document.createElement("div");
+      qe.className = "q";
+      qe.textContent = q.question || "";
+      const ae = document.createElement("div");
+      ae.className = "a";
+      ae.textContent = (q.answer || "") + (q.confidence != null ? " (" + q.confidence + "%)" : "");
+      d.append(qe, ae);
+      qs.appendChild(d);
+    });
+  }
+  const hist = $("history");
+  if (hist) {
+    hist.innerHTML = "";
+    ((body && body.history) || []).slice(0, 12).forEach(function (a) {
+      const li = document.createElement("li");
+      li.textContent = fmtTs(a.ts) + " — " + (a.summary || a.error || "");
+      hist.appendChild(li);
+    });
+  }
+}
+
+async function refreshEdgeAnalysis() {
+  const href = workerHttp("/api/analysis");
+  if (!href) return;
+  try {
+    const res = await fetch(href);
+    const body = await res.json();
+    renderEdgeAnalysis(body);
+  } catch (e) { /* ignore */ }
 }
 
 function connectWsForMse() {
@@ -290,6 +365,7 @@ function onSourceOpen() {
   }
   try {
     sb = ms.addSourceBuffer(type);
+    try { sb.mode = "sequence"; } catch (e) { /* ignore */ }
   } catch (e) {
     showStreamError("SourceBuffer error: " + e.message);
     return;
@@ -534,20 +610,28 @@ function onReady() {
       if (!q) return;
       const box = $("ask-result");
       if (box) box.textContent = "asking…";
+      const href = workerHttp("/api/ask") || url("/api/ask");
       try {
-        const res = await api("/api/ask", {
+        const res = await fetch(href, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question: q }),
         });
         const body = await res.json();
-        if (box) box.textContent = body.answer || body.error || "";
+        if (box) {
+          box.textContent = body.error
+            ? ("error: " + body.error)
+            : ((body.answer || "") + (body.confidence != null ? " (" + body.confidence + "%)" : ""));
+        }
       } catch (err) {
         if (box) box.textContent = "error: " + err.message;
       }
     });
   }
-  loadConfig();
+  loadConfig().then(function () {
+    refreshEdgeAnalysis();
+    setInterval(refreshEdgeAnalysis, 4000);
+  });
   connectEvents();
   api("/api/status").then(function (res) { return res.json(); }).then(renderStatus).catch(function () {});
 }

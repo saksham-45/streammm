@@ -47,9 +47,12 @@ export default {
     if (
       url.pathname === "/publish" ||
       url.pathname === "/watch" ||
-      url.pathname === "/stream.ws"
+      url.pathname === "/stream.ws" ||
+      url.pathname.startsWith("/api/")
     ) {
-      const stub = env.STREAM_ROOM.getByName("default");
+      const name = url.searchParams.get("room");
+      const room = name && /^[a-zA-Z0-9_-]{1,64}$/.test(name) ? name : "default";
+      const stub = env.STREAM_ROOM.getByName(room);
       return stub.fetch(request);
     }
     return new Response("not found", { status: 404 });

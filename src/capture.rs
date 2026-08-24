@@ -9,8 +9,16 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use regex::Regex;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+
+pub fn capture_backoff(prev: Duration) -> Duration {
+    prev.saturating_mul(2).clamp(Duration::from_secs(1), Duration::from_secs(8))
+}
+
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(12);
+const STALL_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Debug, Default)]
 pub struct CaptureStatus {
@@ -68,13 +76,26 @@ impl Capture {
         let hub = self.hub.clone();
         let status = self.status.clone();
         let handle = tokio::spawn(async move {
-            if let Err(e) = run_ffmpeg(cfg, input, hub, status.clone()).await {
-                let mut st = status.lock();
-                st.running = false;
-                st.error = e.to_string();
-                tracing::warn!("capture: {e}");
-            } else {
+            let mut backoff = Duration::from_secs(1);
+            loop {
+                {
+                    let mut st = status.lock();
+                    st.running = true;
+                }
+                hub.clear();
+                match run_ffmpeg(cfg.clone(), input.clone(), hub.clone(), status.clone()).await {
+                    Ok(()) => {
+                        tracing::warn!("capture: ffmpeg exited; restarting");
+                        status.lock().error = "ffmpeg exited; restarting".into();
+                    }
+                    Err(e) => {
+                        tracing::warn!("capture: {e}; restarting");
+                        status.lock().error = format!("{e}; restarting");
+                    }
+                }
                 status.lock().running = false;
+                tokio::time::sleep(backoff).await;
+                backoff = capture_backoff(backoff);
             }
         });
         *self.task.lock() = Some(handle);
@@ -202,19 +223,22 @@ async fn run_ffmpeg(
     }
 
     let mut buf = [0u8; 65536];
+    let mut got_data = false;
     if cfg.encoder.mode == "mjpeg" {
         let mut fr = MjpegFramer::new();
         loop {
-            let n = stdout.read(&mut buf).await?;
+            let n = read_stdout(&mut stdout, &mut buf, got_data).await?;
             if n == 0 {
                 break;
             }
+            got_data = true;
             for jpeg in fr.push(&buf[..n]) {
                 let (w, h) = jpeg_size(&jpeg);
                 {
                     let mut st = status.lock();
                     st.width = w;
                     st.height = h;
+                    st.error.clear();
                 }
                 hub.publish_unit(TYPE_JPEG, Bytes::from(jpeg), w, h);
             }
@@ -222,15 +246,17 @@ async fn run_ffmpeg(
     } else {
         let mut fr = Mp4Framer::new();
         loop {
-            let n = stdout.read(&mut buf).await?;
+            let n = read_stdout(&mut stdout, &mut buf, got_data).await?;
             if n == 0 {
                 break;
             }
+            got_data = true;
             for unit in fr.push(&buf[..n]) {
                 match unit {
                     Unit::Init(data) => {
                         let (w, h) = {
-                            let st = status.lock();
+                            let mut st = status.lock();
+                            st.error.clear();
                             (st.width, st.height)
                         };
                         hub.publish_init(Bytes::from(data), w, h);
@@ -248,4 +274,37 @@ async fn run_ffmpeg(
         anyhow::bail!("ffmpeg exited with code {:?}", code.code());
     }
     Ok(())
+}
+
+async fn read_stdout<R: tokio::io::AsyncRead + Unpin>(
+    stdout: &mut R,
+    buf: &mut [u8],
+    got_data: bool,
+) -> anyhow::Result<usize> {
+    let wait = if got_data {
+        STALL_TIMEOUT
+    } else {
+        FIRST_FRAME_TIMEOUT
+    };
+    match tokio::time::timeout(wait, stdout.read(buf)).await {
+        Ok(Ok(n)) => Ok(n),
+        Ok(Err(e)) => Err(e.into()),
+        Err(_) => anyhow::bail!("ffmpeg stalled (no output for {wait:?})"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_backoff_caps_at_8s() {
+        let mut d = Duration::from_secs(1);
+        d = capture_backoff(d);
+        assert_eq!(d, Duration::from_secs(2));
+        for _ in 0..10 {
+            d = capture_backoff(d);
+        }
+        assert_eq!(d, Duration::from_secs(8));
+    }
 }
