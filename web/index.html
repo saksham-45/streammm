@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>streamaid</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>streamaid</h1>
+  <div id="quality-pill" title="">quality —</div>
+  <div id="status-pill" title="">—</div>
+  <button id="gear" type="button">Settings</button>
+</header>
+<div id="analysis-banner" class="hidden">ANALYSIS ACTIVE</div>
+<main>
+  <section id="stream-pane">
+    <img id="stream-img" class="hidden" alt="screen stream">
+    <canvas id="stream-canvas" class="hidden"></canvas>
+    <video id="stream-video" class="hidden" autoplay muted playsinline></video>
+    <div id="stream-error" class="hidden"></div>
+  </section>
+  <aside id="analysis-pane">
+    <h2>Screen analysis</h2>
+    <div id="latest-summary">No analysis yet.</div>
+    <div id="questions"></div>
+    <form id="ask-form">
+      <input id="ask-input" placeholder="Ask about the screen…" autocomplete="off">
+      <button type="submit">Ask</button>
+    </form>
+    <div id="ask-result"></div>
+    <h3>History</h3>
+    <ul id="history"></ul>
+  </aside>
+</main>
+
+<div id="config-drawer" class="hidden">
+  <h2>Configuration</h2>
+  <label>Host <input id="cfg-host" type="text"></label>
+  <label>Port <input id="cfg-port" type="number" min="1" max="65535"></label>
+  <label>Token <input id="cfg-token" type="password" autocomplete="off"></label>
+  <label>Capture input
+    <div class="row">
+      <input id="cfg-input" type="text" placeholder="auto-detect">
+      <button id="detect" type="button">Detect</button>
+    </div>
+  </label>
+  <select id="device-select" class="hidden"></select>
+  <label>FPS <input id="cfg-fps" type="number" min="1" max="60"></label>
+  <label>Scale
+    <select id="cfg-scale">
+      <option value="0.25">0.25</option>
+      <option value="0.5">0.5</option>
+      <option value="0.75">0.75</option>
+      <option value="1.0">1.0</option>
+    </select>
+  </label>
+  <label>JPEG quality
+    <div class="row">
+      <input id="cfg-jpeg" type="range" min="30" max="95" step="1">
+      <span id="jpeg-val"></span>
+    </div>
+  </label>
+  <label>Encoder mode
+    <select id="cfg-mode">
+      <option value="ffmpeg">H.264 (Twitch-class)</option>
+      <option value="hevc">HEVC (Apple Silicon)</option>
+      <option value="mjpeg">MJPEG (compat)</option>
+    </select>
+  </label>
+  <label>Bitrate kbps <input id="cfg-bitrate" type="number" min="2000" max="20000"></label>
+  <label>GOP frames <input id="cfg-gop" type="number" min="6" max="60"></label>
+  <label>Cloudflare publish URL <input id="cfg-publish" type="text" placeholder="wss://…/publish"></label>
+  <label>Cloudflare watch URL <input id="cfg-watch" type="text" placeholder="wss://…/watch (optional)"></label>
+  <label><input id="cfg-llm-enabled" type="checkbox"> LLM analysis</label>
+  <label>Base URL <input id="cfg-base-url" type="text"></label>
+  <label>API key <input id="cfg-api-key" type="password" autocomplete="off"></label>
+  <label>Model <input id="cfg-model" type="text"></label>
+  <label>Interval sec <input id="cfg-interval" type="number" min="2" max="3600"></label>
+  <label>Prompt <textarea id="cfg-prompt" placeholder="empty = default prompt"></textarea></label>
+  <button id="save" type="button">Save</button>
+  <div id="save-note"></div>
+  <div id="restart-note" class="hidden">Restart the service to apply host/port/token changes.</div>
+</div>
+
+<div id="login-overlay" class="hidden">
+  <form id="login-form">
+    <input id="login-token" type="password" placeholder="Token" autocomplete="off">
+    <button type="submit">Unlock</button>
+  </form>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

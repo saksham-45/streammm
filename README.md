@@ -1,65 +1,110 @@
-# streamaid
+# streammm / streamaid
 
-LAN/cloud screen streaming with a browser UI: captures the host display at up to 1080p/30 fps and streams it to any browser, with configurable quality, latency tuning, an optional LLM screen-analysis loop, and an automated 3-minute image-quality monitor.
+Low-latency **1080p30 screen streaming**: capture on your machine, play in any browser, fan out through **Cloudflare Workers + Durable Objects**.
 
-Python stdlib only; `ffmpeg` (and optionally `tesseract`) are the only external binaries.
+The origin is a **Rust** binary (`cargo run`). It encodes with ffmpeg (VideoToolbox on macOS, libx264 elsewhere) and delivers **WebSocket** fMP4 — not HTTP progressive download. That is the difference between localhost looking fine and Cloudflare looking like a stalled VOD.
 
-## Quick start
+Python `streamaid/` is leftover from the first prototype. **Do not launch it.** Use the Rust binary.
+
+## Why WebSocket (not `/stream.mp4` through a tunnel)
+
+`cloudflared` buffers proxied HTTP unless `Content-Type: text/event-stream`. A live `video/mp4` body is held until the connection dies. WebSocket (`/stream.ws`, and the Worker `/publish` → `/watch` path) is not buffered that way.
+
+The Worker also means **one upload** from home (the publisher) and **N viewers** at the edge.
+
+## Quick start (this computer)
 
 ```bash
-cd streamaid
-python3 -m streamaid            # config file: ./config.json (created with defaults)
-# open http://<host-ip>:8080
+# ffmpeg on PATH. macOS: Screen Recording permission for the terminal.
+cargo run --release
+# open http://127.0.0.1:8080
 ```
 
-Requirements: ffmpeg on PATH. macOS: grant Screen Recording permission to the terminal.
+`./config.json` is created with defaults if missing (gitignored).
 
-## Encoders
+| Default | Value |
+|---------|--------|
+| Encoder | H.264 (`ffmpeg`), High profile, no B-frames |
+| Bitrate | 10 Mbps CBR, 0.5 s VBV |
+| GOP | 15 frames (~0.5 s join / live edge) |
+| Size | cap 1920×1080, **never upscale**, lanczos downscale |
+| fps | 30 |
 
-- `mjpeg` — universal, works everywhere (iOS uses a canvas renderer)
-- `ffmpeg` — H.264, VideoToolbox hardware on macOS, `libx264` elsewhere
-- `hevc` — Apple Silicon hardware HEVC (~2x compression of H.264); needs an HEVC-capable browser (Safari, Chrome on Apple hardware)
+## Global watch link
 
-All encoder/capture/LLM settings apply live (no restart). `host`, `port`, `token` take effect on restart.
-
-## Quality monitor
-
-Every 3 minutes: decodes the live frame, scores sharpness (Laplacian variance vs a calibrated reference), readability (edge density + tesseract OCR median confidence when installed), and logs a WARNING + shows a red pill in the UI when the score drops below 90 on consecutive checks.
+1. Keep the origin running on the capture machine.
+2. Deploy the Worker (below).
+3. Set origin `cloudflare.publish_url` / `watch_url` (or the Settings fields in the UI).
+4. Share:
 
 ```
-GET  /api/quality        → last result + history
-POST /api/quality-check  → run one now
+https://<your-worker>.workers.dev/?token=<STREAM_TOKEN>
 ```
 
-## API
+Anyone with that URL can watch. Treat the token like a stream key. Do not commit it.
+
+The Worker homepage is a player. `/watch` is the WebSocket; `/publish` is ingest from the origin; `/health` is public.
+
+## Cloudflare deploy
+
+```bash
+cd cloudflare
+npm install
+npx wrangler login          # once
+npx wrangler secret put STREAM_TOKEN
+npx wrangler deploy
+```
+
+Then on the origin (UI Settings, or `POST /api/config`):
+
+```json
+{
+  "cloudflare": {
+    "publish_url": "wss://<your-worker>.workers.dev/publish?token=<STREAM_TOKEN>",
+    "watch_url": "wss://<your-worker>.workers.dev/watch?token=<STREAM_TOKEN>"
+  }
+}
+```
+
+Restart the origin after changing publish URL if it was already connected.
+
+Optional: `cloudflare/cloudflared.yml` if you want the **UI** on a tunnel hostname. Do not send HTTP `/stream.mp4` through the tunnel.
+
+## Streams (origin)
+
+| Path | Role |
+|------|------|
+| `GET /stream.ws` | **Primary.** Binary: `1` = fMP4 init, `2` = fragment, `3` = JPEG |
+| `GET /stream.mp4` | LAN fallback, `Transfer-Encoding: chunked` (buffered on Tunnel) |
+| `GET /stream.mjpeg` | MJPEG compatibility |
+
+Player live-edge is ~0.45 s with `playbackRate` catch-up. It appends by type byte, not by sniffing `ftyp` in a TCP chunk.
+
+## API (origin)
 
 ```
 GET  /                UI
-GET  /stream.mjpeg    MJPEG stream (mjpeg mode)
-GET  /stream.mp4      fragmented MP4 (ffmpeg/hevc modes)
-GET  /api/status      capture/stream/llm/quality status
+GET  /api/status      capture/stream JSON
 GET  /api/config      full config        POST /api/config   apply+save
-GET  /api/analysis    LLM analysis history (last 50)
-POST /api/ask         {"question": "..."}
-POST /api/analyze-now
-GET  /api/events      SSE (status/analysis/config-applied)
+GET  /api/events      SSE
 GET  /api/capture-devices
 ```
 
-Token auth (opt-in via config `token`): `Authorization: Bearer`, `?token=`, or `streamaid_token` cookie.
-
-## LLM analysis
-
-OpenAI-compatible endpoint (works with Ollama). Enable in the UI, point `base_url`/`model` at any vision model that follows the JSON contract (verified with `llava-phi3` via Ollama).
-
-## Platform notes
-
-- macOS: avfoundation capture, device auto-detected at startup; VideoToolbox hardware encoding.
-- Windows: gdigrab. Linux: x11grab (X11 only).
-- Some virtual displays ignore `-framerate`; the capture pipeline throttles pre-encode to the configured fps regardless.
+Optional token: `Authorization: Bearer`, `?token=`, or `streamaid_token` cookie.
 
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests
+cargo test                 # unit + HTTP API + player contract + stress
+cargo test --test stress   # 30 fps hub budget, 16 WS clients, real 1080p30 ffmpeg encode
+cd cloudflare && npm test  # Durable Object: 401, fan-out, late join, publisher replace
+```
+
+## Layout
+
+```
+src/            Rust origin (encode, hub, HTTP/WS, publisher)
+web/            local UI
+cloudflare/     Worker + StreamRoom Durable Object + public player
+streamaid/      deprecated Python prototype
 ```

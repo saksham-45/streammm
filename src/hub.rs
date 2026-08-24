@@ -1,0 +1,254 @@
+//! One encode, N subscribers. Drop-oldest when a client queue is full.
+
+use crate::protocol::{TYPE_FRAG, TYPE_INIT, TYPE_JPEG};
+use bytes::Bytes;
+use parking_lot::Mutex;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::Notify;
+
+#[derive(Clone, Debug)]
+pub struct Media {
+    pub kind: u8,
+    pub data: Bytes,
+    pub width: u32,
+    pub height: u32,
+}
+
+struct Client {
+    q: VecDeque<Media>,
+    cap: usize,
+    notify: Arc<Notify>,
+}
+
+struct Inner {
+    latest: Option<Media>,
+    init: Option<Bytes>,
+    width: u32,
+    height: u32,
+    subs: HashMap<u64, Arc<Mutex<Client>>>,
+    next_id: u64,
+    gen: u64,
+    ts: VecDeque<Instant>,
+}
+
+#[derive(Clone)]
+pub struct Hub {
+    inner: Arc<Mutex<Inner>>,
+}
+
+pub struct Subscriber {
+    hub: Hub,
+    id: u64,
+    notify: Arc<Notify>,
+    q: Arc<Mutex<Client>>,
+}
+
+impl Hub {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                latest: None,
+                init: None,
+                width: 0,
+                height: 0,
+                subs: HashMap::new(),
+                next_id: 1,
+                gen: 0,
+                ts: VecDeque::new(),
+            })),
+        }
+    }
+
+    pub fn publish_init(&self, data: Bytes, w: u32, h: u32) {
+        let media = Media {
+            kind: TYPE_INIT,
+            data: data.clone(),
+            width: w,
+            height: h,
+        };
+        let mut g = self.inner.lock();
+        g.init = Some(data);
+        g.width = w;
+        g.height = h;
+        Self::fanout(&mut g, media);
+    }
+
+    pub fn publish_unit(&self, kind: u8, data: Bytes, w: u32, h: u32) {
+        let media = Media {
+            kind,
+            data,
+            width: w,
+            height: h,
+        };
+        let mut g = self.inner.lock();
+        if kind != TYPE_INIT {
+            let now = Instant::now();
+            g.ts.push_back(now);
+            while g.ts.front().is_some_and(|t| now.duration_since(*t).as_secs_f64() > 2.0) {
+                g.ts.pop_front();
+            }
+            if w > 0 {
+                g.width = w;
+                g.height = h;
+            }
+            g.latest = Some(media.clone());
+        }
+        Self::fanout(&mut g, media);
+    }
+
+    fn fanout(g: &mut Inner, media: Media) {
+        for c in g.subs.values() {
+            let mut client = c.lock();
+            if client.q.len() >= client.cap {
+                client.q.pop_front();
+            }
+            client.q.push_back(media.clone());
+            client.notify.notify_one();
+        }
+    }
+
+    pub fn subscribe(&self, cap: usize) -> Subscriber {
+        let notify = Arc::new(Notify::new());
+        let client = Arc::new(Mutex::new(Client {
+            q: VecDeque::new(),
+            cap: cap.max(1),
+            notify: notify.clone(),
+        }));
+        let mut g = self.inner.lock();
+        let id = g.next_id;
+        g.next_id += 1;
+        g.subs.insert(id, client.clone());
+        Subscriber {
+            hub: self.clone(),
+            id,
+            notify,
+            q: client,
+        }
+    }
+
+    pub fn init_segment(&self) -> Option<Bytes> {
+        self.inner.lock().init.clone()
+    }
+
+    pub fn latest(&self) -> Option<Media> {
+        self.inner.lock().latest.clone()
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        let g = self.inner.lock();
+        (g.width, g.height)
+    }
+
+    pub fn fps(&self) -> f64 {
+        let mut g = self.inner.lock();
+        let now = Instant::now();
+        while g.ts.front().is_some_and(|t| now.duration_since(*t).as_secs_f64() > 2.0) {
+            g.ts.pop_front();
+        }
+        g.ts.len() as f64 / 2.0
+    }
+
+    pub fn clients(&self) -> usize {
+        self.inner.lock().subs.len()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.inner.lock().gen
+    }
+
+    pub fn clear(&self) {
+        let mut g = self.inner.lock();
+        g.latest = None;
+        g.init = None;
+        g.ts.clear();
+        g.gen += 1;
+        for c in g.subs.values() {
+            c.lock().q.clear();
+        }
+    }
+
+    fn unsubscribe(&self, id: u64) {
+        self.inner.lock().subs.remove(&id);
+    }
+}
+
+impl Default for Hub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Subscriber {
+    pub fn try_recv(&self) -> Option<Media> {
+        self.q.lock().q.pop_front()
+    }
+
+    pub async fn recv(&self) -> Option<Media> {
+        loop {
+            if let Some(m) = self.try_recv() {
+                return Some(m);
+            }
+            self.notify.notified().await;
+            if self.q.lock().q.is_empty() && !self.hub.inner.lock().subs.contains_key(&self.id) {
+                return None;
+            }
+        }
+    }
+}
+
+impl Drop for Subscriber {
+    fn drop(&mut self) {
+        self.hub.unsubscribe(self.id);
+        self.notify.notify_one();
+    }
+}
+
+pub fn kind_for_mode(mode: &str, is_init: bool) -> u8 {
+    if mode == "mjpeg" {
+        TYPE_JPEG
+    } else if is_init {
+        TYPE_INIT
+    } else {
+        TYPE_FRAG
+    }
+}
+
+static FRAME_SEQ: AtomicU64 = AtomicU64::new(0);
+
+#[allow(dead_code)]
+pub fn next_seq() -> u64 {
+    FRAME_SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::TYPE_FRAG;
+
+    #[test]
+    fn drop_oldest_on_full_queue() {
+        let hub = Hub::new();
+        let sub = hub.subscribe(2);
+        hub.publish_unit(TYPE_FRAG, Bytes::from_static(b"a"), 0, 0);
+        hub.publish_unit(TYPE_FRAG, Bytes::from_static(b"b"), 0, 0);
+        hub.publish_unit(TYPE_FRAG, Bytes::from_static(b"c"), 0, 0);
+        let first = sub.try_recv().unwrap();
+        let second = sub.try_recv().unwrap();
+        assert!(sub.try_recv().is_none());
+        assert_eq!(&first.data[..], b"b");
+        assert_eq!(&second.data[..], b"c");
+    }
+
+    #[test]
+    fn init_stored_and_latest_updated() {
+        let hub = Hub::new();
+        hub.publish_init(Bytes::from_static(b"init"), 1920, 1080);
+        hub.publish_unit(TYPE_FRAG, Bytes::from_static(b"f1"), 0, 0);
+        assert_eq!(&hub.init_segment().unwrap()[..], b"init");
+        assert_eq!(&hub.latest().unwrap().data[..], b"f1");
+        assert_eq!(hub.size(), (1920, 1080));
+    }
+}

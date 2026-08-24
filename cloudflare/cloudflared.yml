@@ -1,0 +1,20 @@
+# Example locally-managed tunnel. Media must use WebSocket (`/stream.ws`).
+# HTTP `/stream.mp4` through Cloudflare Tunnel is buffered unless
+# Content-Type is text/event-stream — do not use HTTP fMP4 on the WAN path.
+#
+#   cloudflared tunnel create streamaid
+#   cloudflared tunnel route dns streamaid stream.example.com
+#   cloudflared tunnel --config cloudflare/cloudflared.yml run streamaid
+
+tunnel: <TUNNEL-UUID>
+credentials-file: /path/to/<TUNNEL-UUID>.json
+
+ingress:
+  - hostname: stream.example.com
+    service: http://127.0.0.1:8080
+    originRequest:
+      connectTimeout: 30s
+      keepAliveTimeout: 90s
+      tcpKeepAlive: 30s
+      disableChunkedEncoding: false
+  - service: http_status:404

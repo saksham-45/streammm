@@ -1,0 +1,141 @@
+//! Outbound WebSocket publisher: one copy of the bitstream to Cloudflare.
+
+use crate::config::Config;
+use crate::hub::Hub;
+use crate::protocol::pack_media;
+use futures_util::{SinkExt, StreamExt};
+use parking_lot::Mutex;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
+use tokio_tungstenite::tungstenite::Message;
+
+pub fn next_backoff(prev: Duration) -> Duration {
+    let doubled = prev.saturating_mul(2);
+    doubled.clamp(Duration::from_secs(1), Duration::from_secs(30))
+}
+
+pub fn publish_url_with_token(base: &str, token: &str) -> anyhow::Result<url::Url> {
+    let mut u = url::Url::parse(base)?;
+    if !token.is_empty() && u.query_pairs().all(|(k, _)| k != "token") {
+        u.query_pairs_mut().append_pair("token", token);
+    }
+    Ok(u)
+}
+
+#[derive(Clone)]
+pub struct Publisher {
+    hub: Hub,
+    cfg: Arc<Mutex<Config>>,
+    task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl Publisher {
+    pub fn new(hub: Hub, cfg: Config) -> Self {
+        Self {
+            hub,
+            cfg: Arc::new(Mutex::new(cfg)),
+            task: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn set_config(&self, cfg: Config) {
+        *self.cfg.lock() = cfg;
+    }
+
+    pub fn start(&self) {
+        self.stop();
+        let hub = self.hub.clone();
+        let cfg = self.cfg.clone();
+        let handle = tokio::spawn(async move {
+            let mut backoff = Duration::from_secs(1);
+            loop {
+                let (url, token) = {
+                    let c = cfg.lock();
+                    (c.cloudflare.publish_url.clone(), c.token.clone())
+                };
+                if url.is_empty() {
+                    sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+                match run_session(&hub, &url, &token).await {
+                    Ok(()) => backoff = Duration::from_secs(1),
+                    Err(e) => {
+                        tracing::warn!("cloudflare publisher: {e}");
+                        sleep(backoff).await;
+                        backoff = next_backoff(backoff);
+                    }
+                }
+            }
+        });
+        *self.task.lock() = Some(handle);
+    }
+
+    pub fn stop(&self) {
+        if let Some(h) = self.task.lock().take() {
+            h.abort();
+        }
+    }
+}
+
+async fn run_session(hub: &Hub, url: &str, token: &str) -> anyhow::Result<()> {
+    let u = publish_url_with_token(url, token)?;
+    tracing::info!(
+        "publishing to {}{}",
+        u.host_str().unwrap_or("?"),
+        u.path()
+    );
+    let (mut ws, _) = tokio_tungstenite::connect_async(u.as_str()).await?;
+    let sub = hub.subscribe(8);
+    if let Some(init) = hub.init_segment() {
+        let (w, h) = hub.size();
+        let packed = pack_media(crate::protocol::TYPE_INIT, &init);
+        let _ = (w, h);
+        ws.send(Message::Binary(packed.into())).await?;
+    }
+    loop {
+        tokio::select! {
+            media = sub.recv() => {
+                let Some(m) = media else { break; };
+                let packed = pack_media(m.kind, &m.data);
+                ws.send(Message::Binary(packed.into())).await?;
+            }
+            incoming = ws.next() => {
+                match incoming {
+                    None => anyhow::bail!("publisher websocket closed"),
+                    Some(Err(e)) => return Err(e.into()),
+                    Some(Ok(Message::Close(_))) => anyhow::bail!("publisher websocket close"),
+                    Some(Ok(Message::Ping(p))) => {
+                        ws.send(Message::Pong(p)).await?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_caps_at_30s() {
+        let mut d = Duration::from_secs(1);
+        d = next_backoff(d);
+        assert_eq!(d, Duration::from_secs(2));
+        for _ in 0..10 {
+            d = next_backoff(d);
+        }
+        assert_eq!(d, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn appends_token_query() {
+        let u = publish_url_with_token("wss://example.com/publish", "secret").unwrap();
+        assert!(u.as_str().contains("token=secret"));
+        let u = publish_url_with_token("wss://example.com/publish?token=secret", "other").unwrap();
+        assert_eq!(u.query_pairs().filter(|(k, _)| k == "token").count(), 1);
+    }
+}

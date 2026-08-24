@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "streamaid-edge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 }
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "STREAM_ROOM", "class_name": "StreamRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StreamRoom"] }]
+}
