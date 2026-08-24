@@ -4,8 +4,6 @@ Low-latency **1080p30 screen streaming**: capture on your machine, play in any b
 
 The origin is a **Rust** binary (`cargo run`). It encodes with ffmpeg (VideoToolbox on macOS, libx264 elsewhere) and delivers **WebSocket** fMP4 — not HTTP progressive download. That is the difference between localhost looking fine and Cloudflare looking like a stalled VOD.
 
-Python `streamaid/` is leftover from the first prototype. **Do not launch it.** Use the Rust binary.
-
 ## Why WebSocket (not `/stream.mp4` through a tunnel)
 
 `cloudflared` buffers proxied HTTP unless `Content-Type: text/event-stream`. A live `video/mp4` body is held until the connection dies. WebSocket (`/stream.ws`, and the Worker `/publish` → `/watch` path) is not buffered that way.
@@ -106,5 +104,5 @@ cd cloudflare && npm test  # Durable Object: 401, fan-out, late join, publisher 
 src/            Rust origin (encode, hub, HTTP/WS, publisher)
 web/            local UI
 cloudflare/     Worker + StreamRoom Durable Object + public player
-streamaid/      deprecated Python prototype
+tests/          cargo tests (HTTP API, player contract, 1080p30 stress)
 ```
