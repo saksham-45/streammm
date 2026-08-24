@@ -265,13 +265,24 @@ function connectWsForMse() {
   };
 }
 
+function mediaSourceCtor() {
+  return window.ManagedMediaSource || window.MediaSource || window.WebKitMediaSource || null;
+}
+
 function onSourceOpen() {
+  const MS = mediaSourceCtor();
   const hevc = mode === "hevc";
   const candidates = hevc
     ? ['video/mp4; codecs="hvc1.1.6.L93.B0"', 'video/mp4; codecs="hev1.1.6.L93.B0"', "video/mp4"]
-    : ['video/mp4; codecs="avc1.640028"', 'video/mp4; codecs="avc1.42E01E"', "video/mp4"];
+    : [
+        'video/mp4; codecs="avc1.64001F"',
+        'video/mp4; codecs="avc1.640028"',
+        'video/mp4; codecs="avc1.4D401F"',
+        'video/mp4; codecs="avc1.42E01E"',
+        "video/mp4",
+      ];
   const type = candidates.find(function (t) {
-    return typeof MediaSource !== "undefined" && MediaSource.isTypeSupported(t);
+    try { return !!(MS && MS.isTypeSupported && MS.isTypeSupported(t)); } catch (e) { return false; }
   });
   if (!type) {
     showStreamError((hevc ? "HEVC" : "MP4") + " not supported — switch encoder");
@@ -293,15 +304,21 @@ function onSourceOpen() {
 }
 
 function startMse() {
-  if (typeof MediaSource === "undefined") {
-    showStreamError("MediaSource unsupported — switch encoder to mjpeg");
+  const MS = mediaSourceCtor();
+  if (!MS) {
+    showStreamError("This browser needs Safari 17.1+ (or Chrome on Android) for live H.264. Or set encoder to MJPEG.");
     return;
   }
   teardownMse();
   const video = $("stream-video");
   if (!video) return;
   video.classList.remove("hidden");
-  ms = new MediaSource();
+  video.setAttribute("playsinline", "");
+  video.setAttribute("webkit-playsinline", "true");
+  video.playsInline = true;
+  video.muted = true;
+  video.disableRemotePlayback = true;
+  ms = new MS();
   video.src = URL.createObjectURL(ms);
   ms.addEventListener("sourceopen", onSourceOpen);
   video.addEventListener("error", onVideoError);
