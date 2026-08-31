@@ -1,12 +1,17 @@
 //! HTTP + WebSocket origin.
 
 use crate::capture::{enumerate_devices, Capture};
+use crate::computer_use::{self, ActionModel};
 use crate::config::{self, Config};
 use crate::headers::stream_header_map;
 use crate::hub::Hub;
+use crate::input::{self, FakeInjector, Injector};
+use crate::otp::{Clock, OtpGate, RealClock, RedeemError};
 use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};
 use crate::publisher::Publisher;
-use crate::ws::{accept_key, decode_frame, encode_frame, OP_BIN, OP_CLOSE, OP_PING, OP_PONG};
+use crate::ws::{
+    accept_key, decode_frame, encode_frame, OP_BIN, OP_CLOSE, OP_PING, OP_PONG, OP_TEXT,
+};
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -23,6 +28,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::convert::Infallible;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use subtle::ConstantTimeEq;
@@ -42,15 +48,58 @@ pub struct App {
     pub publisher: Publisher,
     pub started: Instant,
     pub events: tokio::sync::broadcast::Sender<String>,
+    pub otp: OtpGate,
+    pub injector: Arc<dyn Injector>,
+    pub fake: FakeInjector,
+    pub model: Mutex<Arc<dyn ActionModel>>,
+    pub controller: Mutex<Option<String>>,
+    pub ai_cancel: Arc<AtomicBool>,
 }
 
 impl App {
     pub fn new(cfg: Config, cfg_path: PathBuf) -> Arc<Self> {
+        let model = computer_use::production_model(&cfg.llm);
+        Self::build(
+            cfg,
+            cfg_path,
+            Arc::new(RealClock),
+            input::production_injector(),
+            FakeInjector::new(),
+            model,
+        )
+    }
+
+    pub fn new_for_test(
+        cfg: Config,
+        cfg_path: PathBuf,
+        clock: Arc<dyn Clock>,
+        fake: FakeInjector,
+        model: Arc<dyn ActionModel>,
+    ) -> Arc<Self> {
+        Self::build(
+            cfg,
+            cfg_path,
+            clock,
+            Arc::new(fake.clone()),
+            fake,
+            model,
+        )
+    }
+
+    fn build(
+        cfg: Config,
+        cfg_path: PathBuf,
+        clock: Arc<dyn Clock>,
+        injector: Arc<dyn Injector>,
+        fake: FakeInjector,
+        model: Arc<dyn ActionModel>,
+    ) -> Arc<Self> {
         let hub = Hub::new();
         let capture = Capture::new(hub.clone());
-        let publisher = Publisher::new(hub.clone(), cfg.clone());
+        let (inbound_tx, inbound_rx) = mpsc::channel::<String>(64);
+        let publisher = Publisher::new(hub.clone(), cfg.clone(), inbound_tx);
         let (events, _) = tokio::sync::broadcast::channel(128);
-        Arc::new(Self {
+        let app = Arc::new(Self {
             cfg: Mutex::new(cfg),
             cfg_path,
             hub,
@@ -58,12 +107,124 @@ impl App {
             publisher,
             started: Instant::now(),
             events,
-        })
+            otp: OtpGate::new(clock),
+            injector,
+            fake,
+            model: Mutex::new(model),
+            controller: Mutex::new(None),
+            ai_cancel: Arc::new(AtomicBool::new(false)),
+        });
+        let app2 = app.clone();
+        tokio::spawn(async move {
+            let mut rx = inbound_rx;
+            while let Some(msg) = rx.recv().await {
+                app2.handle_inbound_json(&msg);
+            }
+        });
+        app
+    }
+
+    pub fn set_model(&self, model: Arc<dyn ActionModel>) {
+        *self.model.lock() = model;
+    }
+
+    pub fn push_otp_wire(&self) {
+        if let Some((hash, exp)) = self.otp.wire_payload() {
+            self.publisher.push_wire(
+                json!({"type": "otp", "hash": hash, "exp": exp}).to_string(),
+            );
+        }
+        let c = self.cfg.lock().control.clone();
+        self.publisher.push_wire(
+            json!({"type": "flags", "control": c.enabled, "ai": c.ai_enabled}).to_string(),
+        );
+    }
+
+    pub fn handle_inbound_json(self: &Arc<Self>, msg: &str) {
+        let v: Value = match serde_json::from_str(msg) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match ty {
+            "control" => {
+                if !self.cfg.lock().control.enabled {
+                    return;
+                }
+                let sess = v.get("session").and_then(|s| s.as_str()).unwrap_or("");
+                if !self.take_controller(sess) {
+                    return;
+                }
+                if let Some(a) = input::parse_control_json(&v) {
+                    self.injector.apply(&a);
+                }
+            }
+            "computer-use" => {
+                if !self.cfg.lock().control.ai_enabled {
+                    return;
+                }
+                let task = v
+                    .get("task")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let app = self.clone();
+                tokio::spawn(async move {
+                    let _ = app.run_computer_use(&task).await;
+                });
+            }
+            "revoke" => {
+                *self.controller.lock() = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn take_controller(&self, session: &str) -> bool {
+        let mut g = self.controller.lock();
+        match g.as_deref() {
+            None => {
+                if session.is_empty() {
+                    *g = Some("anon".into());
+                } else {
+                    *g = Some(session.to_string());
+                }
+                true
+            }
+            Some(cur) if session.is_empty() || cur == session => true,
+            Some(_) => false,
+        }
+    }
+
+    pub async fn run_computer_use(&self, task: &str) -> Vec<input::Action> {
+        if !self.cfg.lock().control.ai_enabled {
+            return Vec::new();
+        }
+        self.ai_cancel.store(false, Ordering::SeqCst);
+        let model = self.model.lock().clone();
+        let hub = self.hub.clone();
+        let injector = self.injector.clone();
+        computer_use::run_task_async(
+            task,
+            model.as_ref(),
+            injector.as_ref(),
+            || computer_use::grab_jpeg(&hub),
+            computer_use::MAX_STEPS,
+            &self.ai_cancel,
+        )
+        .await
+    }
+
+    pub fn cancel_computer_use(&self) {
+        self.ai_cancel.store(true, Ordering::SeqCst);
+        *self.controller.lock() = None;
     }
 
     pub fn start_background(self: &Arc<Self>) {
         let cfg = self.cfg.lock().clone();
         self.capture.start(cfg.clone());
+        let _ = self.otp.mint();
+        self.push_otp_wire();
         self.publisher.start();
         crate::snapshot::spawn(self.hub.clone());
         let app = self.clone();
@@ -94,6 +255,10 @@ impl App {
             .route("/api/analyze-now", post(api_analyze))
             .route("/api/quality", get(api_quality))
             .route("/api/quality-check", post(api_quality_check))
+            .route("/api/otp", get(api_otp_get).post(api_otp_mint))
+            .route("/api/otp/redeem", post(api_otp_redeem))
+            .route("/api/computer-use", post(api_computer_use))
+            .route("/api/computer-use/cancel", post(api_computer_use_cancel))
             .with_state(self)
     }
 
@@ -142,6 +307,14 @@ impl App {
                 "ocr_words": 0,
                 "ok": false,
                 "error": "",
+            },
+            "control": {
+                "enabled": cfg.control.enabled,
+                "ai_enabled": cfg.control.ai_enabled,
+                "controller": self.controller.lock().is_some(),
+            },
+            "otp": {
+                "has_pin": self.otp.current_pin().is_some(),
             }
         })
     }
@@ -183,13 +356,71 @@ fn request_token(headers: &HeaderMap, query: &str) -> String {
 }
 
 fn is_public(path: &str) -> bool {
-    matches!(path, "/" | "/app.js" | "/style.css")
+    matches!(
+        path,
+        "/" | "/app.js" | "/style.css" | "/api/otp/redeem"
+    )
 }
 
 fn authorize(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
+    host_ok(app, headers, uri)
+}
+
+fn host_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
     let expected = app.cfg.lock().token.clone();
     let query = uri.query().unwrap_or("");
     token_ok(&request_token(headers, query), &expected)
+}
+
+fn request_session(headers: &HeaderMap, query: &str) -> String {
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        if k == "session" {
+            return v.into_owned();
+        }
+    }
+    if let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        for part in c.split(';') {
+            let part = part.trim();
+            if let Some(v) = part.strip_prefix("streamaid_session=") {
+                return v.to_string();
+            }
+        }
+    }
+    if let Some(a) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(rest) = a.strip_prefix("Bearer ") {
+            return rest.to_string();
+        }
+    }
+    String::new()
+}
+
+/// Origin watch/stream: host STREAM_TOKEN (this machine's UI) or PIN session.
+/// Empty host token keeps the historical open-dev mode (existing tests).
+/// The public Worker watch URL still rejects STREAM_TOKEN (session only).
+fn viewer_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
+    let expected = app.cfg.lock().token.clone();
+    if expected.is_empty() {
+        return true;
+    }
+    if host_ok(app, headers, uri) {
+        return true;
+    }
+    let query = uri.query().unwrap_or("");
+    app.otp.session_ok(&request_session(headers, query))
+}
+
+fn session_cookie(token: &str) -> HeaderValue {
+    let v = format!(
+        "streamaid_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600"
+    );
+    HeaderValue::from_str(&v).unwrap_or_else(|_| HeaderValue::from_static("streamaid_session="))
+}
+
+fn viewer_flag_cookie() -> HeaderValue {
+    HeaderValue::from_static("streamaid_viewer=1; Path=/; SameSite=Lax; Max-Age=3600")
 }
 
 fn json_err(code: StatusCode, msg: &str) -> Response {
@@ -247,6 +478,7 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
     }
     *app.cfg.lock() = new_cfg.clone();
     app.publisher.set_config(new_cfg.clone());
+    app.push_otp_wire();
     if recapture {
         app.capture.restart(new_cfg);
     }
@@ -339,6 +571,103 @@ async fn api_quality_check(State(app): State<Arc<App>>, req: Request) -> Respons
     json_err(StatusCode::BAD_GATEWAY, "quality monitor not enabled")
 }
 
+fn otp_json(app: &App, st: &crate::otp::PinState) -> Value {
+    let ttl = st.exp_unix_ms.saturating_sub(app.otp.unix_ms()) / 1000;
+    json!({
+        "pin": st.pin,
+        "exp": st.exp_unix_ms,
+        "expires_in_s": ttl,
+        "hash": st.hash,
+    })
+}
+
+async fn api_otp_get(State(app): State<Arc<App>>, req: Request) -> Response {
+    if !host_ok(&app, req.headers(), req.uri()) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    let st = match app.otp.current_pin() {
+        Some(s) => s,
+        None => {
+            let s = app.otp.mint();
+            app.push_otp_wire();
+            s
+        }
+    };
+    Json(otp_json(&app, &st)).into_response()
+}
+
+async fn api_otp_mint(State(app): State<Arc<App>>, req: Request) -> Response {
+    if !host_ok(&app, req.headers(), req.uri()) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    let st = app.otp.mint();
+    app.push_otp_wire();
+    Json(otp_json(&app, &st)).into_response()
+}
+
+async fn api_otp_redeem(State(app): State<Arc<App>>, req: Request) -> Response {
+    let body = axum::body::to_bytes(req.into_body(), 64_000)
+        .await
+        .unwrap_or_default();
+    let v: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid JSON body"),
+    };
+    let pin = v.get("pin").and_then(|p| p.as_str()).unwrap_or("").trim();
+    match app.otp.redeem(pin) {
+        Ok(sess) => {
+            let mut res = Json(json!({
+                "session": sess.token,
+                "expires_in_s": 3600
+            }))
+            .into_response();
+            res.headers_mut()
+                .append(header::SET_COOKIE, session_cookie(&sess.token));
+            res.headers_mut()
+                .append(header::SET_COOKIE, viewer_flag_cookie());
+            res
+        }
+        Err(RedeemError::RateLimited) => json_err(StatusCode::TOO_MANY_REQUESTS, "rate limited"),
+        Err(RedeemError::Unauthorized) => json_err(StatusCode::UNAUTHORIZED, "unauthorized"),
+    }
+}
+
+async fn api_computer_use(State(app): State<Arc<App>>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let uri = req.uri().clone();
+    if !viewer_ok(&app, &headers, &uri) && !host_ok(&app, &headers, &uri) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    if !app.cfg.lock().control.ai_enabled {
+        return json_err(StatusCode::FORBIDDEN, "ai control disabled");
+    }
+    let body = axum::body::to_bytes(req.into_body(), 64_000)
+        .await
+        .unwrap_or_default();
+    let v: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid JSON body"),
+    };
+    let task = v.get("task").and_then(|t| t.as_str()).unwrap_or("").trim();
+    if task.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "missing task");
+    }
+    let applied = app.run_computer_use(task).await;
+    Json(json!({
+        "ok": true,
+        "steps": applied,
+    }))
+    .into_response()
+}
+
+async fn api_computer_use_cancel(State(app): State<Arc<App>>, req: Request) -> Response {
+    if !host_ok(&app, req.headers(), req.uri()) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    app.cancel_computer_use();
+    Json(json!({"ok": true, "cancelled": true})).into_response()
+}
+
 fn media_response(ctype: &str, rx: mpsc::Receiver<Result<Bytes, std::io::Error>>) -> Response {
     let mut b = Response::builder()
         .status(StatusCode::OK)
@@ -351,7 +680,7 @@ fn media_response(ctype: &str, rx: mpsc::Receiver<Result<Bytes, std::io::Error>>
 }
 
 async fn stream_mp4(State(app): State<Arc<App>>, req: Request) -> Response {
-    if !authorize(&app, req.headers(), req.uri()) {
+    if !viewer_ok(&app, req.headers(), req.uri()) {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     if app.cfg.lock().encoder.mode == "mjpeg" {
@@ -400,7 +729,7 @@ fn mjpeg_part(jpeg: &[u8]) -> Bytes {
 }
 
 async fn stream_mjpeg(State(app): State<Arc<App>>, req: Request) -> Response {
-    if !authorize(&app, req.headers(), req.uri()) {
+    if !viewer_ok(&app, req.headers(), req.uri()) {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     if app.cfg.lock().encoder.mode != "mjpeg" {
@@ -434,7 +763,7 @@ async fn stream_mjpeg(State(app): State<Arc<App>>, req: Request) -> Response {
 }
 
 async fn stream_ws(State(app): State<Arc<App>>, mut req: Request) -> Response {
-    if !authorize(&app, req.headers(), req.uri()) {
+    if !viewer_ok(&app, req.headers(), req.uri()) {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     let upgrade = req
@@ -455,6 +784,7 @@ async fn stream_ws(State(app): State<Arc<App>>, mut req: Request) -> Response {
         None => return json_err(StatusCode::BAD_REQUEST, "missing Sec-WebSocket-Key"),
     };
     let accept = accept_key(&key);
+    let session = request_session(req.headers(), req.uri().query().unwrap_or(""));
     let on_upgrade = req.extensions_mut().remove::<OnUpgrade>();
     let app2 = app.clone();
     if let Some(on_upgrade) = on_upgrade {
@@ -462,7 +792,7 @@ async fn stream_ws(State(app): State<Arc<App>>, mut req: Request) -> Response {
             match on_upgrade.await {
                 Ok(upgraded) => {
                     let io = TokioIo::new(upgraded);
-                    if let Err(e) = ws_session(io, app2).await {
+                    if let Err(e) = ws_session(io, app2, session).await {
                         tracing::debug!("ws session: {e}");
                     }
                 }
@@ -484,7 +814,7 @@ async fn stream_ws(State(app): State<Arc<App>>, mut req: Request) -> Response {
     res
 }
 
-async fn ws_session<S>(mut stream: S, app: Arc<App>) -> anyhow::Result<()>
+async fn ws_session<S>(mut stream: S, app: Arc<App>, session: String) -> anyhow::Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -533,6 +863,18 @@ where
                             stream.write_all(&frame).await?;
                         }
                         OP_CLOSE => return Ok(()),
+                        OP_TEXT | OP_BIN => {
+                            if let Ok(s) = std::str::from_utf8(&data) {
+                                if let Ok(mut v) = serde_json::from_str::<Value>(s) {
+                                    if v.get("session").is_none() {
+                                        v.as_object_mut().map(|o| {
+                                            o.insert("session".into(), json!(session));
+                                        });
+                                    }
+                                    app.handle_inbound_json(&v.to_string());
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -551,6 +893,21 @@ mod tests {
         assert!(token_ok("anything", ""));
         assert!(!token_ok("a", "b"));
         assert!(token_ok("secret", "secret"));
+    }
+
+    #[test]
+    fn origin_does_not_push_encoder_hub_size_into_hid_mapping() {
+        let src = include_str!("server.rs");
+        let forbidden_fn = format!("fn refresh_{}", "injector_size");
+        let forbidden_call = format!("injector.set_{}", "screen_size");
+        assert!(
+            !src.contains(&forbidden_fn),
+            "hub.size() must not overwrite CGDisplayBounds before inject"
+        );
+        assert!(
+            !src.contains(&forbidden_call),
+            "production inject path must not set encoder/hub size on the injector"
+        );
     }
 
     #[test]
@@ -592,6 +949,11 @@ mod tests {
         let html = String::from_utf8_lossy(&html);
         assert!(html.contains("streamaid"));
         assert!(html.contains("app.js"));
+        assert!(html.contains("pin-pill"));
+        assert!(html.contains("cfg-control-enabled"));
+        assert!(html.contains("cfg-ai-enabled"));
+        assert!(html.contains("Have AI use this computer"));
+        assert!(html.contains("cu-cancel"));
 
         let res = router
             .clone()
@@ -606,10 +968,10 @@ mod tests {
         let body = axum::body::to_bytes(res.into_body(), 200_000).await.unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["encoder"]["mode"], "ffmpeg");
-        assert_eq!(v["encoder"]["bitrate_kbps"], 10000);
+        assert_eq!(v["encoder"]["bitrate_kbps"], 20000);
         assert_eq!(v["encoder"]["gop_frames"], 15);
-        assert_eq!(v["encoder"]["max_width"], 1920);
-        assert_eq!(v["encoder"]["max_height"], 1080);
+        assert_eq!(v["encoder"]["max_width"], 3840);
+        assert_eq!(v["encoder"]["max_height"], 4320);
 
         let res = router
             .clone()
@@ -684,5 +1046,117 @@ mod tests {
             assert!(!rest.is_empty());
         }
         assert_eq!(kinds, vec![TYPE_INIT, TYPE_FRAG]);
+    }
+
+    #[tokio::test]
+    async fn authorized_viewer_control_reaches_fake_injector() {
+        use crate::computer_use::DoneModel;
+        use crate::input::{FakeInjector, Injected};
+        use crate::otp::FakeClock;
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.token = "s3cret".into();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        app.hub
+            .publish_init(Bytes::from_static(b"ftyp-init"), 1920, 1080);
+
+        let pin = app.otp.mint().pin;
+        let sess = app.otp.redeem(&pin).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = app.router();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+
+        let url = format!("ws://{addr}/stream.ws?session={}", sess.token);
+        let (mut ws, resp) = connect_async(&url).await.expect("ws");
+        assert_eq!(resp.status(), axum::http::StatusCode::SWITCHING_PROTOCOLS);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await;
+
+        ws.send(Message::Text(
+            r#"{"type":"control","action":"click","x":0.5,"y":0.25}"#.into(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            r#"{"type":"control","action":"type","text":"hi"}"#.into(),
+        ))
+        .await
+        .unwrap();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if fake.recorded().len() >= 2 || tokio::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            fake.recorded(),
+            vec![
+                Injected::Click { x: 0.5, y: 0.25 },
+                Injected::Type { text: "hi".into() }
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_control_does_not_inject() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.token = "s3cret".into();
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        let pin = app.otp.mint().pin;
+        let sess = app.otp.redeem(&pin).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = app.router();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let url = format!("ws://{addr}/stream.ws?session={}", sess.token);
+        let (mut ws, _) = connect_async(&url).await.expect("ws");
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), ws.next()).await;
+        ws.send(Message::Text(
+            r#"{"type":"control","action":"click","x":0.5,"y":0.5}"#.into(),
+        ))
+        .await
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(fake.recorded().is_empty());
     }
 }

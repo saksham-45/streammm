@@ -18,6 +18,16 @@ header {
   z-index: 10;
 }
 h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
+#pin-pill {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.28em;
+  background: #222;
+  border: 1px solid #7eb8ff;
+  color: #7eb8ff;
+  padding: 4px 12px;
+  border-radius: 999px;
+}
 #status-pill,
 #quality-pill {
   font-size: 13px;

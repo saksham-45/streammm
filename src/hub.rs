@@ -25,6 +25,7 @@ struct Client {
 
 struct Inner {
     latest: Option<Media>,
+    snap: Option<Media>,
     init: Option<Bytes>,
     width: u32,
     height: u32,
@@ -52,6 +53,7 @@ impl Hub {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 latest: None,
+                snap: None,
                 init: None,
                 width: 0,
                 height: 0,
@@ -89,6 +91,9 @@ impl Hub {
         let mut g = self.inner.lock();
         // TYPE_SNAP is for the Worker LLM only. Fan it out (publisher needs it)
         // but never treat it as the live fragment — that would black-screen late joins.
+        if kind == TYPE_SNAP {
+            g.snap = Some(media.clone());
+        }
         if kind != TYPE_INIT && kind != TYPE_SNAP {
             let now = Instant::now();
             g.last_at = Some(now);
@@ -141,6 +146,10 @@ impl Hub {
 
     pub fn latest(&self) -> Option<Media> {
         self.inner.lock().latest.clone()
+    }
+
+    pub fn last_snap(&self) -> Option<Media> {
+        self.inner.lock().snap.clone()
     }
 
     pub fn size(&self) -> (u32, u32) {

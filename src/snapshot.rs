@@ -34,7 +34,7 @@ pub async fn encode_snapshot(init: Option<&[u8]>, latest: &Media) -> Option<Vec<
             "-frames:v",
             "1",
             "-vf",
-            "scale=960:-2",
+            "scale=min(1920\\,iw):-2",
             "-q:v",
             "6",
             "-f",

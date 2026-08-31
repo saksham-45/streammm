@@ -1,4 +1,4 @@
-//! ffmpeg argv: native 1080p cap, 0.5 s VBV, no B-frames, VT or libx264 zerolatency.
+//! ffmpeg argv: native-res cap (never upscale), 0.5 s VBV, no B-frames, VT or libx264 zerolatency.
 
 use crate::config::Config;
 
@@ -210,8 +210,8 @@ mod tests {
     fn scale_never_upscales_uses_lanczos_and_fps() {
         let vf = scale_filter(&cfg(), 30);
         assert!(vf.contains("lanczos"), "{vf}");
-        assert!(vf.contains("min(1920\\,iw"), "{vf}");
-        assert!(vf.contains("min(1080\\,ih"), "{vf}");
+        assert!(vf.contains("min(3840\\,iw"), "{vf}");
+        assert!(vf.contains("min(4320\\,ih"), "{vf}");
         assert!(vf.contains("fps=30"), "{vf}");
         assert!(!vf.contains("select="), "{vf}");
     }
@@ -239,13 +239,13 @@ mod tests {
         assert_eq!(flag_after(&argv, "-bf"), Some("0"));
         assert_eq!(flag_after(&argv, "-g"), Some("15"));
         assert_eq!(flag_after(&argv, "-keyint_min"), Some("15"));
-        assert_eq!(flag_after(&argv, "-bufsize"), Some("5000k"));
-        assert_eq!(flag_after(&argv, "-b:v"), Some("10000k"));
+        assert_eq!(flag_after(&argv, "-bufsize"), Some("10000k"));
+        assert_eq!(flag_after(&argv, "-b:v"), Some("20000k"));
         assert!(joined.contains("flush_packets"), "{joined}");
         assert!(joined.contains("low_delay"), "{joined}");
         assert!(joined.contains("lanczos"), "{joined}");
-        assert!(joined.contains("min(1920\\,iw"), "{joined}");
-        assert!(!joined.contains("20000k"), "old 2s VBV must not appear: {joined}");
+        assert!(joined.contains("min(3840\\,iw"), "{joined}");
+        assert!(!joined.contains("40000k"), "2s VBV must not appear: {joined}");
         assert!(!joined.contains("libx264"), "{joined}");
         let vf = flag_after(&argv, "-vf").unwrap();
         assert!(vf.contains("fps=30"), "{vf}");
@@ -274,20 +274,20 @@ mod tests {
         c.encoder.mode = "hevc".into();
         let argv = build_ffmpeg_argv(&c, "3:", "Darwin", true);
         assert!(argv.iter().any(|a| a == "hevc_videotoolbox"));
-        assert_eq!(flag_after(&argv, "-bufsize"), Some("5000k"));
+        assert_eq!(flag_after(&argv, "-bufsize"), Some("10000k"));
         assert_eq!(flag_after(&argv, "-g"), Some("15"));
         assert_eq!(flag_after(&argv, "-bf"), Some("0"));
         assert_eq!(flag_after(&argv, "-realtime"), Some("1"));
     }
 
     #[test]
-    fn mjpeg_still_caps_1080p() {
+    fn mjpeg_still_never_upscales() {
         let mut c = cfg();
         c.encoder.mode = "mjpeg".into();
         let argv = build_ffmpeg_argv(&c, "3:", "Darwin", true);
         let vf = flag_after(&argv, "-vf").unwrap();
         assert!(vf.contains("lanczos"), "{vf}");
-        assert!(vf.contains("min(1920\\,iw"), "{vf}");
+        assert!(vf.contains("min(3840\\,iw"), "{vf}");
         assert!(argv.iter().any(|a| a == "mjpeg"));
     }
 }

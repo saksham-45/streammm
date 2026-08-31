@@ -1,4 +1,4 @@
-//! Outbound WebSocket publisher: one copy of the bitstream to Cloudflare.
+//! Outbound WebSocket publisher: bitstream plus JSON wire (PIN hash, flags, inbound control).
 
 use crate::config::Config;
 use crate::hub::Hub;
@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -21,6 +22,13 @@ async fn send_bin(ws: &mut Ws, payload: Vec<u8>) -> anyhow::Result<()> {
     tokio::time::timeout(SEND_TIMEOUT, ws.send(Message::Binary(payload.into())))
         .await
         .map_err(|_| anyhow::anyhow!("publisher send timeout"))??;
+    Ok(())
+}
+
+async fn send_text(ws: &mut Ws, payload: String) -> anyhow::Result<()> {
+    tokio::time::timeout(SEND_TIMEOUT, ws.send(Message::Text(payload.into())))
+        .await
+        .map_err(|_| anyhow::anyhow!("publisher text timeout"))??;
     Ok(())
 }
 
@@ -49,14 +57,25 @@ pub struct Publisher {
     hub: Hub,
     cfg: Arc<Mutex<Config>>,
     task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    wire_out: broadcast::Sender<String>,
+    latest_wire: Arc<Mutex<Vec<String>>>,
+    inbound: mpsc::Sender<String>,
 }
 
 impl Publisher {
-    pub fn new(hub: Hub, cfg: Config) -> Self {
+    pub fn new(
+        hub: Hub,
+        cfg: Config,
+        inbound: mpsc::Sender<String>,
+    ) -> Self {
+        let (wire_out, _) = broadcast::channel(64);
         Self {
             hub,
             cfg: Arc::new(Mutex::new(cfg)),
             task: Arc::new(Mutex::new(None)),
+            wire_out,
+            latest_wire: Arc::new(Mutex::new(Vec::new())),
+            inbound,
         }
     }
 
@@ -64,10 +83,28 @@ impl Publisher {
         *self.cfg.lock() = cfg;
     }
 
+    pub fn push_wire(&self, msg: String) {
+        {
+            let mut latest = self.latest_wire.lock();
+            // Keep last otp + last flags (replace same type).
+            if msg.contains("\"otp\"") {
+                latest.retain(|m| !m.contains("\"otp\""));
+            }
+            if msg.contains("\"flags\"") {
+                latest.retain(|m| !m.contains("\"flags\""));
+            }
+            latest.push(msg.clone());
+        }
+        let _ = self.wire_out.send(msg);
+    }
+
     pub fn start(&self) {
         self.stop();
         let hub = self.hub.clone();
         let cfg = self.cfg.clone();
+        let wire_out = self.wire_out.clone();
+        let latest_wire = self.latest_wire.clone();
+        let inbound = self.inbound.clone();
         let handle = tokio::spawn(async move {
             let mut backoff = Duration::from_secs(1);
             loop {
@@ -79,7 +116,7 @@ impl Publisher {
                     sleep(Duration::from_secs(1)).await;
                     continue;
                 }
-                match run_session(&hub, &url, &token).await {
+                match run_session(&hub, &url, &token, &wire_out, &latest_wire, &inbound).await {
                     Ok(()) => backoff = Duration::from_secs(1),
                     Err(e) => {
                         tracing::warn!("cloudflare publisher: {e}");
@@ -99,7 +136,14 @@ impl Publisher {
     }
 }
 
-async fn run_session(hub: &Hub, url: &str, token: &str) -> anyhow::Result<()> {
+async fn run_session(
+    hub: &Hub,
+    url: &str,
+    token: &str,
+    wire_out: &broadcast::Sender<String>,
+    latest_wire: &Arc<Mutex<Vec<String>>>,
+    inbound: &mpsc::Sender<String>,
+) -> anyhow::Result<()> {
     let u = publish_url_with_token(url, token)?;
     tracing::info!(
         "publishing to {}{}",
@@ -116,6 +160,11 @@ async fn run_session(hub: &Hub, url: &str, token: &str) -> anyhow::Result<()> {
             send_bin(&mut ws, pack_media(TYPE_FRAG, &lat.data)).await?;
         }
     }
+    let pending = latest_wire.lock().clone();
+    for msg in pending {
+        send_text(&mut ws, msg).await?;
+    }
+    let mut json_rx = wire_out.subscribe();
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -125,6 +174,11 @@ async fn run_session(hub: &Hub, url: &str, token: &str) -> anyhow::Result<()> {
                     anyhow::bail!("publisher hub closed");
                 };
                 send_bin(&mut ws, pack_media(m.kind, &m.data)).await?;
+            }
+            json = json_rx.recv() => {
+                if let Ok(msg) = json {
+                    send_text(&mut ws, msg).await?;
+                }
             }
             _ = ping.tick() => {
                 send_ping(&mut ws, Message::Ping(bytes::Bytes::new())).await?;
@@ -136,6 +190,16 @@ async fn run_session(hub: &Hub, url: &str, token: &str) -> anyhow::Result<()> {
                     Some(Ok(Message::Close(_))) => anyhow::bail!("publisher websocket close"),
                     Some(Ok(Message::Ping(p))) => {
                         send_ping(&mut ws, Message::Pong(p)).await?;
+                    }
+                    Some(Ok(Message::Text(t))) => {
+                        let _ = inbound.try_send(t.to_string());
+                    }
+                    Some(Ok(Message::Binary(b))) => {
+                        if let Ok(s) = std::str::from_utf8(&b) {
+                            if s.starts_with('{') {
+                                let _ = inbound.try_send(s.to_string());
+                            }
+                        }
                     }
                     _ => {}
                 }

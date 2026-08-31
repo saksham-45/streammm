@@ -34,6 +34,23 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         !js.contains("/stream.mp4") || js.contains("WebSocket"),
         "WebSocket is the primary path"
     );
+    assert!(js.contains("normEvent"), "pointer mapping helper");
+    assert!(js.contains("sendControl"), "control JSON sender");
+    assert!(js.contains("streamaid_viewer") || js.contains("hasViewerSession"));
+    assert!(js.contains("/api/computer-use/cancel"));
+    assert!(js.contains("Have AI use this computer") || std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/index.html")
+    ).unwrap().contains("Have AI use this computer"));
+}
+
+#[test]
+fn worker_player_has_pin_unlock_and_ai_box() {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cloudflare/src/player.ts");
+    let s = std::fs::read_to_string(p).expect("player.ts");
+    assert!(s.contains("pin-form") || s.contains("6-digit") || s.contains("id=\"pin\""));
+    assert!(s.contains("Have AI use this computer"));
+    assert!(s.contains("normEvent"));
+    assert!(!s.contains("Add ?token="));
 }
 
 #[test]

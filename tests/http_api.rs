@@ -215,3 +215,464 @@ async fn concurrent_status_does_not_error() {
     }
     assert_eq!(total, 16 * 25);
 }
+
+fn token_app() -> (tempfile::TempDir, std::sync::Arc<App>) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let mut cfg = Config::default();
+    cfg.token = "s3cret".into();
+    streamaid::config::save(&cfg, &path).unwrap();
+    let app = App::new(cfg, path);
+    (dir, app)
+}
+
+fn flip_pin(pin: &str) -> String {
+    let mut c: Vec<char> = pin.chars().collect();
+    let last = c.len() - 1;
+    c[last] = if c[last] == '0' { '1' } else { '0' };
+    c.into_iter().collect()
+}
+
+#[tokio::test]
+async fn pin_mint_redeem_session_gates_watch_not_stream_token() {
+    let (_dir, app) = token_app();
+    let router = app.router();
+
+    let denied = router
+        .clone()
+        .oneshot(Request::get("/stream.mp4").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+    let host = router
+        .clone()
+        .oneshot(
+            Request::get("/stream.mp4?token=s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(host.status(), StatusCode::OK);
+
+    let minted = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(minted.status(), StatusCode::OK);
+    let pin_body = body_json(minted).await;
+    let pin = pin_body["pin"].as_str().unwrap().to_string();
+    assert_eq!(pin.len(), 6);
+    assert!(pin.chars().all(|c| c.is_ascii_digit()));
+
+    let shown = router
+        .clone()
+        .oneshot(
+            Request::get("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let shown = body_json(shown).await;
+    assert_eq!(shown["pin"], pin);
+
+    let bad = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp/redeem")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"pin": flip_pin(&pin)}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
+
+    let ok = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp/redeem")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"pin": pin}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::OK);
+    let set_cookie = ok
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("streamaid_session="));
+    let sess = body_json(ok).await;
+    let session = sess["session"].as_str().unwrap().to_string();
+    assert!(!session.is_empty());
+
+    let watch = router
+        .oneshot(
+            Request::get("/stream.mp4")
+                .header("Cookie", format!("streamaid_session={session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(watch.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn pin_regenerate_invalidates_previous() {
+    let (_dir, app) = token_app();
+    let router = app.router();
+    let a = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pin_a = body_json(a).await["pin"].as_str().unwrap().to_string();
+    let b = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pin_b = body_json(b).await["pin"].as_str().unwrap().to_string();
+    assert_ne!(pin_a, pin_b);
+    let old = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp/redeem")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"pin": pin_a}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(old.status(), StatusCode::UNAUTHORIZED);
+    let new = router
+        .oneshot(
+            Request::post("/api/otp/redeem")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"pin": pin_b}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(new.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn pin_rate_limit_and_expire() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use streamaid::computer_use::DoneModel;
+    use streamaid::input::FakeInjector;
+    use streamaid::otp::{FakeClock, PIN_TTL, FAIL_LIMIT, LOCKOUT};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let mut cfg = Config::default();
+    cfg.token = "s3cret".into();
+    streamaid::config::save(&cfg, &path).unwrap();
+    let clock = FakeClock::new();
+    let app = App::new_for_test(
+        cfg,
+        path,
+        clock.clone(),
+        FakeInjector::new(),
+        Arc::new(DoneModel),
+    );
+    let router = app.router();
+    let minted = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pin = body_json(minted).await["pin"].as_str().unwrap().to_string();
+    let wrong = flip_pin(&pin);
+    for _ in 0..FAIL_LIMIT {
+        let res = router
+            .clone()
+            .oneshot(
+                Request::post("/api/otp/redeem")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"pin": wrong}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+    let limited = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp/redeem")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"pin": wrong}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let dir2 = tempfile::tempdir().unwrap();
+    let path2 = dir2.path().join("config.json");
+    let mut cfg2 = Config::default();
+    cfg2.token = "s3cret".into();
+    streamaid::config::save(&cfg2, &path2).unwrap();
+    let clock2 = FakeClock::new();
+    let app2 = App::new_for_test(
+        cfg2,
+        path2,
+        clock2.clone(),
+        FakeInjector::new(),
+        Arc::new(DoneModel),
+    );
+    let router2 = app2.router();
+    let minted2 = router2
+        .clone()
+        .oneshot(
+            Request::post("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pin2 = body_json(minted2).await["pin"].as_str().unwrap().to_string();
+    clock2.advance(PIN_TTL + Duration::from_secs(1));
+    let expired = router2
+        .oneshot(
+            Request::post("/api/otp/redeem")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"pin": pin2}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), StatusCode::UNAUTHORIZED);
+    let _ = LOCKOUT;
+}
+
+#[tokio::test]
+async fn computer_use_forbidden_when_disabled_and_stub_when_enabled() {
+    use std::sync::Arc;
+    use streamaid::computer_use::StubClickTypeModel;
+    use streamaid::input::{FakeInjector, Injected};
+    use streamaid::otp::FakeClock;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let mut cfg = Config::default();
+    cfg.token = "s3cret".into();
+    streamaid::config::save(&cfg, &path).unwrap();
+    let fake = FakeInjector::new();
+    let app = App::new_for_test(
+        cfg,
+        path,
+        FakeClock::new(),
+        fake.clone(),
+        Arc::new(StubClickTypeModel::default()),
+    );
+    let router = app.clone().router();
+    let minted = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pin = body_json(minted).await["pin"].as_str().unwrap().to_string();
+    let redeemed = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp/redeem")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"pin": pin}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let session = body_json(redeemed).await["session"].as_str().unwrap().to_string();
+
+    let off = router
+        .clone()
+        .oneshot(
+            Request::post("/api/computer-use")
+                .header("Cookie", format!("streamaid_session={session}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"task": "type hello"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(off.status(), StatusCode::FORBIDDEN);
+    let err = body_json(off).await;
+    assert!(err["error"].as_str().unwrap().contains("disabled"));
+
+    app.cfg.lock().control.ai_enabled = true;
+    let on = router
+        .oneshot(
+            Request::post("/api/computer-use")
+                .header("Cookie", format!("streamaid_session={session}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"task": "type hello"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(on.status(), StatusCode::OK);
+    let body = body_json(on).await;
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        fake.recorded(),
+        vec![
+            Injected::Click { x: 0.5, y: 0.5 },
+            Injected::Type {
+                text: "hello".into()
+            }
+        ]
+    );
+}
+
+#[tokio::test]
+async fn computer_use_grabs_snap_jpeg_not_fragment() {
+    use std::sync::{Arc, Mutex};
+    use streamaid::computer_use::ActionModel;
+    use streamaid::input::{Action, FakeInjector};
+    use streamaid::otp::FakeClock;
+    use streamaid::protocol::{TYPE_FRAG, TYPE_SNAP};
+    use bytes::Bytes;
+
+    struct RecordJpeg {
+        got: Mutex<Vec<Vec<u8>>>,
+    }
+    impl ActionModel for RecordJpeg {
+        fn plan(&self, _task: &str, _step: u32, jpeg: &[u8]) -> Vec<Action> {
+            self.got.lock().unwrap().push(jpeg.to_vec());
+            vec![Action::Done]
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let mut cfg = Config::default();
+    cfg.token = "s3cret".into();
+    cfg.control.ai_enabled = true;
+    streamaid::config::save(&cfg, &path).unwrap();
+    let rec = Arc::new(RecordJpeg {
+        got: Mutex::new(Vec::new()),
+    });
+    let app = App::new_for_test(
+        cfg,
+        path,
+        FakeClock::new(),
+        FakeInjector::new(),
+        rec.clone(),
+    );
+    app.hub
+        .publish_unit(TYPE_FRAG, Bytes::from_static(b"moof-not-a-jpeg"), 1920, 1080);
+    app.hub
+        .publish_unit(TYPE_SNAP, Bytes::from_static(b"\xff\xd8SNAP"), 0, 0);
+    let applied = app.run_computer_use("do it").await;
+    assert_eq!(applied, vec![Action::Done]);
+    let frames = rec.got.lock().unwrap().clone();
+    assert!(!frames.is_empty());
+    assert_eq!(frames[0], b"\xff\xd8SNAP");
+}
+
+#[tokio::test]
+async fn host_cancel_stops_running_ai_loop() {
+    use std::sync::Arc;
+    use streamaid::computer_use::ActionModel;
+    use streamaid::input::{Action, FakeInjector, Injected};
+    use streamaid::otp::FakeClock;
+
+    struct WaitThenClick;
+    impl ActionModel for WaitThenClick {
+        fn plan(&self, _task: &str, step: u32, _jpeg: &[u8]) -> Vec<Action> {
+            match step {
+                0 => vec![Action::Wait { ms: 4000 }],
+                _ => vec![Action::Click { x: 0.1, y: 0.1 }],
+            }
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let mut cfg = Config::default();
+    cfg.token = "s3cret".into();
+    cfg.control.ai_enabled = true;
+    streamaid::config::save(&cfg, &path).unwrap();
+    let fake = FakeInjector::new();
+    let app = App::new_for_test(
+        cfg,
+        path,
+        FakeClock::new(),
+        fake.clone(),
+        Arc::new(WaitThenClick),
+    );
+    let router = app.clone().router();
+    let run = {
+        let app = app.clone();
+        tokio::spawn(async move { app.run_computer_use("slow").await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let cancel = router
+        .oneshot(
+            Request::post("/api/computer-use/cancel")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancel.status(), StatusCode::OK);
+    let applied = tokio::time::timeout(std::time::Duration::from_secs(2), run)
+        .await
+        .expect("join")
+        .unwrap();
+    assert!(
+        !applied.iter().any(|a| matches!(a, Action::Click { .. })),
+        "cancel must stop before click, got {applied:?}"
+    );
+    assert!(!fake
+        .recorded()
+        .iter()
+        .any(|e| matches!(e, Injected::Click { .. })));
+}
+
+#[tokio::test]
+async fn production_app_wires_llm_model() {
+    let (_dir, app) = temp_app();
+    assert_eq!(app.model.lock().kind(), "llm");
+}

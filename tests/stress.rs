@@ -168,7 +168,8 @@ fn ffmpeg_1080p30_encode_is_realtime_and_frames_as_fmp4() {
     let joined = argv.join(" ");
     assert!(joined.contains("lanczos"));
     assert!(joined.contains("-bf"));
-    assert!(joined.contains("5000k"));
+    assert!(joined.contains("10000k"), "0.5s VBV of 20 Mbps: {joined}");
+    assert!(joined.contains("20000k"), "{joined}");
     assert!(joined.contains("low_delay"));
 
     let t = Instant::now();

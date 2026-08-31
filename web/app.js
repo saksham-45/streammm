@@ -20,10 +20,19 @@ function setCookie(name, value) {
   document.cookie = name + "=" + encodeURIComponent(value) + "; path=/";
 }
 const token = getCookie("streamaid_token");
+function hasViewerSession() {
+  return getCookie("streamaid_viewer") === "1" || !!getCookie("streamaid_session");
+}
 function url(path) {
-  return token
-    ? path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token)
-    : path;
+  let out = path;
+  if (token) {
+    out += (out.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
+  }
+  const session = getCookie("streamaid_session");
+  if (session && out.indexOf("session=") < 0) {
+    out += (out.includes("?") ? "&" : "?") + "session=" + encodeURIComponent(session);
+  }
+  return out;
 }
 
 let cfg = null;
@@ -42,7 +51,7 @@ function $(id) {
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (res.status === 401) {
-    showLogin();
+    if (!hasViewerSession()) showLogin();
     throw new Error("unauthorized");
   }
   return res;
@@ -51,6 +60,10 @@ async function api(path, opts) {
 function showLogin() {
   const el = $("login-overlay");
   if (el) el.classList.remove("hidden");
+}
+function hideLogin() {
+  const el = $("login-overlay");
+  if (el) el.classList.add("hidden");
 }
 
 function fmtTs(ts) {
@@ -90,6 +103,36 @@ function wsUrl() {
   const u = new URL(base, typeof location !== "undefined" ? location.href : "http://127.0.0.1/");
   u.protocol = u.protocol.replace("http", "ws");
   return u.toString();
+}
+
+function normEvent(el, ev) {
+  const r = el.getBoundingClientRect();
+  const x = r.width ? (ev.clientX - r.left) / r.width : 0;
+  const y = r.height ? (ev.clientY - r.top) / r.height : 0;
+  return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+}
+
+function sendControl(action, extra) {
+  if (!ws || ws.readyState !== 1) return;
+  const msg = Object.assign({ type: "control", action: action }, extra || {});
+  try { ws.send(JSON.stringify(msg)); } catch (e) { /* ignore */ }
+}
+
+function bindControl(el) {
+  if (!el || el.dataset.ctlBound) return;
+  el.dataset.ctlBound = "1";
+  el.addEventListener("click", function (ev) {
+    sendControl("click", normEvent(el, ev));
+  });
+  el.addEventListener("mousemove", function (ev) {
+    if (!ev.buttons) return;
+    sendControl("move", normEvent(el, ev));
+  });
+  el.addEventListener("wheel", function (ev) {
+    ev.preventDefault();
+    const p = normEvent(el, ev);
+    sendControl("scroll", { x: p.x, y: p.y, dy: ev.deltaY });
+  }, { passive: false });
 }
 
 function isIOS() {
@@ -453,8 +496,14 @@ function fillConfigForm(c) {
   set("cfg-mode", c.encoder && c.encoder.mode);
   set("cfg-bitrate", c.encoder && c.encoder.bitrate_kbps);
   set("cfg-gop", c.encoder && c.encoder.gop_frames || 15);
+  set("cfg-max-w", c.encoder && c.encoder.max_width || 3840);
+  set("cfg-max-h", c.encoder && c.encoder.max_height || 4320);
   set("cfg-publish", c.cloudflare && c.cloudflare.publish_url || "");
   set("cfg-watch", c.cloudflare && c.cloudflare.watch_url || "");
+  const ctl = $("cfg-control-enabled");
+  if (ctl) ctl.checked = !!(c.control && c.control.enabled);
+  const ai = $("cfg-ai-enabled");
+  if (ai) ai.checked = !!(c.control && c.control.ai_enabled);
   const en = $("cfg-llm-enabled");
   if (en) en.checked = !!(c.llm && c.llm.enabled);
   set("cfg-base-url", c.llm && c.llm.base_url || "");
@@ -467,21 +516,29 @@ function fillConfigForm(c) {
 function readConfigForm() {
   function val(id) { const el = $(id); return el ? el.value : ""; }
   const llmEn = $("cfg-llm-enabled");
+  const ctlEn = $("cfg-control-enabled");
+  const aiEn = $("cfg-ai-enabled");
   return {
     host: val("cfg-host"),
     port: parseInt(val("cfg-port"), 10) || 8080,
     token: val("cfg-token"),
+    control: {
+      enabled: !!(ctlEn && ctlEn.checked),
+      ai_enabled: !!(aiEn && aiEn.checked),
+    },
     capture: {
       driver: "ffmpeg",
       input: val("cfg-input"),
       fps: parseInt(val("cfg-fps"), 10) || 30,
       scale: parseFloat(val("cfg-scale")) || 1.0,
-      jpeg_quality: parseInt(val("cfg-jpeg"), 10) || 80,
+      jpeg_quality: parseInt(val("cfg-jpeg"), 10) || 95,
     },
     encoder: {
       mode: val("cfg-mode") || "ffmpeg",
-      bitrate_kbps: parseInt(val("cfg-bitrate"), 10) || 10000,
+      bitrate_kbps: parseInt(val("cfg-bitrate"), 10) || 20000,
       gop_frames: parseInt(val("cfg-gop"), 10) || 15,
+      max_width: parseInt(val("cfg-max-w"), 10) || 3840,
+      max_height: parseInt(val("cfg-max-h"), 10) || 4320,
     },
     cloudflare: {
       publish_url: val("cfg-publish"),
@@ -500,11 +557,22 @@ function readConfigForm() {
 
 async function loadConfig() {
   try {
-    const res = await api("/api/config");
+    const res = await fetch(url("/api/config"));
+    if (res.status === 401) {
+      if (hasViewerSession()) {
+        hideLogin();
+        showH264();
+        return;
+      }
+      showLogin();
+      return;
+    }
     cfg = await res.json();
   } catch (e) {
+    if (hasViewerSession()) showH264();
     return;
   }
+  hideLogin();
   mode = (cfg.encoder && cfg.encoder.mode) || "ffmpeg";
   const banner = $("analysis-banner");
   if (banner) banner.classList.toggle("hidden", !(cfg.llm && cfg.llm.enabled));
@@ -531,12 +599,36 @@ function onReady() {
   if (login) {
     login.addEventListener("submit", function (e) {
       e.preventDefault();
+      const pin = ($("login-pin") && $("login-pin").value || "").trim();
       const t = ($("login-token") && $("login-token").value || "").trim();
+      if (pin && pin.length === 6) {
+        fetch("/api/otp/redeem", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pin: pin }),
+        }).then(function (r) { return r.json(); }).then(function (b) {
+          if (b.session) {
+            setCookie("streamaid_session", b.session);
+            setCookie("streamaid_viewer", "1");
+            hideLogin();
+            showH264();
+          }
+        }).catch(function () {});
+        return;
+      }
       if (!t) return;
       setCookie("streamaid_token", t);
       location.reload();
     });
   }
+  function refreshPin() {
+    api("/api/otp").then(function (r) { return r.json(); }).then(function (b) {
+      const el = $("pin-pill");
+      if (el && b.pin) el.textContent = "PIN " + b.pin;
+    }).catch(function () {});
+  }
+  refreshPin();
+  setInterval(refreshPin, 15000);
   const gear = $("gear");
   if (gear) {
     gear.addEventListener("click", function () {
@@ -600,6 +692,47 @@ function onReady() {
         sel.classList.toggle("hidden", devices.length === 0);
         sel.onchange = function () { $("cfg-input").value = sel.value; };
       } catch (err) { /* ignore */ }
+    });
+  }
+  bindControl($("stream-video"));
+  bindControl($("stream-canvas"));
+  document.addEventListener("keydown", function (ev) {
+    if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
+    if (ev.key.length === 1) sendControl("type", { text: ev.key });
+    else sendControl("key", { key: ev.key });
+  });
+  const cancelAi = $("cu-cancel");
+  if (cancelAi) {
+    cancelAi.addEventListener("click", async function () {
+      try {
+        await fetch(url("/api/computer-use/cancel"), { method: "POST" });
+        const out = $("cu-out");
+        if (out) out.textContent = "cancelled";
+      } catch (err) { /* ignore */ }
+    });
+  }
+  const cu = $("cu-form");
+  if (cu) {
+    cu.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const task = ($("cu-task") && $("cu-task").value || "").trim();
+      if (!task) return;
+      const out = $("cu-out");
+      if (out) out.textContent = "running…";
+      try {
+        const res = await fetch(url("/api/computer-use"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task: task }),
+        });
+        const body = await res.json();
+        if (out) {
+          if (res.status === 403) out.textContent = "host has AI control off";
+          else out.textContent = body.error ? ("error: " + body.error) : "ok";
+        }
+      } catch (err) {
+        if (out) out.textContent = "error: " + err.message;
+      }
     });
   }
   const ask = $("ask-form");

@@ -21,12 +21,45 @@ export interface Env {
   DEEPSEEK_MODEL?: string;
 }
 
-type Attachment = { role: ConnRole };
+type Attachment = { role: ConnRole; session?: string };
 
 const CLOSE_REPLACED = 4000;
 const TYPE_INIT = 1;
 const TYPE_FRAG = 2;
 const TYPE_SNAP = 4;
+const FAIL_LIMIT = 5;
+const LOCKOUT_MS = 30_000;
+const SESSION_TTL_MS = 3_600_000;
+
+export async function sha256hex(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function hexRandom(n: number): string {
+  const b = new Uint8Array(n);
+  crypto.getRandomValues(b);
+  return [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+function cookieVal(request: Request, name: string): string {
+  const c = request.headers.get("Cookie") ?? "";
+  for (const part of c.split(";")) {
+    const p = part.trim();
+    if (p.startsWith(name + "=")) return decodeURIComponent(p.slice(name.length + 1));
+  }
+  return "";
+}
+
+function requestSession(request: Request, url: URL): string {
+  const q = url.searchParams.get("session") ?? "";
+  if (q) return q;
+  const ck = cookieVal(request, "streamaid_session");
+  if (ck) return ck;
+  const auth = request.headers.get("Authorization") ?? "";
+  if (auth.startsWith("Bearer ")) return auth.slice(7);
+  return "";
+}
 
 function asBuf(u: Uint8Array): ArrayBuffer {
   return u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) as ArrayBuffer;
@@ -51,6 +84,14 @@ export class StreamRoom extends DurableObject<Env> {
   private analyzing = false;
   private snapSeq = 0;
   private analyzedSeq = 0;
+  private otpHash = "";
+  private otpExp = 0;
+  private sessions = new Map<string, number>();
+  private fails = 0;
+  private lockUntil = 0;
+  private flags = { control: false, ai: false };
+  private flagsHydrated = false;
+  private controller: string | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -66,10 +107,17 @@ export class StreamRoom extends DurableObject<Env> {
       return new Response("Expected WebSocket", { status: 426 });
     }
     const role: ConnRole = url.pathname.endsWith("/publish") ? "publisher" : "viewer";
+    if (role === "viewer") {
+      const sess = requestSession(request, url);
+      if (!(await this.sessionOk(sess))) {
+        return Response.json({ error: "unauthorized" }, { status: 401, headers: corsHeaders() });
+      }
+    }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ role } satisfies Attachment);
+    const session = role === "viewer" ? requestSession(request, url) : undefined;
+    server.serializeAttachment({ role, session } satisfies Attachment);
 
     if (role === "publisher") {
       for (const ws of this.ctx.getWebSockets()) {
@@ -105,8 +153,11 @@ export class StreamRoom extends DurableObject<Env> {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const att = ws.deserializeAttachment() as Attachment | null;
+    if (typeof message === "string") {
+      await this.handleJson(ws, att, message);
+      return;
+    }
     if (att?.role !== "publisher") return;
-    if (typeof message === "string") return;
     const bytes = message instanceof ArrayBuffer ? new Uint8Array(message) : new Uint8Array(message);
     if (bytes.length < 1) return;
     const kind = bytes[0];
@@ -132,6 +183,97 @@ export class StreamRoom extends DurableObject<Env> {
         /* drop-oldest equivalent: skip a full send buffer */
       }
     }
+  }
+
+  private async handleJson(ws: WebSocket, att: Attachment | null, raw: string): Promise<void> {
+    let v: { type?: string; hash?: string; exp?: number; control?: boolean; ai?: boolean; action?: string; x?: number; y?: number; text?: string; key?: string; dy?: number; task?: string };
+    try {
+      v = JSON.parse(raw) as typeof v;
+    } catch {
+      return;
+    }
+    if (att?.role === "publisher") {
+      if (v.type === "otp" && typeof v.hash === "string") {
+        this.otpHash = v.hash;
+        this.otpExp = Number(v.exp) || Date.now() + 300_000;
+        this.fails = 0;
+        this.lockUntil = 0;
+        await this.ctx.storage.put("otp", { hash: this.otpHash, exp: this.otpExp });
+      }
+      if (v.type === "flags") {
+        this.flags.control = !!v.control;
+        this.flags.ai = !!v.ai;
+        this.flagsHydrated = true;
+        await this.ctx.storage.put("flags", this.flags);
+      }
+      return;
+    }
+    if (att?.role !== "viewer") return;
+    const session = att.session || "";
+    if (!(await this.sessionOk(session))) return;
+    if (v.type === "control") {
+      if (!this.flags.control) return;
+      if (this.controller && this.controller !== session) return;
+      this.controller = session;
+      this.sendPublisher(JSON.stringify({ ...v, session, type: "control" }));
+      return;
+    }
+    if (v.type === "computer-use") {
+      if (!this.flags.ai) return;
+      this.sendPublisher(JSON.stringify({ type: "computer-use", task: v.task || "", session }));
+    }
+  }
+
+  private sendPublisher(msg: string): void {
+    for (const peer of this.ctx.getWebSockets()) {
+      const p = peer.deserializeAttachment() as Attachment | null;
+      if (p?.role !== "publisher" || peer.readyState !== WebSocket.OPEN) continue;
+      try {
+        peer.send(msg);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  private async sessionOk(token: string): Promise<boolean> {
+    if (!token) return false;
+    await this.hydrateAuth();
+    const hash = await sha256hex(token);
+    const exp = this.sessions.get(hash);
+    if (!exp) return false;
+    if (exp <= Date.now()) {
+      this.sessions.delete(hash);
+      return false;
+    }
+    return true;
+  }
+
+  private async hydrateAuth(): Promise<void> {
+    if (!this.otpHash) {
+      const otp = await this.ctx.storage.get<{ hash: string; exp: number }>("otp");
+      if (otp?.hash) {
+        this.otpHash = otp.hash;
+        this.otpExp = otp.exp;
+      }
+    }
+    if (this.sessions.size === 0) {
+      const sess = await this.ctx.storage.get<Record<string, number>>("sessions");
+      if (sess) {
+        for (const [k, exp] of Object.entries(sess)) this.sessions.set(k, exp);
+      }
+    }
+    if (!this.flagsHydrated) {
+      const flags = await this.ctx.storage.get<{ control: boolean; ai: boolean }>("flags");
+      if (flags) this.flags = { control: !!flags.control, ai: !!flags.ai };
+      this.flagsHydrated = true;
+    }
+  }
+
+  private async persistSessions(): Promise<void> {
+    const obj: Record<string, number> = {};
+    for (const [k, v] of this.sessions) obj[k] = v;
+    await this.ctx.storage.put("sessions", obj);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
@@ -218,14 +360,43 @@ export class StreamRoom extends DurableObject<Env> {
 
   private async handleApi(request: Request, url: URL): Promise<Response> {
     const headers = corsHeaders();
+    if (url.pathname === "/api/otp/redeem" && request.method === "POST") {
+      return this.redeem(request, headers);
+    }
+    const sess = requestSession(request, url);
+    if (!(await this.sessionOk(sess))) {
+      return Response.json({ error: "unauthorized" }, { status: 401, headers });
+    }
     if (url.pathname === "/api/analysis" && request.method === "GET") {
       return Response.json(
-        { last: this.lastAnalysis, history: this.history, llm: this.llmStatus() },
+        {
+          last: this.lastAnalysis,
+          history: this.history,
+          llm: this.llmStatus(),
+          control: { enabled: this.flags.control, ai_enabled: this.flags.ai },
+        },
         { headers },
       );
     }
     if (url.pathname === "/api/llm-status" && request.method === "GET") {
       return Response.json(this.llmStatus(), { headers });
+    }
+    if (url.pathname === "/api/computer-use" && request.method === "POST") {
+      if (!this.flags.ai) {
+        return Response.json({ error: "ai control disabled" }, { status: 403, headers });
+      }
+      let task = "";
+      try {
+        const body = (await request.json()) as { task?: string };
+        task = (body.task ?? "").trim();
+      } catch {
+        return Response.json({ error: "invalid JSON body" }, { status: 400, headers });
+      }
+      if (!task) {
+        return Response.json({ error: "missing task" }, { status: 400, headers });
+      }
+      this.sendPublisher(JSON.stringify({ type: "computer-use", task, session: sess }));
+      return Response.json({ ok: true, accepted: true }, { headers });
     }
     if (url.pathname === "/api/analyze-now" && request.method === "POST") {
       try {
@@ -274,6 +445,48 @@ export class StreamRoom extends DurableObject<Env> {
       }
     }
     return Response.json({ error: "not found" }, { status: 404, headers });
+  }
+
+  private async redeem(request: Request, headers: Record<string, string>): Promise<Response> {
+    await this.hydrateAuth();
+    const now = Date.now();
+    if (this.lockUntil && now < this.lockUntil) {
+      return Response.json({ error: "rate limited" }, { status: 429, headers });
+    }
+    let pin = "";
+    try {
+      const body = (await request.json()) as { pin?: string };
+      pin = (body.pin ?? "").trim();
+    } catch {
+      return Response.json({ error: "invalid JSON body" }, { status: 400, headers });
+    }
+    const hash = await sha256hex(pin);
+    const enc = new TextEncoder();
+    const ga = await crypto.subtle.digest("SHA-256", enc.encode(hash));
+    const ea = await crypto.subtle.digest("SHA-256", enc.encode(this.otpHash || "none"));
+    const match =
+      this.otpHash &&
+      this.otpExp > now &&
+      pin.length === 6 &&
+      crypto.subtle.timingSafeEqual(ga, ea);
+    if (!match) {
+      this.fails += 1;
+      if (this.fails >= FAIL_LIMIT) {
+        this.lockUntil = now + LOCKOUT_MS;
+        this.fails = 0;
+      }
+      return Response.json({ error: "unauthorized" }, { status: 401, headers });
+    }
+    this.fails = 0;
+    const token = hexRandom(32);
+    const sh = await sha256hex(token);
+    this.sessions.set(sh, now + SESSION_TTL_MS);
+    await this.persistSessions();
+    headers = {
+      ...headers,
+      "set-cookie": `streamaid_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600`,
+    };
+    return Response.json({ session: token, expires_in_s: 3600 }, { headers });
   }
 
   private llmStatus() {

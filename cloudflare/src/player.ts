@@ -37,13 +37,29 @@ export const PLAYER_HTML = `<!doctype html>
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
     color: #fff; font-size: 18px; align-items: center; justify-content: center;
   }
+  #gate {
+    position: fixed; inset: 0; background: rgba(8,8,8,0.92); display: flex;
+    align-items: center; justify-content: center; z-index: 20;
+  }
+  #gate form { display: flex; gap: 8px; }
+  #gate input { font-size: 22px; letter-spacing: 0.4em; width: 9em; text-align: center;
+    background: #111; color: #fff; border: 1px solid #444; border-radius: 8px; padding: 10px; }
+  #cu-form { display: flex; gap: 6px; margin: 8px 0; }
+  #cu-form input { flex: 1; background: #111; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
+  #cu-out { font-size: 12px; color: var(--muted); min-height: 1.2em; }
 </style>
 </head>
 <body>
 <header>
   <h1>streamaid</h1>
-  <div id="pill">connecting…</div>
+  <div id="pill">enter PIN</div>
 </header>
+<div id="gate">
+  <form id="pin-form">
+    <input id="pin" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="PIN" autocomplete="one-time-code">
+    <button type="submit">Unlock</button>
+  </form>
+</div>
 <main>
   <section>
     <video id="v" autoplay muted playsinline webkit-playsinline></video>
@@ -51,6 +67,12 @@ export const PLAYER_HTML = `<!doctype html>
     <div id="err"></div>
   </section>
   <aside>
+    <h2>Have AI use this computer</h2>
+    <form id="cu-form">
+      <input id="cu-task" placeholder="Task for the host computer…" autocomplete="off">
+      <button type="submit">Run</button>
+    </form>
+    <div id="cu-out"></div>
     <h2>Screen analysis</h2>
     <div id="llm-note">Waiting for DeepSeek key and a screenshot…</div>
     <div id="summary">No analysis yet.</div>
@@ -69,7 +91,8 @@ export const PLAYER_HTML = `<!doctype html>
 (function () {
   var TYPE_INIT = 1, TYPE_FRAG = 2, TYPE_JPEG = 3, TYPE_SNAP = 4;
   var LIVE = 0.45, CAP = 2;
-  var token = new URLSearchParams(location.search).get("token") || "";
+  var session = "";
+  var controlOn = false;
   var pill = document.getElementById("pill");
   var err = document.getElementById("err");
   var video = document.getElementById("v");
@@ -88,21 +111,51 @@ export const PLAYER_HTML = `<!doctype html>
     try { return !!(MS && MS.isTypeSupported && MS.isTypeSupported(t)); } catch (e) { return false; }
   }
 
-  if (!token) {
-    pill.textContent = "missing token";
-    err.textContent = "Add ?token=… to this URL (from the stream host Settings → Cloudflare watch URL).";
-    return;
-  }
-
   var MS = mediaSourceCtor();
   var ms, sb, ws, pending = [], liveSeeked = false, jpegMode = false, reconnectTimer = null;
 
   function wsUrl() {
     var u = new URL("/watch", location.href);
     u.protocol = u.protocol.replace("http", "ws");
-    u.searchParams.set("token", token);
+    u.searchParams.set("session", session);
     return u.toString();
   }
+  function sendControl(action, extra) {
+    if (!controlOn || !ws || ws.readyState !== 1) return;
+    var msg = { type: "control", action: action };
+    if (extra) Object.keys(extra).forEach(function (k) { msg[k] = extra[k]; });
+    try { ws.send(JSON.stringify(msg)); } catch (e) {}
+  }
+  function normEvent(el, ev) {
+    var r = el.getBoundingClientRect();
+    var x = r.width ? (ev.clientX - r.left) / r.width : 0;
+    var y = r.height ? (ev.clientY - r.top) / r.height : 0;
+    return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+  }
+  function bindControl(el) {
+    if (!el) return;
+    el.addEventListener("click", function (ev) {
+      var p = normEvent(el, ev);
+      sendControl("click", p);
+    });
+    el.addEventListener("mousemove", function (ev) {
+      if (!ev.buttons) return;
+      sendControl("move", normEvent(el, ev));
+    });
+    el.addEventListener("wheel", function (ev) {
+      ev.preventDefault();
+      var p = normEvent(el, ev);
+      sendControl("scroll", { x: p.x, y: p.y, dy: ev.deltaY });
+    }, { passive: false });
+  }
+  document.addEventListener("keydown", function (ev) {
+    if (!controlOn) return;
+    if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
+    if (ev.key.length === 1) sendControl("type", { text: ev.key });
+    else sendControl("key", { key: ev.key });
+  });
+  bindControl(video);
+  bindControl(canvas);
   function enqueue(kind, chunk) {
     if (pending.length >= CAP) pending.shift();
     pending.push({ kind: kind, chunk: chunk });
@@ -269,7 +322,7 @@ export const PLAYER_HTML = `<!doctype html>
 
   function apiPath(p) {
     var u = new URL(p, location.href);
-    if (token) u.searchParams.set("token", token);
+    if (session) u.searchParams.set("session", session);
     return u.toString();
   }
   function fmtTs(ts) {
@@ -311,6 +364,8 @@ export const PLAYER_HTML = `<!doctype html>
       else note.textContent = "DeepSeek " + (st.model || "") + (st.analyzing ? " — analyzing" : " — ready");
       if (body.last) renderAnalysis(body.last);
       renderHistory(body.history);
+      var ctl = body.control || {};
+      controlOn = !!ctl.enabled;
     }).catch(function () {});
   }
   document.getElementById("ask-form").addEventListener("submit", function (e) {
@@ -340,10 +395,45 @@ export const PLAYER_HTML = `<!doctype html>
       refreshLlm();
     }).catch(function () {});
   });
-  setInterval(refreshLlm, 4000);
-  refreshLlm();
+  document.getElementById("cu-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var task = document.getElementById("cu-task").value.trim();
+    if (!task) return;
+    var out = document.getElementById("cu-out");
+    out.textContent = "running…";
+    fetch(apiPath("/api/computer-use"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task: task }),
+    }).then(function (r) { return r.json().then(function (b) { return { status: r.status, b: b }; }); }).then(function (x) {
+      if (x.status === 403) out.textContent = "host has AI control off";
+      else if (x.b.error) out.textContent = "error: " + x.b.error;
+      else out.textContent = "accepted";
+    }).catch(function (err) { out.textContent = String(err); });
+  });
 
-  startMse();
+  document.getElementById("pin-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var pin = (document.getElementById("pin").value || "").trim();
+    err.textContent = "";
+    fetch("/api/otp/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin: pin }),
+    }).then(function (r) { return r.json().then(function (b) { return { status: r.status, b: b }; }); }).then(function (x) {
+      if (x.status !== 200 || !x.b.session) {
+        err.textContent = x.b.error || "bad PIN";
+        pill.textContent = "bad PIN";
+        return;
+      }
+      session = x.b.session;
+      document.getElementById("gate").style.display = "none";
+      pill.textContent = "connecting…";
+      startMse();
+      refreshLlm();
+      setInterval(refreshLlm, 4000);
+    }).catch(function (ex) { err.textContent = String(ex); });
+  });
 })();
 </script>
 </body>

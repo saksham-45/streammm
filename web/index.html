@@ -9,6 +9,7 @@
 <body>
 <header>
   <h1>streamaid</h1>
+  <div id="pin-pill" title="Share this 6-digit PIN with the remote watcher">PIN —</div>
   <div id="quality-pill" title="">quality —</div>
   <div id="status-pill" title="">—</div>
   <button id="gear" type="button">Settings</button>
@@ -26,6 +27,13 @@
     <div id="llm-note">Analysis is delivered on the Cloudflare watch page. Attach DEEPSEEK_API_KEY there with wrangler.</div>
     <div id="latest-summary">No analysis yet.</div>
     <div id="questions"></div>
+    <h2>Have AI use this computer</h2>
+    <form id="cu-form">
+      <input id="cu-task" placeholder="Task for this computer…" autocomplete="off">
+      <button type="submit">Run</button>
+    </form>
+    <button id="cu-cancel" type="button">Cancel AI</button>
+    <div id="cu-out"></div>
     <form id="ask-form">
       <input id="ask-input" placeholder="Ask about the screen…" autocomplete="off">
       <button type="submit">Ask</button>
@@ -70,10 +78,14 @@
       <option value="mjpeg">MJPEG (compat)</option>
     </select>
   </label>
-  <label>Bitrate kbps <input id="cfg-bitrate" type="number" min="2000" max="20000"></label>
+  <label>Bitrate kbps <input id="cfg-bitrate" type="number" min="2000" max="50000"></label>
   <label>GOP frames <input id="cfg-gop" type="number" min="6" max="60"></label>
+  <label>Max width <input id="cfg-max-w" type="number" min="640" max="7680"></label>
+  <label>Max height <input id="cfg-max-h" type="number" min="360" max="4320"></label>
   <label>Cloudflare publish URL <input id="cfg-publish" type="text" placeholder="wss://…/publish"></label>
   <label>Cloudflare watch URL <input id="cfg-watch" type="text" placeholder="wss://…/watch (optional)"></label>
+  <label><input id="cfg-control-enabled" type="checkbox"> Allow remote computer use (kill switch off = blocked)</label>
+  <label><input id="cfg-ai-enabled" type="checkbox"> Allow AI computer use</label>
   <label><input id="cfg-llm-enabled" type="checkbox"> LLM analysis</label>
   <label>Base URL <input id="cfg-base-url" type="text"></label>
   <label>API key <input id="cfg-api-key" type="password" autocomplete="off"></label>
@@ -87,7 +99,8 @@
 
 <div id="login-overlay" class="hidden">
   <form id="login-form">
-    <input id="login-token" type="password" placeholder="Token" autocomplete="off">
+    <input id="login-pin" inputmode="numeric" maxlength="6" placeholder="6-digit PIN" autocomplete="one-time-code">
+    <input id="login-token" type="password" placeholder="Host token" autocomplete="off">
     <button type="submit">Unlock</button>
   </form>
 </div>

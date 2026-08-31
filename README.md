@@ -1,6 +1,6 @@
 # streammm / streamaid
 
-Low-latency **1080p30 screen streaming**: capture on your machine, play in any browser, fan out through **Cloudflare Workers + Durable Objects**.
+Low-latency **native-res 30 fps screen streaming** (capped at 4K, never upscaled): capture on your machine, play in any browser, fan out through **Cloudflare Workers + Durable Objects**.
 
 The origin is a **Rust** binary (`cargo run`). It encodes with ffmpeg (VideoToolbox on macOS, libx264 elsewhere) and delivers **WebSocket** fMP4 — not HTTP progressive download. That is the difference between localhost looking fine and Cloudflare looking like a stalled VOD.
 
@@ -35,25 +35,40 @@ Killing the process is not enough — `KeepAlive` will restart it. Logs: `logs/o
 | Default | Value |
 |---------|--------|
 | Encoder | H.264 (`ffmpeg`), High profile, no B-frames |
-| Bitrate | 10 Mbps CBR, 0.5 s VBV |
+| Bitrate | 20 Mbps CBR, 0.5 s VBV (up to 50 Mbps in Settings) |
 | GOP | 15 frames (~0.5 s join / live edge) |
-| Size | cap 1920×1080, **never upscale**, lanczos downscale |
+| Size | cap **3840×4320**, **never upscale**, lanczos only if the display is larger |
 | fps | 30 |
 
-## Global watch link
+## Global watch link (OTP PIN)
 
 1. Keep the origin running on the capture machine.
 2. Deploy the Worker (below).
-3. Set origin `cloudflare.publish_url` / `watch_url` (or the Settings fields in the UI).
-4. Share:
+3. Set origin `cloudflare.publish_url` / `watch_url` (or the Settings fields in the UI). The **publish** URL still includes `STREAM_TOKEN` (that is the stream-key secret; do not put it on the public watch page).
+4. Share the Worker homepage with **no token in the URL**:
 
 ```
-https://<your-worker>.workers.dev/?token=<STREAM_TOKEN>
+https://<your-worker>.workers.dev/
 ```
 
-Anyone with that URL can watch. Treat the token like a stream key. Do not commit it.
+The host UI (`http://127.0.0.1:8080`) shows a live **6-digit PIN** (about 5 minutes; regenerate from Settings / `POST /api/otp`). The remote person types that PIN on the Worker page or localhost login overlay. Redeem issues a short-lived `streamaid_session` cookie. Wrong PINs are 401 and rate-limited.
 
-The Worker homepage is a player with a **screen analysis + Ask** sidebar. `/watch` is the WebSocket; `/publish` is ingest from the origin; `/health` is public.
+`STREAM_TOKEN` stays the publisher secret (`npx wrangler secret put STREAM_TOKEN`). It is not the human watch password.
+
+The Worker homepage is a player with PIN unlock, **Have AI use this computer**, and a screen analysis + Ask sidebar. `/watch` is the viewer WebSocket (session); `/publish` is ingest from the origin; `/health` is public.
+
+## Remote computer use
+
+Remote control is **off by default**. On the origin UI, enable:
+
+- **Allow remote computer use** — the remote watcher can click / move / scroll / type on the live video (normalized 0–1 coordinates). Kill switch: uncheck it.
+- **Allow AI computer use** — the same watcher can submit a task in **Have AI use this computer**. The origin loops TYPE_SNAP JPEG → vision model JSON actions → the same injector. **Cancel AI** on the origin UI (`POST /api/computer-use/cancel`) stops a running loop.
+
+macOS: grant **Streamaid** Accessibility (and Input Monitoring if prompted) in System Settings → Privacy & Security, in addition to Screen Recording. CI tests use a fake injector; they never post real HID events.
+
+One remote controller at a time. Local host input / the kill switch always wins.
+
+Control path: viewer WebSocket JSON → Durable Object → publisher WebSocket → origin injector. Type-4 LLM snapshots still never go to viewers.
 
 Analysis does not call DeepSeek until you attach a key:
 
@@ -80,7 +95,7 @@ Then on the origin (UI Settings, or `POST /api/config`):
 {
   "cloudflare": {
     "publish_url": "wss://<your-worker>.workers.dev/publish?token=<STREAM_TOKEN>",
-    "watch_url": "wss://<your-worker>.workers.dev/watch?token=<STREAM_TOKEN>"
+    "watch_url": "wss://<your-worker>.workers.dev/watch"
   }
 }
 ```
@@ -102,14 +117,17 @@ Player live-edge is ~0.45 s with `playbackRate` catch-up. It appends by type byt
 ## API (origin)
 
 ```
-GET  /                UI
+GET  /                UI (shows live PIN + kill switches)
 GET  /api/status      capture/stream JSON
 GET  /api/config      full config        POST /api/config   apply+save
+GET  /api/otp         host: current PIN   POST /api/otp     regenerate PIN
+POST /api/otp/redeem  `{ "pin": "123456" }` → session cookie
+POST /api/computer-use `{ "task": "…" }`  (403 unless AI control enabled)
 GET  /api/events      SSE
 GET  /api/capture-devices
 ```
 
-Optional token: `Authorization: Bearer`, `?token=`, or `streamaid_token` cookie.
+Host token: `Authorization: Bearer`, `?token=`, or `streamaid_token` cookie (config, PIN mint). Viewer session: `streamaid_session` cookie or `?session=` (watch + computer-use). Empty token keeps open local-dev mode.
 
 ## Screen analysis (Cloudflare Worker)
 

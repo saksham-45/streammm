@@ -38,7 +38,7 @@ fn default_scale() -> f64 {
     1.0
 }
 fn default_jpeg() -> u32 {
-    90
+    95
 }
 
 impl Default for CaptureConfig {
@@ -79,16 +79,16 @@ fn default_mode() -> String {
     "ffmpeg".into()
 }
 fn default_bitrate() -> u32 {
-    10000
+    20000
 }
 fn default_gop() -> u32 {
     15
 }
 fn default_max_w() -> u32 {
-    1920
+    3840
 }
 fn default_max_h() -> u32 {
-    1080
+    4320
 }
 
 impl Default for EncoderConfig {
@@ -108,10 +108,10 @@ impl EncoderConfig {
         if self.mode != "mjpeg" && self.mode != "ffmpeg" && self.mode != "hevc" {
             self.mode = "mjpeg".into();
         }
-        self.bitrate_kbps = clamp(self.bitrate_kbps, 2000, 20000);
+        self.bitrate_kbps = clamp(self.bitrate_kbps, 2000, 50000);
         self.gop_frames = clamp(self.gop_frames, 6, 60);
-        self.max_width = clamp(self.max_width, 640, 1920);
-        self.max_height = clamp(self.max_height, 360, 1080);
+        self.max_width = clamp(self.max_width, 640, 7680);
+        self.max_height = clamp(self.max_height, 360, 4320);
     }
 }
 
@@ -171,6 +171,16 @@ pub struct CloudflareConfig {
     pub watch_url: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ControlConfig {
+    /// Remote mouse/keyboard from OTP viewers. OFF by default.
+    #[serde(default)]
+    pub enabled: bool,
+    /// AI computer-use from OTP viewers. OFF by default.
+    #[serde(default)]
+    pub ai_enabled: bool,
+}
+
 impl CloudflareConfig {
     pub fn clamp(&mut self) {
         self.publish_url = self.publish_url.trim().to_string();
@@ -194,6 +204,8 @@ pub struct Config {
     pub llm: LlmConfig,
     #[serde(default)]
     pub cloudflare: CloudflareConfig,
+    #[serde(default)]
+    pub control: ControlConfig,
 }
 
 fn default_host() -> String {
@@ -213,6 +225,7 @@ impl Default for Config {
             encoder: EncoderConfig::default(),
             llm: LlmConfig::default(),
             cloudflare: CloudflareConfig::default(),
+            control: ControlConfig::default(),
         }
     }
 }
@@ -296,12 +309,12 @@ mod tests {
         assert_eq!(cfg.capture.driver, "ffmpeg");
         assert_eq!(cfg.capture.fps, 30);
         assert_eq!(cfg.capture.scale, 1.0);
-        assert_eq!(cfg.capture.jpeg_quality, 90);
+        assert_eq!(cfg.capture.jpeg_quality, 95);
         assert_eq!(cfg.encoder.mode, "ffmpeg");
-        assert_eq!(cfg.encoder.bitrate_kbps, 10000);
+        assert_eq!(cfg.encoder.bitrate_kbps, 20000);
         assert_eq!(cfg.encoder.gop_frames, 15);
-        assert_eq!(cfg.encoder.max_width, 1920);
-        assert_eq!(cfg.encoder.max_height, 1080);
+        assert_eq!(cfg.encoder.max_width, 3840);
+        assert_eq!(cfg.encoder.max_height, 4320);
         assert_eq!(cfg.cloudflare.publish_url, "");
         assert!(!cfg.llm.enabled);
     }
@@ -312,7 +325,7 @@ mod tests {
         let path = dir.path().join("config.json");
         let cfg = load(&path).unwrap();
         assert_eq!(cfg.encoder.mode, "ffmpeg");
-        assert_eq!(cfg.encoder.bitrate_kbps, 10000);
+        assert_eq!(cfg.encoder.bitrate_kbps, 20000);
         assert!(path.exists());
     }
 
@@ -338,9 +351,9 @@ mod tests {
         assert_eq!(high.capture.fps, 60);
         assert_eq!(high.capture.scale, 1.0);
         assert_eq!(high.capture.jpeg_quality, 95);
-        assert_eq!(high.encoder.bitrate_kbps, 20000);
+        assert_eq!(high.encoder.bitrate_kbps, 50000);
         assert_eq!(high.encoder.gop_frames, 60);
-        assert_eq!(high.encoder.max_width, 1920);
+        assert_eq!(high.encoder.max_width, 7680);
         assert_eq!(high.llm.interval_sec, 3600);
     }
 
