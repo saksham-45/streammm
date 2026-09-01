@@ -17,8 +17,18 @@ pub fn capture_backoff(prev: Duration) -> Duration {
     prev.saturating_mul(2).clamp(Duration::from_secs(1), Duration::from_secs(8))
 }
 
+/// After a capture that already produced frames (app switch / brief stall),
+/// restart immediately. Cold failures still back off.
+pub fn next_capture_backoff(prev: Duration, had_media: bool) -> Duration {
+    if had_media {
+        Duration::from_secs(1)
+    } else {
+        capture_backoff(prev)
+    }
+}
+
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(12);
-const STALL_TIMEOUT: Duration = Duration::from_secs(4);
+const STALL_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, Default)]
 pub struct CaptureStatus {
@@ -81,9 +91,13 @@ impl Capture {
                 {
                     let mut st = status.lock();
                     st.running = true;
+                    st.width = 0;
+                    st.height = 0;
                 }
                 hub.clear();
-                match run_ffmpeg(cfg.clone(), input.clone(), hub.clone(), status.clone()).await {
+                let result = run_ffmpeg(cfg.clone(), input.clone(), hub.clone(), status.clone()).await;
+                let had_media = status.lock().width > 0;
+                match result {
                     Ok(()) => {
                         tracing::warn!("capture: ffmpeg exited; restarting");
                         status.lock().error = "ffmpeg exited; restarting".into();
@@ -94,8 +108,8 @@ impl Capture {
                     }
                 }
                 status.lock().running = false;
+                backoff = next_capture_backoff(backoff, had_media);
                 tokio::time::sleep(backoff).await;
-                backoff = capture_backoff(backoff);
             }
         });
         *self.task.lock() = Some(handle);
@@ -306,5 +320,21 @@ mod tests {
             d = capture_backoff(d);
         }
         assert_eq!(d, Duration::from_secs(8));
+    }
+
+    #[test]
+    fn stall_timeout_survives_app_switch() {
+        assert!(
+            STALL_TIMEOUT >= Duration::from_secs(15),
+            "app switches stall avfoundation for several seconds; 4s restarts kill the stream: {STALL_TIMEOUT:?}"
+        );
+    }
+
+    #[test]
+    fn restart_backoff_resets_after_successful_capture() {
+        let after_stall = next_capture_backoff(Duration::from_secs(8), true);
+        assert_eq!(after_stall, Duration::from_secs(1));
+        let cold = next_capture_backoff(Duration::from_secs(2), false);
+        assert_eq!(cold, Duration::from_secs(4));
     }
 }

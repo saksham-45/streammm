@@ -49,6 +49,16 @@ h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
   cursor: pointer;
   font: inherit;
 }
+#gear:hover { border-color: #7eb8ff; }
+#gear:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #7eb8ff;
+  outline-offset: 2px;
+}
+::selection { background: #3a5a80; color: #fff; }
 #analysis-banner {
   background: #7a1010;
   color: #fff;
@@ -61,9 +71,12 @@ h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
 
 main {
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   padding: 16px;
+}
+main:has(#analysis-pane:not(.hidden)) {
+  grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr);
 }
 #stream-pane img,
 #stream-pane video,
@@ -132,6 +145,12 @@ button:disabled { opacity: 0.5; }
 #history { list-style: none; padding: 0; margin: 0; font-size: 13px; }
 #history li { border-top: 1px solid #2a2a2a; padding: 6px 0; color: #bbb; }
 
+#drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 19;
+}
 #config-drawer {
   position: fixed;
   right: 0;
@@ -147,8 +166,20 @@ button:disabled { opacity: 0.5; }
   display: flex;
   flex-direction: column;
   gap: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
 }
-#config-drawer h2 { margin: 0 0 4px; font-size: 16px; }
+#config-drawer h2 { margin: 0; font-size: 16px; }
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+#drawer-close {
+  padding: 5px 10px;
+  font-size: 13px;
+}
 #config-drawer label {
   display: flex;
   flex-direction: column;

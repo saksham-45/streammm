@@ -308,17 +308,26 @@ async fn pin_mint_redeem_session_gates_watch_not_stream_token() {
         .await
         .unwrap();
     assert_eq!(ok.status(), StatusCode::OK);
-    let set_cookie = ok
+    let cookies: Vec<String> = ok
         .headers()
-        .get("set-cookie")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    let set_cookie = cookies.join("; ");
     assert!(set_cookie.contains("streamaid_session="));
+    assert!(
+        set_cookie.contains("Max-Age=86400"),
+        "session cookie must last a day, got {set_cookie}"
+    );
     let sess = body_json(ok).await;
     let session = sess["session"].as_str().unwrap().to_string();
     assert!(!session.is_empty());
+    assert_eq!(
+        sess["expires_in_s"].as_u64().unwrap_or(0),
+        86400,
+        "redeemed session must last a day"
+    );
 
     let watch = router
         .oneshot(

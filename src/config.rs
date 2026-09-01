@@ -188,6 +188,12 @@ impl CloudflareConfig {
     }
 }
 
+/// True when the publisher must drop/reconnect (URL cleared or replaced).
+pub fn cloudflare_endpoint_changed(old: &Config, new: &Config) -> bool {
+    old.cloudflare.publish_url != new.cloudflare.publish_url
+        || old.cloudflare.watch_url != new.cloudflare.watch_url
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_host")]
@@ -209,7 +215,7 @@ pub struct Config {
 }
 
 fn default_host() -> String {
-    "0.0.0.0".into()
+    "127.0.0.1".into()
 }
 fn default_port() -> u16 {
     8080
@@ -303,7 +309,7 @@ mod tests {
     #[test]
     fn defaults_are_twitch_class_h264() {
         let cfg = Config::default();
-        assert_eq!(cfg.host, "0.0.0.0");
+        assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8080);
         assert_eq!(cfg.token, "");
         assert_eq!(cfg.capture.driver, "ffmpeg");
@@ -383,6 +389,15 @@ mod tests {
         assert_eq!(cfg.cloudflare.publish_url, "wss://stream.example.com/publish");
         let cfg2 = Config::from_value(serde_json::to_value(&cfg).unwrap());
         assert_eq!(cfg, cfg2);
+    }
+
+    #[test]
+    fn clearing_publish_url_is_an_endpoint_change() {
+        let mut old = Config::default();
+        old.cloudflare.publish_url = "wss://edge.example/publish".into();
+        let new = Config::default();
+        assert!(cloudflare_endpoint_changed(&old, &new));
+        assert!(!cloudflare_endpoint_changed(&new, &new));
     }
 
     #[test]

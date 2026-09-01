@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
 pub const PIN_TTL: Duration = Duration::from_secs(300);
-pub const SESSION_TTL: Duration = Duration::from_secs(3600);
+pub const SESSION_TTL: Duration = Duration::from_secs(86_400);
 pub const FAIL_LIMIT: u32 = 5;
 pub const LOCKOUT: Duration = Duration::from_secs(30);
 
@@ -171,6 +171,14 @@ impl OtpGate {
         Some(st.clone())
     }
 
+    /// Keep a live PIN on the wire so new watchers can join without the host clicking.
+    pub fn ensure_current(&self) -> PinState {
+        if let Some(st) = self.current_pin() {
+            return st;
+        }
+        self.mint()
+    }
+
     pub fn unix_ms(&self) -> u64 {
         self.clock.unix_ms()
     }
@@ -299,6 +307,33 @@ mod tests {
         let st = g.mint();
         let sess = g.redeem(&st.pin).unwrap();
         clock.advance(SESSION_TTL + Duration::from_secs(1));
+        assert!(!g.session_ok(&sess.token));
+    }
+
+    #[test]
+    fn ensure_current_remints_after_pin_expires() {
+        let clock = FakeClock::new();
+        let g = OtpGate::new(clock.clone());
+        let a = g.mint();
+        clock.advance(PIN_TTL + Duration::from_secs(1));
+        assert!(g.current_pin().is_none());
+        let b = g.ensure_current();
+        assert_ne!(a.pin, b.pin);
+        assert_eq!(g.current_pin().unwrap().pin, b.pin);
+    }
+
+    #[test]
+    fn session_lasts_almost_a_day_after_redeem() {
+        let clock = FakeClock::new();
+        let g = OtpGate::new(clock.clone());
+        let st = g.mint();
+        let sess = g.redeem(&st.pin).unwrap();
+        clock.advance(Duration::from_secs(23 * 3600));
+        assert!(
+            g.session_ok(&sess.token),
+            "redeemed PIN session must still be valid ~23h later"
+        );
+        clock.advance(Duration::from_secs(2 * 3600));
         assert!(!g.session_ok(&sess.token));
     }
 }

@@ -22,7 +22,7 @@
     <video id="stream-video" class="hidden" autoplay muted playsinline></video>
     <div id="stream-error" class="hidden"></div>
   </section>
-  <aside id="analysis-pane">
+  <aside id="analysis-pane" class="hidden" hidden>
     <h2>Screen analysis</h2>
     <div id="llm-note">Analysis is delivered on the Cloudflare watch page. Attach DEEPSEEK_API_KEY there with wrangler.</div>
     <div id="latest-summary">No analysis yet.</div>
@@ -32,7 +32,6 @@
       <input id="cu-task" placeholder="Task for this computer…" autocomplete="off">
       <button type="submit">Run</button>
     </form>
-    <button id="cu-cancel" type="button">Cancel AI</button>
     <div id="cu-out"></div>
     <form id="ask-form">
       <input id="ask-input" placeholder="Ask about the screen…" autocomplete="off">
@@ -44,8 +43,12 @@
   </aside>
 </main>
 
-<div id="config-drawer" class="hidden">
-  <h2>Configuration</h2>
+<div id="drawer-backdrop" class="hidden"></div>
+<div id="config-drawer" class="hidden" role="dialog" aria-labelledby="config-title">
+  <div class="drawer-head">
+    <h2 id="config-title">Configuration</h2>
+    <button id="drawer-close" type="button">Close</button>
+  </div>
   <label>Host <input id="cfg-host" type="text"></label>
   <label>Port <input id="cfg-port" type="number" min="1" max="65535"></label>
   <label>Token <input id="cfg-token" type="password" autocomplete="off"></label>
@@ -93,6 +96,7 @@
   <label>Interval sec <input id="cfg-interval" type="number" min="2" max="3600"></label>
   <label>Prompt <textarea id="cfg-prompt" placeholder="empty = default prompt"></textarea></label>
   <button id="save" type="button">Save</button>
+  <button id="cu-cancel" type="button">Cancel AI</button>
   <div id="save-note"></div>
   <div id="restart-note" class="hidden">Restart the service to apply host/port/token changes.</div>
 </div>

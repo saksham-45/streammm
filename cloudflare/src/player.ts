@@ -90,7 +90,7 @@ export const PLAYER_HTML = `<!doctype html>
 <script>
 (function () {
   var TYPE_INIT = 1, TYPE_FRAG = 2, TYPE_JPEG = 3, TYPE_SNAP = 4;
-  var LIVE = 0.45, CAP = 2;
+  var LIVE = 0.45, CAP = 24;
   var session = "";
   var controlOn = false;
   var pill = document.getElementById("pill");
@@ -157,7 +157,18 @@ export const PLAYER_HTML = `<!doctype html>
   bindControl(video);
   bindControl(canvas);
   function enqueue(kind, chunk) {
-    if (pending.length >= CAP) pending.shift();
+    if (kind === TYPE_INIT) {
+      pending = [{ kind: kind, chunk: chunk }];
+      return;
+    }
+    if (pending.length >= CAP) {
+      var drop = -1;
+      for (var i = 0; i < pending.length; i++) {
+        if (pending[i].kind !== TYPE_INIT) { drop = i; break; }
+      }
+      if (drop >= 0) pending.splice(drop, 1);
+      else pending.shift();
+    }
     pending.push({ kind: kind, chunk: chunk });
   }
   function showTap() {
@@ -224,6 +235,7 @@ export const PLAYER_HTML = `<!doctype html>
     try {
       sb.appendBuffer(item.chunk);
     } catch (e) {
+      if (item.kind === TYPE_INIT) pending.unshift(item);
       startMse();
     }
   }
@@ -247,24 +259,37 @@ export const PLAYER_HTML = `<!doctype html>
     }
   }
 
+  var onBinHandler = onBinary;
   function openWs(onBin) {
-    if (ws) { try { ws.close(); } catch (e) {} }
+    if (onBin) onBinHandler = onBin;
+    if (ws) {
+      try { ws.onclose = null; } catch (e) {}
+      try { if (ws._ping) clearInterval(ws._ping); } catch (e) {}
+      try { ws.close(); } catch (e) {}
+    }
     ws = new WebSocket(wsUrl());
     ws.binaryType = "arraybuffer";
-    ws.onopen = function () { pill.textContent = jpegMode ? "live (jpeg)" : "live"; };
+    ws.onopen = function () {
+      pill.textContent = jpegMode ? "live (jpeg)" : "live";
+      if (ws._ping) clearInterval(ws._ping);
+      ws._ping = setInterval(function () {
+        if (ws && ws.readyState === 1) { try { ws.send("ping"); } catch (e) {} }
+      }, 15000);
+    };
     ws.onclose = function () {
       pill.textContent = "reconnecting";
+      if (ws && ws._ping) { try { clearInterval(ws._ping); } catch (e) {} }
       if (reconnectTimer) return;
       reconnectTimer = setTimeout(function () {
         reconnectTimer = null;
-        if (jpegMode) startJpeg(); else startMse();
+        openWs(onBinHandler);
       }, 1000);
     };
     ws.onmessage = function (ev) {
       if (typeof ev.data === "string") { handleText(ev.data); return; }
       var buf = new Uint8Array(ev.data);
       if (!buf.length) return;
-      onBin(buf[0], buf.slice(1));
+      onBinHandler(buf[0], buf.slice(1));
     };
   }
 
@@ -412,6 +437,19 @@ export const PLAYER_HTML = `<!doctype html>
     }).catch(function (err) { out.textContent = String(err); });
   });
 
+  var unlocked = false;
+  function unlockPlayer(sess, expires) {
+    if (unlocked) return;
+    unlocked = true;
+    if (sess) session = sess;
+    if (expires) pill.title = "session ~" + Math.round(expires / 3600) + "h";
+    document.getElementById("gate").style.display = "none";
+    pill.textContent = "connecting…";
+    startMse();
+    refreshLlm();
+    setInterval(refreshLlm, 4000);
+  }
+
   document.getElementById("pin-form").addEventListener("submit", function (e) {
     e.preventDefault();
     var pin = (document.getElementById("pin").value || "").trim();
@@ -426,14 +464,14 @@ export const PLAYER_HTML = `<!doctype html>
         pill.textContent = "bad PIN";
         return;
       }
-      session = x.b.session;
-      document.getElementById("gate").style.display = "none";
-      pill.textContent = "connecting…";
-      startMse();
-      refreshLlm();
-      setInterval(refreshLlm, 4000);
+      unlockPlayer(x.b.session, x.b.expires_in_s);
     }).catch(function (ex) { err.textContent = String(ex); });
   });
+
+  fetch("/api/analysis", { credentials: "include" }).then(function (r) {
+    if (!r.ok) return;
+    unlockPlayer("", 86400);
+  }).catch(function () {});
 })();
 </script>
 </body>

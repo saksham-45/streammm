@@ -1,6 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { sha256hex } from "../src/room";
+import { isPublicEdge, tokenOk } from "../src/index";
+import { sha256hex, type Env } from "../src/room";
 
 async function openPublish(room?: string): Promise<WebSocket> {
   const u = new URL("https://example.com/publish");
@@ -58,6 +59,23 @@ async function viewerSession(room: string, pin = "123456"): Promise<{ pub: WebSo
 }
 
 describe("StreamRoom", () => {
+  it("health is public", async () => {
+    const res = await SELF.fetch("https://example.com/health");
+    expect(res.status).toBe(200);
+  });
+
+  it("EDGE_PUBLIC=off means the public edge is disabled", () => {
+    expect(isPublicEdge({ EDGE_PUBLIC: "off" } as Env)).toBe(false);
+    expect(isPublicEdge({ EDGE_PUBLIC: "on" } as Env)).toBe(true);
+    expect(isPublicEdge({} as Env)).toBe(false);
+  });
+
+  it("refuses publish when STREAM_TOKEN is unset", async () => {
+    const req = new Request("https://example.com/publish");
+    expect(await tokenOk(req, { STREAM_TOKEN: "" } as Env)).toBe(false);
+    expect(await tokenOk(req, {} as Env)).toBe(false);
+  });
+
   it("rejects missing/wrong publisher token with 401", async () => {
     const missing = await SELF.fetch("https://example.com/publish", {
       headers: { Upgrade: "websocket" },
@@ -280,6 +298,24 @@ describe("StreamRoom", () => {
     const msg = JSON.parse(raw) as { type: string; task: string };
     expect(msg.type).toBe("computer-use");
     expect(msg.task).toBe("click then type");
+    pub.close();
+  });
+
+  it("redeemed PIN session lasts a day", async () => {
+    const pub = await openPublish("day-session");
+    await installPin(pub, "123456");
+    const u = new URL("https://example.com/api/otp/redeem");
+    u.searchParams.set("room", "day-session");
+    const res = await SELF.fetch(u.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin: "123456" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json<{ session: string; expires_in_s: number }>();
+    expect(body.expires_in_s).toBe(86400);
+    const cookie = res.headers.get("set-cookie") ?? "";
+    expect(cookie).toMatch(/Max-Age=86400/);
     pub.close();
   });
 

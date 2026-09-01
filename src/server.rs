@@ -6,7 +6,7 @@ use crate::config::{self, Config};
 use crate::headers::stream_header_map;
 use crate::hub::Hub;
 use crate::input::{self, FakeInjector, Injector};
-use crate::otp::{Clock, OtpGate, RealClock, RedeemError};
+use crate::otp::{Clock, OtpGate, RealClock, RedeemError, SESSION_TTL};
 use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};
 use crate::publisher::Publisher;
 use crate::ws::{
@@ -223,7 +223,7 @@ impl App {
     pub fn start_background(self: &Arc<Self>) {
         let cfg = self.cfg.lock().clone();
         self.capture.start(cfg.clone());
-        let _ = self.otp.mint();
+        let _ = self.otp.ensure_current();
         self.push_otp_wire();
         self.publisher.start();
         crate::snapshot::spawn(self.hub.clone());
@@ -234,6 +234,17 @@ impl App {
                 let _ = app
                     .events
                     .send(sse_pack("status", &app.status_json()));
+            }
+        });
+        let app = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                let before = app.otp.current_pin().map(|p| p.hash);
+                let st = app.otp.ensure_current();
+                if before.as_ref() != Some(&st.hash) {
+                    app.push_otp_wire();
+                }
             }
         });
     }
@@ -414,13 +425,20 @@ fn viewer_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
 
 fn session_cookie(token: &str) -> HeaderValue {
     let v = format!(
-        "streamaid_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600"
+        "streamaid_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        SESSION_TTL.as_secs()
     );
     HeaderValue::from_str(&v).unwrap_or_else(|_| HeaderValue::from_static("streamaid_session="))
 }
 
 fn viewer_flag_cookie() -> HeaderValue {
-    HeaderValue::from_static("streamaid_viewer=1; Path=/; SameSite=Lax; Max-Age=3600")
+    let v = format!(
+        "streamaid_viewer=1; Path=/; SameSite=Lax; Max-Age={}",
+        SESSION_TTL.as_secs()
+    );
+    HeaderValue::from_str(&v).unwrap_or_else(|_| {
+        HeaderValue::from_static("streamaid_viewer=1; Path=/; SameSite=Lax; Max-Age=86400")
+    })
 }
 
 fn json_err(code: StatusCode, msg: &str) -> Response {
@@ -478,6 +496,9 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
     }
     *app.cfg.lock() = new_cfg.clone();
     app.publisher.set_config(new_cfg.clone());
+    if config::cloudflare_endpoint_changed(&old, &new_cfg) {
+        app.publisher.start();
+    }
     app.push_otp_wire();
     if recapture {
         app.capture.restart(new_cfg);
@@ -618,7 +639,7 @@ async fn api_otp_redeem(State(app): State<Arc<App>>, req: Request) -> Response {
         Ok(sess) => {
             let mut res = Json(json!({
                 "session": sess.token,
-                "expires_in_s": 3600
+                "expires_in_s": SESSION_TTL.as_secs()
             }))
             .into_response();
             res.headers_mut()

@@ -7,7 +7,7 @@ export default defineWorkersConfig({
         wrangler: { configPath: "./wrangler.jsonc" },
         isolatedStorage: false,
         miniflare: {
-          bindings: { STREAM_TOKEN: "secret" },
+          bindings: { STREAM_TOKEN: "secret", EDGE_PUBLIC: "on" },
         },
       },
     },

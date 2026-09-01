@@ -27,6 +27,23 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     assert!(js.contains("playbackRate"), "catch-up via playbackRate");
     assert!(js.contains("PENDING_CAP"));
     assert!(
+        js.contains("Max-Age=86400") || js.contains("max-age=86400"),
+        "host UI session cookie must last a day, not die when the tab closes"
+    );
+    let cap = js
+        .split("PENDING_CAP = ")
+        .nth(1)
+        .and_then(|s| s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<u32>().ok())
+        .unwrap_or(0);
+    assert!(
+        cap >= 16,
+        "player must buffer more than two fragments or Cloudflare jitter drops the GOP, PENDING_CAP={cap}"
+    );
+    assert!(
+        js.contains("kind === TYPE_INIT") || js.contains("item.kind === TYPE_INIT"),
+        "enqueue/pump must treat INIT as sticky so a full queue cannot drop the fMP4 init"
+    );
+    assert!(
         !js.contains("ftyp"),
         "must append by type byte, not sniff ftyp in a TCP chunk"
     );
@@ -38,9 +55,31 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     assert!(js.contains("sendControl"), "control JSON sender");
     assert!(js.contains("streamaid_viewer") || js.contains("hasViewerSession"));
     assert!(js.contains("/api/computer-use/cancel"));
-    assert!(js.contains("Have AI use this computer") || std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/index.html")
-    ).unwrap().contains("Have AI use this computer"));
+    assert!(js.contains("function closeDrawer"), "Save/Escape must share a drawer closer");
+    assert!(
+        js.contains("if (r.applied) closeDrawer()"),
+        "successful Settings Save must hide the Configuration drawer"
+    );
+    assert!(
+        js.contains("Escape") && js.contains("closeDrawer()"),
+        "Escape must dismiss Settings"
+    );
+    let html = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/index.html"),
+    )
+    .unwrap();
+    assert!(
+        html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
+        "origin analysis/AI/Ask chrome must not sit on the live stream"
+    );
+    assert!(
+        html.contains("id=\"drawer-backdrop\""),
+        "click-outside backdrop dismisses Settings"
+    );
+    assert!(
+        !html.contains("presenter") && !html.contains("screen-share-strip"),
+        "host markup must not paint a presenter/share/camera strip"
+    );
 }
 
 #[test]
@@ -51,6 +90,14 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(s.contains("Have AI use this computer"));
     assert!(s.contains("normEvent"));
     assert!(!s.contains("Add ?token="));
+    assert!(
+        s.contains("CAP = 24") || s.contains("pending.length >= 16"),
+        "worker player pending cap of 2 drops init/fragments under jitter"
+    );
+    assert!(
+        s.contains("Max-Age=86400") || s.contains("expires_in_s"),
+        "watch page must keep the redeemed session for a day"
+    );
 }
 
 #[test]
@@ -84,4 +131,64 @@ console.log("ok");
         .status()
         .expect("node");
     assert!(status.success(), "app.js must eval without throw");
+}
+
+#[test]
+fn settings_drawer_closes_on_save_helper_and_escape() {
+    let js_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/app.js");
+    let status = Command::new("node")
+        .arg("-e")
+        .arg(format!(
+            r#"
+function tokenList(initialHidden) {{
+  const t = {{ hidden: !!initialHidden }};
+  return {{
+    contains: function (c) {{ return c === "hidden" ? t.hidden : false; }},
+    toggle: function (c, force) {{
+      if (c !== "hidden") return;
+      t.hidden = (force === undefined) ? !t.hidden : !!force;
+    }},
+    add: function (c) {{ if (c === "hidden") t.hidden = true; }},
+    remove: function (c) {{ if (c === "hidden") t.hidden = false; }},
+    _t: t
+  }};
+}}
+const drawer = {{ classList: tokenList(true) }};
+const backdrop = {{ classList: tokenList(true) }};
+globalThis.window = globalThis;
+globalThis.document = {{
+  readyState: "loading",
+  cookie: "",
+  addEventListener: function() {{}},
+  getElementById: function (id) {{
+    if (id === "config-drawer") return drawer;
+    if (id === "drawer-backdrop") return backdrop;
+    return null;
+  }}
+}};
+globalThis.location = {{ href: "http://127.0.0.1:8080/", search: "", protocol: "http:", reload: function(){{}} }};
+globalThis.navigator = {{ userAgent: "test", platform: "MacIntel", maxTouchPoints: 0 }};
+globalThis.WebSocket = function() {{}};
+globalThis.MediaSource = undefined;
+globalThis.EventSource = undefined;
+globalThis.fetch = undefined;
+const fs = require("fs");
+const src = fs.readFileSync({:?}, "utf8");
+(0, eval)(src);
+if (!window.streamaidUi) throw new Error("streamaidUi missing");
+window.streamaidUi.openDrawer();
+if (!window.streamaidUi.isDrawerOpen()) throw new Error("open failed");
+if (drawer.classList.contains("hidden")) throw new Error("drawer still hidden after open");
+if (backdrop.classList.contains("hidden")) throw new Error("backdrop still hidden after open");
+window.streamaidUi.closeDrawer();
+if (window.streamaidUi.isDrawerOpen()) throw new Error("close failed");
+if (!drawer.classList.contains("hidden")) throw new Error("drawer not hidden after close");
+if (!backdrop.classList.contains("hidden")) throw new Error("backdrop not hidden after close");
+console.log("drawer-ok");
+"#,
+            js_path
+        ))
+        .status()
+        .expect("node");
+    assert!(status.success(), "drawer open/close must drive shipped helpers");
 }

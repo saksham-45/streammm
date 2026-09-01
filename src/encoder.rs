@@ -2,6 +2,10 @@
 
 use crate::config::Config;
 
+/// macOS ScreenCapture / Control Center recording HUD sits on the top of the
+/// captured display. avfoundation cannot exclude it, so crop it out of the live frame.
+pub const MACOS_RECORDING_HUD_PX: u32 = 56;
+
 /// Pre-encode filter: fps throttle, lanczos downscale, never upscale past max WxH, even dims.
 pub fn scale_filter(cfg: &Config, fps: u32) -> String {
     let s = cfg.capture.scale;
@@ -15,6 +19,16 @@ pub fn scale_filter(cfg: &Config, fps: u32) -> String {
     format!(
         "setpts=PTS-STARTPTS,fps={fps},scale={wexpr}:{hexpr}:force_original_aspect_ratio=decrease:flags=lanczos,scale=trunc(iw/2)*2:trunc(ih/2)*2"
     )
+}
+
+pub fn capture_filter(cfg: &Config, fps: u32, sysname: &str) -> String {
+    let scale = scale_filter(cfg, fps);
+    if sysname == "Darwin" {
+        let h = MACOS_RECORDING_HUD_PX;
+        format!("crop=iw:ih-{h}:0:{h},{scale}")
+    } else {
+        scale
+    }
 }
 
 fn input_part(sysname: &str, input_id: &str, fps: u32) -> Vec<String> {
@@ -72,7 +86,7 @@ pub fn build_ffmpeg_argv(
     argv.extend(input_part(sysname, input_id, fps));
     argv.push("-an".into());
     argv.push("-vf".into());
-    argv.push(scale_filter(cfg, fps));
+    argv.push(capture_filter(cfg, fps, sysname));
 
     if cfg.encoder.mode == "mjpeg" {
         argv.extend([
@@ -249,7 +263,18 @@ mod tests {
         assert!(!joined.contains("libx264"), "{joined}");
         let vf = flag_after(&argv, "-vf").unwrap();
         assert!(vf.contains("fps=30"), "{vf}");
+        assert!(
+            vf.contains("crop=iw:ih-56:0:56"),
+            "macOS recording HUD must be cropped out of the live frame: {vf}"
+        );
         assert_eq!(flag_after(&argv, "-pix_fmt"), Some("yuv420p"));
+    }
+
+    #[test]
+    fn linux_capture_does_not_crop_macos_hud() {
+        let argv = build_ffmpeg_argv(&cfg(), "desktop", "Linux", false);
+        let vf = flag_after(&argv, "-vf").unwrap();
+        assert!(!vf.contains("crop=iw:ih-56"), "{vf}");
     }
 
     #[test]

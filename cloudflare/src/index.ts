@@ -3,9 +3,13 @@ import { StreamRoom, type Env } from "./room";
 
 export { StreamRoom };
 
+export function isPublicEdge(env: Env): boolean {
+  return (env.EDGE_PUBLIC ?? "off") === "on";
+}
+
 export async function tokenOk(request: Request, env: Env): Promise<boolean> {
   const expected = env.STREAM_TOKEN ?? "";
-  if (!expected) return true;
+  if (!expected) return false;
   const url = new URL(request.url);
   let given = url.searchParams.get("token") ?? "";
   const auth = request.headers.get("Authorization") ?? "";
@@ -33,10 +37,16 @@ function roomName(url: URL): string {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    if (!isPublicEdge(env) && url.pathname !== "/health") {
+      return new Response("streamaid edge is off", {
+        status: 503,
+        headers: { "content-type": "text/plain; charset=utf-8", ...cors() },
+      });
+    }
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: cors() });
     }
-    const url = new URL(request.url);
     if (url.pathname === "/" || url.pathname === "/view") {
       return new Response(PLAYER_HTML, {
         headers: { "content-type": "text/html; charset=utf-8", ...cors() },

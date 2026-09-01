@@ -13,8 +13,18 @@ use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+const SEND_TIMEOUT: Duration = Duration::from_secs(2);
 const PING_EVERY: Duration = Duration::from_secs(10);
+const PUBLISH_QUEUE: usize = 32;
+
+/// Timeouts are transient backpressure from the Durable Object. Reconnect
+/// on those used to stall the watch page for ~30s at a time.
+pub fn skip_on_send_timeout(err: &anyhow::Error) -> bool {
+    let s = err.to_string();
+    s.contains("publisher send timeout")
+        || s.contains("publisher text timeout")
+        || s.contains("publisher ping timeout")
+}
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -151,7 +161,7 @@ async fn run_session(
         u.path()
     );
     let (mut ws, _) = tokio_tungstenite::connect_async(u.as_str()).await?;
-    let sub = hub.subscribe(8);
+    let sub = hub.subscribe(PUBLISH_QUEUE);
     if let Some(init) = hub.init_segment() {
         send_bin(&mut ws, pack_media(TYPE_INIT, &init)).await?;
     }
@@ -167,17 +177,35 @@ async fn run_session(
     let mut json_rx = wire_out.subscribe();
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut frag_skips = 0u32;
     loop {
         tokio::select! {
             media = sub.recv() => {
                 let Some(m) = media else {
                     anyhow::bail!("publisher hub closed");
                 };
-                send_bin(&mut ws, pack_media(m.kind, &m.data)).await?;
+                if let Err(e) = send_bin(&mut ws, pack_media(m.kind, &m.data)).await {
+                    if m.kind == TYPE_INIT || !skip_on_send_timeout(&e) {
+                        return Err(e);
+                    }
+                    frag_skips = frag_skips.saturating_add(1);
+                    if frag_skips >= 8 {
+                        return Err(e);
+                    }
+                    tracing::warn!("cloudflare publisher: skip fragment ({e})");
+                    continue;
+                }
+                frag_skips = 0;
             }
             json = json_rx.recv() => {
                 if let Ok(msg) = json {
-                    send_text(&mut ws, msg).await?;
+                    let auth_wire = msg.contains("\"otp\"") || msg.contains("\"flags\"");
+                    if let Err(e) = send_text(&mut ws, msg).await {
+                        if auth_wire || !skip_on_send_timeout(&e) {
+                            return Err(e);
+                        }
+                        tracing::warn!("cloudflare publisher: skip json ({e})");
+                    }
                 }
             }
             _ = ping.tick() => {
@@ -229,5 +257,16 @@ mod tests {
         assert!(u.as_str().contains("token=secret"));
         let u = publish_url_with_token("wss://example.com/publish?token=secret", "other").unwrap();
         assert_eq!(u.query_pairs().filter(|(k, _)| k == "token").count(), 1);
+    }
+
+    #[test]
+    fn send_timeout_does_not_drop_session() {
+        assert!(
+            skip_on_send_timeout(&anyhow::anyhow!("publisher send timeout")),
+            "a slow Durable Object ACK must skip a fragment, not reconnect the publisher"
+        );
+        assert!(!skip_on_send_timeout(&anyhow::anyhow!(
+            "publisher websocket closed"
+        )));
     }
 }

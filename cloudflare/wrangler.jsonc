@@ -9,6 +9,7 @@
     "logs": { "head_sampling_rate": 1 }
   },
   "vars": {
+    "EDGE_PUBLIC": "off",
     "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
     "DEEPSEEK_MODEL": "deepseek-v4-flash-vision-exp"
   },

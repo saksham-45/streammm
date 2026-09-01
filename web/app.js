@@ -3,7 +3,7 @@
 const LIVE_EDGE_S = 0.45;
 const CATCHUP_LEAD_S = 1.0;
 const CATCHUP_RATE = 1.08;
-const PENDING_CAP = 2;
+const PENDING_CAP = 24;
 const TYPE_INIT = 1;
 const TYPE_FRAG = 2;
 const TYPE_JPEG = 3;
@@ -17,7 +17,7 @@ function getCookie(name) {
   return m ? decodeURIComponent(m[1]) : "";
 }
 function setCookie(name, value) {
-  document.cookie = name + "=" + encodeURIComponent(value) + "; path=/";
+  document.cookie = name + "=" + encodeURIComponent(value) + "; path=/; Max-Age=86400; SameSite=Lax";
 }
 const token = getCookie("streamaid_token");
 function hasViewerSession() {
@@ -46,6 +46,24 @@ let lastCT = -1, lastCTAt = 0, seekDeadline = 0;
 
 function $(id) {
   return document.getElementById(id);
+}
+
+function isDrawerOpen() {
+  const d = $("config-drawer");
+  return !!(d && !d.classList.contains("hidden"));
+}
+function setDrawerOpen(open) {
+  const d = $("config-drawer");
+  const backdrop = $("drawer-backdrop");
+  if (d) d.classList.toggle("hidden", !open);
+  if (backdrop) backdrop.classList.toggle("hidden", !open);
+  if (open && d && cfg) fillConfigForm(cfg);
+}
+function closeDrawer() {
+  setDrawerOpen(false);
+}
+function openDrawer() {
+  setDrawerOpen(true);
 }
 
 async function api(path, opts) {
@@ -157,7 +175,15 @@ function hideVideoLike() {
 }
 
 function enqueue(kind, chunk) {
-  if (pending.length >= PENDING_CAP) pending.shift();
+  if (kind === TYPE_INIT) {
+    pending = [{ kind: kind, chunk: chunk }];
+    return;
+  }
+  if (pending.length >= PENDING_CAP) {
+    const drop = pending.findIndex(function (p) { return p.kind !== TYPE_INIT; });
+    if (drop >= 0) pending.splice(drop, 1);
+    else pending.shift();
+  }
   pending.push({ kind: kind, chunk: chunk });
 }
 
@@ -177,7 +203,11 @@ function teardownMse() {
 }
 
 function safeAppend(chunk) {
-  try { sb.appendBuffer(chunk); } catch (e) { rebuildMse(); }
+  try {
+    sb.appendBuffer(chunk);
+  } catch (e) {
+    rebuildMse();
+  }
 }
 
 function handleNewStream() {
@@ -575,7 +605,12 @@ async function loadConfig() {
   hideLogin();
   mode = (cfg.encoder && cfg.encoder.mode) || "ffmpeg";
   const banner = $("analysis-banner");
-  if (banner) banner.classList.toggle("hidden", !(cfg.llm && cfg.llm.enabled));
+  if (banner) banner.classList.add("hidden");
+  const pane = $("analysis-pane");
+  if (pane) {
+    pane.classList.add("hidden");
+    pane.hidden = true;
+  }
   if (mode === "mjpeg") showMjpeg();
   else showH264();
 }
@@ -631,13 +666,27 @@ function onReady() {
   setInterval(refreshPin, 15000);
   const gear = $("gear");
   if (gear) {
-    gear.addEventListener("click", function () {
-      const d = $("config-drawer");
-      if (!d) return;
-      d.classList.toggle("hidden");
-      if (!d.classList.contains("hidden") && cfg) fillConfigForm(cfg);
+    gear.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      if (isDrawerOpen()) closeDrawer();
+      else openDrawer();
     });
   }
+  const drawerClose = $("drawer-close");
+  if (drawerClose) {
+    drawerClose.addEventListener("click", function () { closeDrawer(); });
+  }
+  const backdrop = $("drawer-backdrop");
+  if (backdrop) {
+    backdrop.addEventListener("click", function () { closeDrawer(); });
+  }
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Escape") return;
+    if (!isDrawerOpen()) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    closeDrawer();
+  }, true);
   const jpeg = $("cfg-jpeg");
   if (jpeg) {
     jpeg.addEventListener("input", function () {
@@ -661,6 +710,7 @@ function onReady() {
         if (note) note.textContent = r.note || "saved";
         const rn = $("restart-note");
         if (rn) rn.classList.toggle("hidden", !r.restart_required);
+        if (r.applied) closeDrawer();
         if (r.applied && form.encoder.mode !== mode) {
           setTimeout(function () { location.reload(); }, 400);
           return;
@@ -697,6 +747,7 @@ function onReady() {
   bindControl($("stream-video"));
   bindControl($("stream-canvas"));
   document.addEventListener("keydown", function (ev) {
+    if (isDrawerOpen()) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
     if (ev.key.length === 1) sendControl("type", { text: ev.key });
     else sendControl("key", { key: ev.key });
@@ -767,6 +818,15 @@ function onReady() {
   });
   connectEvents();
   api("/api/status").then(function (res) { return res.json(); }).then(renderStatus).catch(function () {});
+}
+
+if (typeof window !== "undefined") {
+  window.streamaidUi = {
+    closeDrawer: closeDrawer,
+    openDrawer: openDrawer,
+    isDrawerOpen: isDrawerOpen,
+    setDrawerOpen: setDrawerOpen,
+  };
 }
 
 if (typeof document !== "undefined") {

@@ -16,6 +16,7 @@ export type ConnRole = "publisher" | "viewer";
 export interface Env {
   STREAM_ROOM: DurableObjectNamespace;
   STREAM_TOKEN?: string;
+  EDGE_PUBLIC?: string;
   DEEPSEEK_API_KEY?: string;
   DEEPSEEK_BASE_URL?: string;
   DEEPSEEK_MODEL?: string;
@@ -29,7 +30,7 @@ const TYPE_FRAG = 2;
 const TYPE_SNAP = 4;
 const FAIL_LIMIT = 5;
 const LOCKOUT_MS = 30_000;
-const SESSION_TTL_MS = 3_600_000;
+const SESSION_TTL_MS = 86_400_000;
 
 export async function sha256hex(s: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
@@ -96,6 +97,7 @@ export class StreamRoom extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    this.ctx.setHibernatableWebSocketEventTimeout(60_000);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -164,9 +166,10 @@ export class StreamRoom extends DurableObject<Env> {
     if (kind === TYPE_SNAP) {
       this.lastSnap = bytes.slice(1);
       this.snapSeq += 1;
-      await this.persistSnap();
+      // Do not persist the JPEG on the live-video path: storage I/O takes
+      // the Durable Object input gate and stalls /publish for seconds.
       if (this.apiKey() && !this.analyzing) {
-        await this.ctx.storage.setAlarm(Date.now() + 1500);
+        void this.ctx.storage.setAlarm(Date.now() + 1500);
       }
       return;
     }
@@ -482,11 +485,12 @@ export class StreamRoom extends DurableObject<Env> {
     const sh = await sha256hex(token);
     this.sessions.set(sh, now + SESSION_TTL_MS);
     await this.persistSessions();
+    const maxAge = Math.floor(SESSION_TTL_MS / 1000);
     headers = {
       ...headers,
-      "set-cookie": `streamaid_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600`,
+      "set-cookie": `streamaid_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
     };
-    return Response.json({ session: token, expires_in_s: 3600 }, { headers });
+    return Response.json({ session: token, expires_in_s: maxAge }, { headers });
   }
 
   private llmStatus() {

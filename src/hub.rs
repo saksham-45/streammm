@@ -110,11 +110,19 @@ impl Hub {
         Self::fanout(&mut g, media);
     }
 
+    fn drop_oldest_keep_init(q: &mut VecDeque<Media>) {
+        if let Some(i) = q.iter().position(|m| m.kind != TYPE_INIT) {
+            q.remove(i);
+        } else {
+            q.pop_front();
+        }
+    }
+
     fn fanout(g: &mut Inner, media: Media) {
         for c in g.subs.values() {
             let mut client = c.lock();
             if client.q.len() >= client.cap {
-                client.q.pop_front();
+                Self::drop_oldest_keep_init(&mut client.q);
             }
             client.q.push_back(media.clone());
             client.notify.notify_one();
@@ -277,6 +285,27 @@ mod tests {
         assert_eq!(&hub.latest().unwrap().data[..], b"f1");
         assert_eq!(hub.size(), (1920, 1080));
         assert!(hub.last_media_age_s().unwrap() < 1.0);
+    }
+
+    #[test]
+    fn drop_oldest_never_drops_init() {
+        let hub = Hub::new();
+        let sub = hub.subscribe(2);
+        hub.publish_init(Bytes::from_static(b"init"), 1920, 1080);
+        hub.publish_unit(TYPE_FRAG, Bytes::from_static(b"a"), 0, 0);
+        hub.publish_unit(TYPE_FRAG, Bytes::from_static(b"b"), 0, 0);
+        hub.publish_unit(TYPE_FRAG, Bytes::from_static(b"c"), 0, 0);
+        let mut kinds = Vec::new();
+        let mut datas = Vec::new();
+        while let Some(m) = sub.try_recv() {
+            kinds.push(m.kind);
+            datas.push(m.data.clone());
+        }
+        assert!(
+            kinds.contains(&TYPE_INIT),
+            "full subscriber queue must keep the init segment, got {kinds:?}"
+        );
+        assert_eq!(&datas[0][..], b"init");
     }
 
     #[test]
