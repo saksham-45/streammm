@@ -656,6 +656,37 @@ describe("StreamRoom", () => {
     pub.close();
   });
 
+  it("revokes the controller when the driving watcher disconnects", async () => {
+    const { pub, session } = await viewerSession("revoke-close");
+    pub.send(JSON.stringify({ type: "flags", control: true, ai: false }));
+    await new Promise((r) => setTimeout(r, 30));
+    const view = await openWatch(session, "revoke-close");
+    const click = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("click")) resolve(ev.data);
+      });
+    });
+    view.send(JSON.stringify({ type: "control", action: "click", x: 0.4, y: 0.6 }));
+    await Promise.race([
+      click,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no click")), 3000)),
+    ]);
+    const revoked = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("revoke")) resolve(ev.data);
+      });
+    });
+    view.close();
+    const raw = await Promise.race([
+      revoked,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no revoke")), 3000)),
+    ]);
+    const msg = JSON.parse(raw) as { type: string; session?: string };
+    expect(msg.type).toBe("revoke");
+    expect(msg.session).toBe(session);
+    pub.close();
+  });
+
   it("redeems unattended password after the PIN expires", async () => {
     const pub = await openPublish("unattended");
     const pin = "123456";

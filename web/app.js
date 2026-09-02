@@ -77,6 +77,7 @@ function featureFlags() {
     ai: aiEl ? !!aiEl.checked : !!(cfg && cfg.control && cfg.control.ai_enabled),
     ctl: ctlEl ? !!ctlEl.checked : !!(cfg && cfg.control && cfg.control.enabled),
     block: ($("cfg-block-local") ? !!$("cfg-block-local").checked : !!(cfg && cfg.control && cfg.control.block_local)),
+    lockOnEnd: ($("cfg-lock-on-end") ? !!$("cfg-lock-on-end").checked : !!(cfg && cfg.control && cfg.control.lock_on_end)),
     unattended: ($("cfg-unattended") ? !!$("cfg-unattended").checked : !!(cfg && cfg.access && cfg.access.unattended)),
     audio: audioEl ? !!audioEl.checked : !!(cfg && cfg.capture && cfg.capture.audio),
     mjpeg: mode === "mjpeg",
@@ -100,6 +101,8 @@ function syncFeatureUi() {
   setHidden($("keys-bar"), !f.ctl);
   setHidden($("block-local-fields"), !f.ctl);
   setHidden($("block-hint"), !(f.ctl && f.block));
+  setHidden($("lock-on-end-fields"), !f.ctl);
+  setHidden($("lock-on-end-hint"), !(f.ctl && f.lockOnEnd));
   setHidden($("ai-hint"), !f.ai);
   setHidden($("cu-cancel"), !f.ai);
   setHidden($("cu-section"), !f.ai);
@@ -1244,6 +1247,8 @@ function fillConfigForm(c) {
   if (ctl) ctl.checked = !!(c.control && c.control.enabled);
   const blk = $("cfg-block-local");
   if (blk) blk.checked = !!(c.control && c.control.block_local);
+  const lockEnd = $("cfg-lock-on-end");
+  if (lockEnd) lockEnd.checked = !!(c.control && c.control.lock_on_end);
   const ai = $("cfg-ai-enabled");
   if (ai) ai.checked = !!(c.control && c.control.ai_enabled);
   const en = $("cfg-llm-enabled");
@@ -1273,6 +1278,7 @@ function readConfigForm() {
       enabled: !!(ctlEn && ctlEn.checked),
       ai_enabled: !!(aiEn && aiEn.checked),
       block_local: !!( $("cfg-block-local") && $("cfg-block-local").checked ),
+      lock_on_end: !!( $("cfg-lock-on-end") && $("cfg-lock-on-end").checked ),
     },
     capture: {
       driver: "ffmpeg",
@@ -1452,7 +1458,7 @@ function onReady() {
       if (jv) jv.textContent = jpeg.value;
     });
   }
-  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-block-local", "cfg-unattended"].forEach(function (id) {
+  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-block-local", "cfg-lock-on-end", "cfg-unattended"].forEach(function (id) {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", function () { syncFeatureUi(); });

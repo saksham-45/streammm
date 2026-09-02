@@ -203,6 +203,9 @@ pub struct ControlConfig {
     /// Swallow host HID while a remote controller is driving. ⌘⇧Esc unlocks.
     #[serde(default)]
     pub block_local: bool,
+    /// Inject Control+Command+Q when the remote session ends (not ⌘⇧Esc reclaim).
+    #[serde(default)]
+    pub lock_on_end: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -423,6 +426,7 @@ mod tests {
         assert!(!cfg.llm.enabled);
         assert!(!cfg.access.unattended);
         assert!(cfg.access.password_hash.is_empty());
+        assert!(!cfg.control.lock_on_end);
     }
 
     #[test]

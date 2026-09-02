@@ -490,7 +490,21 @@ export class StreamRoom extends DurableObject<Env> {
     await this.ctx.storage.put("sessions", obj);
   }
 
+  private dropViewerController(ws: WebSocket): void {
+    let att: Attachment | null = null;
+    try {
+      att = ws.deserializeAttachment() as Attachment | null;
+    } catch {
+      return;
+    }
+    if (att?.role === "viewer" && att.session && this.controller === att.session) {
+      this.controller = null;
+      this.sendPublisher(JSON.stringify({ type: "revoke", session: att.session }));
+    }
+  }
+
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    this.dropViewerController(ws);
     const safe = code === 1000 || (code >= 3000 && code <= 4999) ? code : 1000;
     try {
       ws.close(safe, reason);
@@ -501,6 +515,7 @@ export class StreamRoom extends DurableObject<Env> {
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     console.error(JSON.stringify({ message: "websocket error", error: String(error) }));
+    this.dropViewerController(ws);
     try {
       ws.close(1011, "error");
     } catch {

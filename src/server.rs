@@ -351,7 +351,7 @@ impl App {
                 self.select_display(id);
             }
             "revoke" => {
-                self.release_controller();
+                self.end_remote_session();
             }
             "chat" => {
                 self.handle_chat(&v);
@@ -647,9 +647,46 @@ impl App {
     }
 
     pub fn release_controller(&self) {
-        *self.controller.lock() = None;
+        self.end_session(false);
+    }
+
+    /// Watcher hung up or host pressed End — optionally lock the Mac.
+    pub fn end_remote_session(&self) {
+        self.end_session(true);
+    }
+
+    fn end_session(&self, lock: bool) {
+        let had = {
+            let mut g = self.controller.lock();
+            let had = g.is_some();
+            *g = None;
+            had
+        };
         self.sync_block_local();
         self.bump_status();
+        if lock && had && self.cfg.lock().control.lock_on_end {
+            self.lock_screen();
+        }
+    }
+
+    fn lock_screen(&self) {
+        self.injector.apply(&input::Action::Key {
+            key: "q".into(),
+            down: None,
+            modifiers: vec!["Control".into(), "Meta".into()],
+        });
+    }
+
+    fn release_if_controller(&self, session: &str) {
+        let cur = self.controller.lock().clone();
+        let mine = match (cur.as_deref(), session) {
+            (Some("anon"), s) if s.is_empty() => true,
+            (Some(c), s) if c == s => true,
+            _ => false,
+        };
+        if mine {
+            self.end_remote_session();
+        }
     }
 
     pub async fn run_computer_use(self: &Arc<Self>, task: &str) -> Vec<input::Action> {
@@ -812,6 +849,7 @@ impl App {
                 "ai_enabled": cfg.control.ai_enabled,
                 "controller": self.controller.lock().is_some(),
                 "block_local": cfg.control.block_local,
+                "lock_on_end": cfg.control.lock_on_end,
                 "blocking": cfg.control.block_local && self.controller.lock().is_some(),
                 "files": self.files.list().len(),
             },
@@ -1303,7 +1341,7 @@ async fn api_control_release(State(app): State<Arc<App>>, req: Request) -> Respo
     if !host_ok(&app, req.headers(), req.uri()) {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    app.release_controller();
+    app.end_remote_session();
     Json(json!({"ok": true, "released": true})).into_response()
 }
 
@@ -1576,10 +1614,25 @@ async fn stream_ws(State(app): State<Arc<App>>, mut req: Request) -> Response {
     res
 }
 
+struct SessionEnd {
+    app: Arc<App>,
+    session: String,
+}
+
+impl Drop for SessionEnd {
+    fn drop(&mut self) {
+        self.app.release_if_controller(&self.session);
+    }
+}
+
 async fn ws_session<S>(mut stream: S, app: Arc<App>, session: String) -> anyhow::Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
+    let _end = SessionEnd {
+        app: app.clone(),
+        session: session.clone(),
+    };
     let mut read_buf = Vec::new();
     let mut tmp = [0u8; 8192];
     async fn send_bin<S: tokio::io::AsyncWrite + Unpin>(
@@ -2539,7 +2592,7 @@ mod tests {
     #[tokio::test]
     async fn host_releases_remote_controller() {
         use crate::computer_use::DoneModel;
-        use crate::input::FakeInjector;
+        use crate::input::{FakeInjector, Injected};
         use crate::otp::FakeClock;
 
         let dir = tempfile::tempdir().unwrap();
@@ -2569,6 +2622,52 @@ mod tests {
         app.release_controller();
         assert_eq!(app.status_json()["control"]["controller"], false);
         assert!(!fake.block_local.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            fake.recorded().iter().all(|e| !matches!(e, Injected::Key { key, .. } if key == "q")),
+            "⌘⇧Esc reclaim must not lock the Mac"
+        );
+    }
+
+    #[tokio::test]
+    async fn ending_session_locks_when_configured() {
+        use crate::computer_use::DoneModel;
+        use crate::input::{FakeInjector, Injected};
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        cfg.control.lock_on_end = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        app.handle_inbound_json(
+            r#"{"type":"control","session":"abc","action":"click","x":0.1,"y":0.2}"#,
+        );
+        assert_eq!(app.status_json()["control"]["controller"], true);
+        app.end_remote_session();
+        assert_eq!(app.status_json()["control"]["controller"], false);
+        let rec = fake.recorded();
+        assert!(
+            rec.iter().any(|e| matches!(
+                e,
+                Injected::Key { key, modifiers, .. }
+                    if key == "q"
+                        && modifiers.iter().any(|m| m == "Control")
+                        && modifiers.iter().any(|m| m == "Meta")
+            )),
+            "End with lock-on-end must inject Control+Command+Q, got {rec:?}"
+        );
+        app.end_remote_session();
+        let n = fake.recorded().iter().filter(|e| matches!(e, Injected::Key { key, .. } if key == "q")).count();
+        assert_eq!(n, 1, "a second End with no controller must not lock again");
     }
 
     #[tokio::test]

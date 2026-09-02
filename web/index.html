@@ -148,6 +148,8 @@
   <p id="chat-hint" class="cfg-hint hidden">A session chat panel appears while remote control is on. Host and watchers can message each other without the browser stealing keystrokes into the remote machine.</p>
   <label id="block-local-fields" class="hidden"><input id="cfg-block-local" type="checkbox"> Block local input during remote session</label>
   <p id="block-hint" class="cfg-hint hidden">While a watcher is driving, this Mac's keyboard and mouse are locked (remote inject still works). Press ⌘⇧Esc to reclaim — the End button will not receive clicks. Requires Accessibility.</p>
+  <label id="lock-on-end-fields" class="hidden"><input id="cfg-lock-on-end" type="checkbox"> Lock this Mac when the remote session ends</label>
+  <p id="lock-on-end-hint" class="cfg-hint hidden">When the watcher disconnects or you press End, inject Control+Command+Q (lock screen). Reclaiming with ⌘⇧Esc does not lock.</p>
   <label><input id="cfg-ai-enabled" type="checkbox"> Allow AI computer use</label>
   <p id="ai-hint" class="cfg-hint hidden">Watchers (and this host page) can submit a task in Have AI use this computer. Cancel AI stops a running loop.</p>
   <label><input id="cfg-llm-enabled" type="checkbox"> LLM analysis</label>

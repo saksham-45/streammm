@@ -145,6 +145,12 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "block-local must be a Settings control revealed when remote control is on"
     );
     assert!(
+        html.contains("id=\"cfg-lock-on-end\"")
+            && html.contains("id=\"lock-on-end-fields\"")
+            && html.contains("id=\"lock-on-end-hint\""),
+        "lock-on-end must be a Settings control revealed when remote control is on"
+    );
+    assert!(
         html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
         "origin analysis/AI/Ask chrome must not sit on the live stream"
     );
@@ -578,6 +584,9 @@ const nodes = {{
   "block-local-fields": el(true),
   "cfg-block-local": el(false),
   "block-hint": el(true),
+  "lock-on-end-fields": el(true),
+  "cfg-lock-on-end": el(false),
+  "lock-on-end-hint": el(true),
   "ai-hint": el(true),
   "cu-cancel": el(true),
   "cu-section": el(true),
@@ -625,6 +634,7 @@ if (!nodes["llm-fields"].classList.contains("hidden")) throw new Error("LLM fiel
 if (!nodes["analysis-pane"].classList.contains("hidden")) throw new Error("analysis pane visible while off");
 if (!nodes["cu-section"].classList.contains("hidden")) throw new Error("AI form visible while off");
 if (!nodes["unattended-fields"].classList.contains("hidden")) throw new Error("unattended password visible while off");
+if (!nodes["lock-on-end-fields"].classList.contains("hidden")) throw new Error("lock-on-end visible while off");
 if (!nodes["keys-bar"].classList.contains("hidden")) throw new Error("keys-bar visible while off");
 if (!nodes["keys-hint"].classList.contains("hidden")) throw new Error("keys-hint visible while off");
 if (!nodes["chat-section"].classList.contains("hidden")) throw new Error("chat visible while off");
@@ -652,6 +662,11 @@ if (nodes["chat-hint"].classList.contains("hidden")) throw new Error("chat hint 
 const chat = window.streamaidUi.chatPayload("  hello  ");
 if (chat.type !== "chat" || chat.text !== "hello") throw new Error("chatPayload");
 if (nodes["block-local-fields"].classList.contains("hidden")) throw new Error("block-local still hidden after control enable");
+if (nodes["lock-on-end-fields"].classList.contains("hidden")) throw new Error("lock-on-end still hidden after control enable");
+if (!nodes["lock-on-end-hint"].classList.contains("hidden")) throw new Error("lock-on-end hint visible while off");
+nodes["cfg-lock-on-end"].checked = true;
+window.streamaidUi.syncFeatureUi();
+if (nodes["lock-on-end-hint"].classList.contains("hidden")) throw new Error("lock-on-end hint still hidden after enable");
 const combo = window.streamaidUi.comboPayload("Tab", ["Meta"]);
 if (combo.action !== "key" || combo.key !== "Tab" || combo.modifiers[0] !== "Meta") throw new Error("comboPayload Cmd+Tab");
 const cad = window.streamaidUi.comboPayload("Delete", ["Control", "Alt"]);
