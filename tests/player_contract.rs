@@ -153,6 +153,12 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "blank-screen must be a Settings control revealed when remote control is on"
     );
     assert!(
+        html.contains("id=\"cfg-keep-awake\"")
+            && html.contains("id=\"keep-awake-fields\"")
+            && html.contains("id=\"keep-awake-hint\""),
+        "keep-awake must be a Settings control revealed when remote control or unattended is on"
+    );
+    assert!(
         html.contains("id=\"cfg-lock-on-end\"")
             && html.contains("id=\"lock-on-end-fields\"")
             && html.contains("id=\"lock-on-end-hint\""),
@@ -692,6 +698,9 @@ const nodes = {{
   "unattended-hint": el(true),
   "unattended-fields": el(true),
   "cfg-unattended-password": el(false),
+  "keep-awake-fields": el(true),
+  "cfg-keep-awake": el(false),
+  "keep-awake-hint": el(true),
   "cfg-voice": el(false),
   "voice-hint": el(true),
   "talk": el(true),
@@ -724,6 +733,7 @@ if (!nodes["llm-fields"].classList.contains("hidden")) throw new Error("LLM fiel
 if (!nodes["analysis-pane"].classList.contains("hidden")) throw new Error("analysis pane visible while off");
 if (!nodes["cu-section"].classList.contains("hidden")) throw new Error("AI form visible while off");
 if (!nodes["unattended-fields"].classList.contains("hidden")) throw new Error("unattended password visible while off");
+if (!nodes["keep-awake-fields"].classList.contains("hidden")) throw new Error("keep-awake visible while off");
 if (!nodes["lock-on-end-fields"].classList.contains("hidden")) throw new Error("lock-on-end visible while off");
 if (!nodes["blank-screen-fields"].classList.contains("hidden")) throw new Error("blank-screen visible while off");
 if (!nodes["record-fields"].classList.contains("hidden")) throw new Error("record-sessions visible while off");
@@ -755,6 +765,11 @@ if (nodes["chat-hint"].classList.contains("hidden")) throw new Error("chat hint 
 const chat = window.streamaidUi.chatPayload("  hello  ");
 if (chat.type !== "chat" || chat.text !== "hello") throw new Error("chatPayload");
 if (nodes["block-local-fields"].classList.contains("hidden")) throw new Error("block-local still hidden after control enable");
+if (nodes["keep-awake-fields"].classList.contains("hidden")) throw new Error("keep-awake still hidden after control enable");
+if (!nodes["keep-awake-hint"].classList.contains("hidden")) throw new Error("keep-awake hint visible while off");
+nodes["cfg-keep-awake"].checked = true;
+window.streamaidUi.syncFeatureUi();
+if (nodes["keep-awake-hint"].classList.contains("hidden")) throw new Error("keep-awake hint still hidden after enable");
 if (nodes["blank-screen-fields"].classList.contains("hidden")) throw new Error("blank-screen still hidden after control enable");
 if (!nodes["blank-screen-hint"].classList.contains("hidden")) throw new Error("blank-screen hint visible while off");
 nodes["cfg-blank-screen"].checked = true;
@@ -815,6 +830,11 @@ if (!nodes["audio-fields"].classList.contains("hidden")) throw new Error("audio 
 if (nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality still hidden after MJPEG enable");
 if (!nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate still visible in MJPEG mode");
 if (!nodes["gop-fields"].classList.contains("hidden")) throw new Error("GOP still visible in MJPEG mode");
+nodes["cfg-control-enabled"].checked = false;
+nodes["cfg-keep-awake"].checked = false;
+nodes["cfg-unattended"].checked = true;
+window.streamaidUi.syncFeatureUi();
+if (nodes["keep-awake-fields"].classList.contains("hidden")) throw new Error("keep-awake hidden with unattended only");
 console.log("reveal-ok");
 "#,
             js_path

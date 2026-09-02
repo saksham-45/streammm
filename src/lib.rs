@@ -11,6 +11,7 @@ pub mod headers;
 pub mod hub;
 pub mod input;
 pub mod otp;
+pub mod power;
 pub mod protocol;
 pub mod publisher;
 pub mod record;

@@ -81,6 +81,7 @@ function featureFlags() {
     lockOnEnd: ($("cfg-lock-on-end") ? !!$("cfg-lock-on-end").checked : !!(cfg && cfg.control && cfg.control.lock_on_end)),
     record: ($("cfg-record-sessions") ? !!$("cfg-record-sessions").checked : !!(cfg && cfg.control && cfg.control.record_sessions)),
     unattended: ($("cfg-unattended") ? !!$("cfg-unattended").checked : !!(cfg && cfg.access && cfg.access.unattended)),
+    keepAwake: ($("cfg-keep-awake") ? !!$("cfg-keep-awake").checked : !!(cfg && cfg.control && cfg.control.keep_awake)),
     audio: audioEl ? !!audioEl.checked : !!(cfg && cfg.capture && cfg.capture.audio),
     voice: ($("cfg-voice") ? !!$("cfg-voice").checked : !!(cfg && cfg.control && cfg.control.voice)),
     mjpeg: mode === "mjpeg",
@@ -122,6 +123,8 @@ function syncFeatureUi() {
   setHidden($("analysis-pane"), !(f.llm || f.ai || f.ctl));
   setHidden($("unattended-hint"), !f.unattended);
   setHidden($("unattended-fields"), !f.unattended);
+  setHidden($("keep-awake-fields"), !(f.ctl || f.unattended));
+  setHidden($("keep-awake-hint"), !((f.ctl || f.unattended) && f.keepAwake));
   setHidden($("audio-hint"), !f.audio);
   setHidden($("audio-fields"), !(f.audio && !f.mjpeg));
   setHidden($("unmute"), !(f.audio && !f.mjpeg));
@@ -1519,6 +1522,8 @@ function fillConfigForm(c) {
   if (aud) aud.checked = !!(c.capture && c.capture.audio);
   const voiceEl = $("cfg-voice");
   if (voiceEl) voiceEl.checked = !!(c.control && c.control.voice);
+  const keepAwake = $("cfg-keep-awake");
+  if (keepAwake) keepAwake.checked = !!(c.control && c.control.keep_awake);
   const audDev = $("cfg-audio-device");
   if (audDev && c.capture && c.capture.audio_input) audDev.value = c.capture.audio_input;
   set("cfg-base-url", c.llm && c.llm.base_url || "");
@@ -1546,6 +1551,7 @@ function readConfigForm() {
       lock_on_end: !!( $("cfg-lock-on-end") && $("cfg-lock-on-end").checked ),
       record_sessions: !!( $("cfg-record-sessions") && $("cfg-record-sessions").checked ),
       voice: !!( $("cfg-voice") && $("cfg-voice").checked ),
+      keep_awake: !!( $("cfg-keep-awake") && $("cfg-keep-awake").checked ),
     },
     capture: {
       driver: "ffmpeg",
@@ -1725,7 +1731,7 @@ function onReady() {
       if (jv) jv.textContent = jpeg.value;
     });
   }
-  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-voice", "cfg-block-local", "cfg-blank-screen", "cfg-lock-on-end", "cfg-record-sessions", "cfg-unattended"].forEach(function (id) {
+  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-voice", "cfg-block-local", "cfg-blank-screen", "cfg-lock-on-end", "cfg-record-sessions", "cfg-unattended", "cfg-keep-awake"].forEach(function (id) {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", function () { syncFeatureUi(); });

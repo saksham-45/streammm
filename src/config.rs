@@ -246,6 +246,9 @@ pub struct ControlConfig {
     /// Watcher microphone plays on the host speakers. OFF by default.
     #[serde(default)]
     pub voice: bool,
+    /// Prevent idle/display sleep so unattended access and live sessions stay reachable.
+    #[serde(default)]
+    pub keep_awake: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -470,6 +473,7 @@ mod tests {
         assert!(!cfg.control.blank_screen);
         assert!(!cfg.control.record_sessions);
         assert!(!cfg.control.voice);
+        assert!(!cfg.control.keep_awake);
         assert_eq!(quality_preset(&cfg), "quality");
     }
 

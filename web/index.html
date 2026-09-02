@@ -157,6 +157,8 @@
   <label id="unattended-fields" class="hidden">Unattended password
     <input id="cfg-unattended-password" type="password" autocomplete="new-password" maxlength="128" placeholder="leave blank to keep">
   </label>
+  <label id="keep-awake-fields" class="hidden"><input id="cfg-keep-awake" type="checkbox"> Keep this Mac awake for remote access</label>
+  <p id="keep-awake-hint" class="cfg-hint hidden">Prevents idle sleep and display sleep so capture and the publisher stay up (lid close still sleeps). A live remote session always holds this. After wake, capture and the watch link restart immediately. Uncheck to let this Mac sleep when idle.</p>
   <label><input id="cfg-control-enabled" type="checkbox"> Allow remote computer use (kill switch off = blocked)</label>
   <p id="ctl-hint" class="cfg-hint hidden">Watchers can click (left/right/middle), drag, scroll, type, paste clipboard text or files, and drop files into the host inbox. Incoming files appear on the Desktop and on this Mac's pasteboard as Finder files (Cmd-V). Copy on this Mac (text, PNG, and Finder files) is pushed to the watcher automatically. Uncheck to kill remote input immediately after Save.</p>
   <p id="keys-hint" class="cfg-hint hidden">A Send-keys bar appears while remote control is on. Use it for shortcuts the browser would steal (⌘Tab, ⌘W, ⌘Q, Ctrl+Alt+Del, Lock). Same injector the AI uses.</p>

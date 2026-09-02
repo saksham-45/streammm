@@ -9,6 +9,7 @@ use crate::headers::stream_header_map;
 use crate::hub::Hub;
 use crate::input::{self, FakeInjector, Injector};
 use crate::otp::{hex_encode, Clock, OtpGate, RealClock, RedeemError, SESSION_TTL};
+use crate::power::{self, FakePower, PowerGuard};
 use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};
 use crate::publisher::Publisher;
 use crate::record::Recorder;
@@ -74,6 +75,8 @@ pub struct App {
     pub recorder: Recorder,
     pub voice: Arc<dyn VoiceSink>,
     pub fake_voice: FakeVoice,
+    pub power: Arc<dyn PowerGuard>,
+    pub fake_power: FakePower,
 }
 
 struct DisplaySwitchInjector {
@@ -147,6 +150,8 @@ impl App {
             model,
             voice::production_voice(),
             FakeVoice::new(),
+            power::production_power(),
+            FakePower::new(),
         )
     }
 
@@ -158,6 +163,7 @@ impl App {
         model: Arc<dyn ActionModel>,
     ) -> Arc<Self> {
         let fv = FakeVoice::new();
+        let fp = FakePower::new();
         Self::build(
             cfg,
             cfg_path,
@@ -167,6 +173,8 @@ impl App {
             model,
             Arc::new(fv.clone()),
             fv,
+            Arc::new(fp.clone()),
+            fp,
         )
     }
 
@@ -179,6 +187,8 @@ impl App {
         model: Arc<dyn ActionModel>,
         voice: Arc<dyn VoiceSink>,
         fake_voice: FakeVoice,
+        power: Arc<dyn PowerGuard>,
+        fake_power: FakePower,
     ) -> Arc<Self> {
         let hub = Hub::new();
         let capture = Capture::new(hub.clone());
@@ -222,8 +232,11 @@ impl App {
             recorder: Recorder::new(rec_dir),
             voice,
             fake_voice,
+            power,
+            fake_power,
         });
         app.otp.set_unattended(unattended);
+        app.sync_session_privacy();
         let rec = app.recorder.clone();
         let rec_hub = app.hub.clone();
         tokio::spawn(async move {
@@ -727,16 +740,27 @@ impl App {
     }
 
     fn sync_session_privacy(&self) {
-        let (block, blank) = {
+        let (block, blank, driving) = {
             let cfg = self.cfg.lock();
             let driving = self.controller.lock().is_some();
             (
                 cfg.control.block_local && driving,
                 cfg.control.blank_screen && driving,
+                driving,
             )
         };
         self.injector.set_block_local(block);
         self.injector.set_blank_screen(blank);
+        let keep = {
+            let cfg = self.cfg.lock();
+            power::should_keep_awake(
+                cfg.control.keep_awake,
+                cfg.control.enabled,
+                cfg.access.unattended,
+                driving,
+            )
+        };
+        self.power.set_keep_awake(keep);
     }
 
     fn bump_status(&self) {
@@ -819,6 +843,20 @@ impl App {
         self.release_controller();
     }
 
+    /// Lid-open / wake: recapture and republish immediately instead of waiting for a stall.
+    fn handle_system_wake(&self) {
+        let age = self.hub.last_media_age_s().unwrap_or(99.0);
+        if age < 3.0 {
+            return;
+        }
+        tracing::info!("system wake: restarting capture and publisher");
+        let cfg = self.cfg.lock().clone();
+        self.capture.restart(cfg.clone());
+        self.publisher.set_config(cfg);
+        self.publisher.start();
+        self.bump_status();
+    }
+
     pub fn start_background(self: &Arc<Self>) {
         let cfg = self.cfg.lock().clone();
         self.capture.start(cfg.clone());
@@ -862,6 +900,9 @@ impl App {
                 tokio::time::sleep(Duration::from_millis(400)).await;
                 if app.injector.take_local_unlock() {
                     app.release_controller();
+                }
+                if app.power.take_wake() {
+                    app.handle_system_wake();
                 }
                 let _ = app.poll_clipboard();
             }
@@ -957,6 +998,8 @@ impl App {
                 "record_sessions": cfg.control.record_sessions,
                 "recording": self.recorder.is_active(),
                 "voice": cfg.control.voice,
+                "keep_awake": cfg.control.keep_awake,
+                "keeping_awake": self.power.is_awake(),
                 "blocking": cfg.control.block_local && self.controller.lock().is_some(),
                 "blanking": cfg.control.blank_screen && self.controller.lock().is_some(),
                 "files": self.files.list().len(),
@@ -2900,6 +2943,52 @@ mod tests {
         assert!(app.injector.take_local_unlock());
         app.release_controller();
         assert!(!fake.blank_screen.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn keeps_host_awake_during_session_and_when_configured() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            FakeInjector::new(),
+            Arc::new(DoneModel),
+        );
+        assert!(!app.fake_power.is_awake());
+        assert_eq!(app.status_json()["control"]["keeping_awake"], false);
+        app.handle_inbound_json(
+            r#"{"type":"control","session":"abc","action":"click","x":0.1,"y":0.2}"#,
+        );
+        assert!(
+            app.fake_power.is_awake(),
+            "a live remote session must prevent idle sleep"
+        );
+        assert_eq!(app.status_json()["control"]["keeping_awake"], true);
+        app.end_remote_session();
+        assert!(
+            !app.fake_power.is_awake(),
+            "ending the session without keep_awake must release the assertion"
+        );
+
+        app.cfg.lock().control.keep_awake = true;
+        app.sync_session_privacy();
+        assert!(
+            app.fake_power.is_awake(),
+            "keep_awake + remote control must hold while idle"
+        );
+        assert_eq!(app.status_json()["control"]["keep_awake"], true);
+        app.fake_power.wake.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(app.power.take_wake());
+        assert!(!app.power.take_wake());
     }
 
     #[tokio::test]
