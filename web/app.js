@@ -319,6 +319,99 @@ function bindTalk(btn) {
   });
 }
 
+function watchRecordMime() {
+  if (typeof MediaRecorder === "undefined") return "";
+  const types = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+  for (let i = 0; i < types.length; i++) {
+    try {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(types[i])) return types[i];
+    } catch (e) { /* ignore */ }
+  }
+  return "video/webm";
+}
+
+function streamForRecord() {
+  const video = $("stream-video");
+  if (video && !video.classList.contains("hidden") && video.captureStream) {
+    try { return video.captureStream(); } catch (e) { /* ignore */ }
+  }
+  const canvas = $("stream-canvas");
+  if (canvas && !canvas.classList.contains("hidden") && canvas.captureStream) {
+    try { return canvas.captureStream(30); } catch (e) { /* ignore */ }
+  }
+  return null;
+}
+
+function saveWatchRecord(blob, mime) {
+  const ext = (mime || "").indexOf("mp4") >= 0 ? "mp4" : "webm";
+  const name = "session-" + new Date().toISOString().replace(/[:.]/g, "-") + "." + ext;
+  function fallback() {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 2000);
+  }
+  if (window.showSaveFilePicker) {
+    window.showSaveFilePicker({ suggestedName: name }).then(function (h) {
+      return h.createWritable();
+    }).then(function (w) {
+      return w.write(blob).then(function () { return w.close(); });
+    }).catch(function () { fallback(); });
+    return;
+  }
+  fallback();
+}
+
+let recState = null;
+function syncRecBtn() {
+  const btn = $("rec");
+  if (!btn) return;
+  btn.textContent = recState ? "Stop" : "Record";
+  btn.classList.toggle("on", !!recState);
+}
+
+function startWatchRecord() {
+  if (recState || typeof MediaRecorder === "undefined") return false;
+  const stream = streamForRecord();
+  if (!stream) return false;
+  const mime = watchRecordMime();
+  let mr;
+  try {
+    mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+  } catch (e) {
+    return false;
+  }
+  const chunks = [];
+  mr.ondataavailable = function (ev) { if (ev.data && ev.data.size) chunks.push(ev.data); };
+  mr.onstop = function () {
+    const type = (mr.mimeType || mime || "video/webm");
+    recState = null;
+    syncRecBtn();
+    if (!chunks.length) return;
+    saveWatchRecord(new Blob(chunks, { type: type }), type);
+  };
+  recState = mr;
+  try { mr.start(1000); } catch (e) { recState = null; return false; }
+  syncRecBtn();
+  return true;
+}
+
+function stopWatchRecord() {
+  if (!recState) return;
+  const mr = recState;
+  try { mr.stop(); } catch (e) { recState = null; syncRecBtn(); }
+}
+
+function bindRec(btn) {
+  if (!btn || btn.dataset.recBound) return;
+  btn.dataset.recBound = "1";
+  btn.addEventListener("click", function () {
+    if (recState) stopWatchRecord();
+    else startWatchRecord();
+  });
+}
+
 function comboPayload(key, modifiers) {
   return {
     type: "control",
@@ -1666,6 +1759,7 @@ function onReady() {
   bindKeysBar($("keys-bar"));
   bindStreamQuality($("stream-quality"));
   bindTalk($("talk"));
+  bindRec($("rec"));
   bindChatForm($("chat-form"));
   function bindFileDrop(el) {
     if (!el || el.dataset.fileBound) return;
@@ -1833,6 +1927,9 @@ if (typeof window !== "undefined") {
     sendQuality: sendQuality,
     voicePayload: voicePayload,
     sendVoice: sendVoice,
+    watchRecordMime: watchRecordMime,
+    startWatchRecord: startWatchRecord,
+    stopWatchRecord: stopWatchRecord,
     layoutDisplayMap: layoutDisplayMap,
     paintMapThumbs: paintMapThumbs,
     currentToken: currentToken,

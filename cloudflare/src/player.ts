@@ -24,6 +24,7 @@ export const PLAYER_HTML = `<!doctype html>
   #unmute { display: none; }
   #talk { display: none; }
   #talk.on { border-color: var(--accent); color: var(--accent); }
+  #rec.on { border-color: #f88; color: #f88; }
   main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr); gap: 12px; padding: 12px; }
   @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
   video, canvas { width: 100%; max-height: 80vh; background: #000; display: block; border-radius: 8px; }
@@ -92,6 +93,7 @@ export const PLAYER_HTML = `<!doctype html>
   </select>
   <button id="unmute" type="button">Unmute</button>
   <button id="talk" type="button">Talk</button>
+  <button id="rec" type="button" title="Record this view to a local file">Record</button>
   <div id="displays"></div>
   <div id="display-map" style="display:none"></div>
 </header>
@@ -309,6 +311,87 @@ export const PLAYER_HTML = `<!doctype html>
     btn.addEventListener("click", function () {
       if (talkState) stopTalk();
       else startTalk();
+    });
+  })();
+  function watchRecordMime() {
+    if (typeof MediaRecorder === "undefined") return "";
+    var types = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+    for (var i = 0; i < types.length; i++) {
+      try {
+        if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(types[i])) return types[i];
+      } catch (e) {}
+    }
+    return "video/webm";
+  }
+  function streamForRecord() {
+    if (video && video.style.display !== "none" && video.captureStream) {
+      try { return video.captureStream(); } catch (e) {}
+    }
+    if (canvas && canvas.style.display !== "none" && canvas.captureStream) {
+      try { return canvas.captureStream(30); } catch (e) {}
+    }
+    return null;
+  }
+  function saveWatchRecord(blob, mime) {
+    var ext = (mime || "").indexOf("mp4") >= 0 ? "mp4" : "webm";
+    var name = "session-" + new Date().toISOString().replace(/[:.]/g, "-") + "." + ext;
+    function fallback() {
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 2000);
+    }
+    if (window.showSaveFilePicker) {
+      window.showSaveFilePicker({ suggestedName: name }).then(function (h) {
+        return h.createWritable();
+      }).then(function (w) {
+        return w.write(blob).then(function () { return w.close(); });
+      }).catch(function () { fallback(); });
+      return;
+    }
+    fallback();
+  }
+  var recState = null;
+  function syncRecBtn() {
+    var btn = document.getElementById("rec");
+    if (!btn) return;
+    btn.textContent = recState ? "Stop" : "Record";
+    btn.classList.toggle("on", !!recState);
+  }
+  function startWatchRecord() {
+    if (recState || typeof MediaRecorder === "undefined") return false;
+    var stream = streamForRecord();
+    if (!stream) return false;
+    var mime = watchRecordMime();
+    var mr;
+    try { mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+    catch (e) { return false; }
+    var chunks = [];
+    mr.ondataavailable = function (ev) { if (ev.data && ev.data.size) chunks.push(ev.data); };
+    mr.onstop = function () {
+      var type = mr.mimeType || mime || "video/webm";
+      recState = null;
+      syncRecBtn();
+      if (!chunks.length) return;
+      saveWatchRecord(new Blob(chunks, { type: type }), type);
+    };
+    recState = mr;
+    try { mr.start(1000); } catch (e) { recState = null; return false; }
+    syncRecBtn();
+    return true;
+  }
+  function stopWatchRecord() {
+    if (!recState) return;
+    try { recState.stop(); } catch (e) { recState = null; syncRecBtn(); }
+  }
+  (function bindRec() {
+    var btn = document.getElementById("rec");
+    if (!btn || btn.dataset.recBound) return;
+    btn.dataset.recBound = "1";
+    btn.addEventListener("click", function () {
+      if (recState) stopWatchRecord();
+      else startWatchRecord();
     });
   })();
   function chatPayload(text) {

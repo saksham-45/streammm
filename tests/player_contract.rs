@@ -168,6 +168,14 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "host must show a stream quality vs speed picker"
     );
     assert!(
+        html.contains("id=\"rec\"")
+            && js.contains("function startWatchRecord")
+            && js.contains("function watchRecordMime")
+            && js.contains("MediaRecorder")
+            && js.contains("captureStream"),
+        "host live view must record locally via MediaRecorder"
+    );
+    assert!(
         html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
         "origin analysis/AI/Ask chrome must not sit on the live stream"
     );
@@ -413,6 +421,14 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("ctl.voice")
             && s.contains("getUserMedia"),
         "watch page must reveal Talk when the host allows watcher voice"
+    );
+    assert!(
+        s.contains("id=\"rec\"")
+            && s.contains("function startWatchRecord")
+            && s.contains("function watchRecordMime")
+            && s.contains("MediaRecorder")
+            && s.contains("captureStream"),
+        "watch page must record the live view locally via MediaRecorder"
     );
 }
 
@@ -726,6 +742,8 @@ if (nodes["record-hint"].classList.contains("hidden")) throw new Error("record h
 if (nodes["recordings-section"].classList.contains("hidden")) throw new Error("recordings list still hidden after enable");
 const qp = window.streamaidUi.qualityPayload("speed");
 if (qp.type !== "quality" || qp.preset !== "speed") throw new Error("qualityPayload");
+if (typeof window.streamaidUi.watchRecordMime !== "function") throw new Error("watchRecordMime missing");
+if (typeof window.streamaidUi.watchRecordMime() !== "string") throw new Error("watchRecordMime");
 const combo = window.streamaidUi.comboPayload("Tab", ["Meta"]);
 if (combo.action !== "key" || combo.key !== "Tab" || combo.modifiers[0] !== "Meta") throw new Error("comboPayload Cmd+Tab");
 const cad = window.streamaidUi.comboPayload("Delete", ["Control", "Alt"]);
