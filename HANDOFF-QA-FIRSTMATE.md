@@ -1,185 +1,129 @@
-# Firstmate × Grok — streammm live QA handoff
+# Prompt for Firstmate / Grok — what streammm is, and how to test it
 
-Paste this whole file to a **Firstmate primary** (Grok harness) as the captain task. It is a **scout**, not a ship: play the product as a host user and as a remote client, write a report, do not KeepAlive-install the origin, do not merge, do not “improve until TeamViewer.”
+Copy everything inside the `PROMPT` fence into a **Firstmate primary** as the captain message. Spawn a **Grok scout** (not a ship). The scout plays the product as two people: the Mac owner and the remote client.
 
-```
-Captain task: Scout-mode live QA of streammm. Play HOST USER and REMOTE CLIENT.
-Repo: /Users/saksham/streammm (github.com/saksham-45/streammm, main).
-Do not treat this as a feature-build. Report at data/<task-id>/report.md.
-```
+````text
+PROMPT
+You are a Firstmate scout (Grok harness). This is live product QA, not a feature build.
+Do not open a PR. Do not KeepAlive-install a LaunchAgent. Do not “improve until TeamViewer.”
+Write `data/<task-id>/report.md` and stop.
 
----
+Repo: /Users/saksham/streammm
+GitHub: https://github.com/saksham-45/streammm
+Branch: main
+Read this file in the repo after clone/worktree: HANDOFF-QA-FIRSTMATE.md
+Also read README.md — it is the product contract.
 
-## Who you are
+════════════════════════════════════
+WHAT THIS PRODUCT IS
+════════════════════════════════════
 
-You are a Firstmate **scout crewmate** (Grok). Firstmate owns spawn/status. You own the browsers and the origin process **for this task only**.
+streammm (binary name streamaid) is a **TeamViewer-class remote desktop for one Mac**, plus **AI that can use that Mac**.
 
-Two hats in **one** scout (two Playwright browser contexts, not two machines):
+There are exactly two humans in the story:
 
-| Hat | Who | URL | Job |
-|-----|-----|-----|-----|
-| **HOST** | person sitting at the Mac | `http://127.0.0.1:8080` | origin UI: stream, Settings, PIN, kill switches |
-| **CLIENT** | remote watcher | same origin **or** Worker watch URL if publish is set | PIN/unattended unlock, watch, control, files, AI, chat, Talk |
+1. HOST — sits at the Mac. Runs the origin. Shares a 6-digit PIN (or an unattended password). Can kill the session.
+2. CLIENT — anyone with a browser. Types the PIN. Sees the Mac’s screen. If the host allowed it, they drive the Mac (mouse, keyboard, clipboard, files) and/or tell an AI to drive it.
 
-Do not spawn a second Firstmate ship to “fix” findings unless the captain later asks. File bugs in the report.
+It is NOT a Zoom clone, NOT a VOD player, NOT “just a stream.” The live picture exists so the client can **use the computer**. If the client cannot type, click, paste, and move files the way they could in TeamViewer, the product is failing even if video looks fine.
 
----
+Architecture in one paragraph:
+The HOST Mac runs a Rust origin. ffmpeg captures a display and encodes H.264 (WebSocket fMP4, ~0.5s live edge). Optional Cloudflare Worker fans one upload to many watchers. The CLIENT browser talks to `/stream.ws` (or Worker `/watch`). Control JSON goes client → (Worker) → origin injector (real HID on macOS). PIN redeem mints a session cookie. Remote control and AI are **off until the host turns them on**.
 
-## Hard rules (violations fail the scout)
+════════════════════════════════════
+WHAT IT IS SUPPOSED TO DO
+════════════════════════════════════
 
-1. **Do not load or enable `com.streamaid.origin` LaunchAgent.** Do not `launchctl bootstrap/load/kickstart` it. Last time KeepAlive respawned capture and macOS Screen Recording dialogs looped while the captain was not even using the app. The agent is **disabled** on purpose (`RunAtLoad`/`KeepAlive` false).
-2. **Start origin as a one-shot process** you will kill at the end:
-   ```bash
-   cd /Users/saksham/streammm
-   export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-   export RUST_LOG=info
-   ./target/release/streamaid -c ./config.json
-   ```
-   If the binary is stale vs `git rev-parse HEAD`, `rustup run stable cargo build --release --bin streamaid` first. Bind is `127.0.0.1:8080`.
-3. **If 8080 is already taken**, do not steal it. Report blocked and stop. Do not kill a process you did not start unless it is clearly your previous scout leftover.
-4. **Do not open System Settings privacy panes in a loop.** `POST /api/permissions/open` is click-once, never on a timer. If Screen Recording is denied, note it and continue UI-only tests. Accessibility is only required when remote control is on.
-5. **Remote control and AI start OFF.** Enable them in Settings like a user. Enabling a toggle must **reveal** its controls (files, chat, send-keys, unattended password, etc.). If it does not, that is a P0.
-6. **Do not push, commit, or leave KeepAlive on.** Scout = report. Stop the origin when done (`kill` the pid you started). Confirm `127.0.0.1:8080` is free.
-7. Load **webapp-testing** (Playwright). Two contexts: Host (chromium) and Client (chromium, separate storage so cookies/PIN session do not leak). Headed is better if the environment allows; otherwise headless + screenshots.
-8. Firstmate: dispatch via `fm-spawn.sh` / brief, not harness built-in subagents. This repo is a **project clone**, not firstmate itself.
+HOST (http://127.0.0.1:8080)
+- See their own screen live in the page.
+- See a 6-digit PIN in the header to read to the client (~5 minutes; regenerable).
+- Open Settings (gear). Every feature is a toggle that is OFF by default. **Turning a toggle ON must reveal that feature’s controls. Turning it OFF must hide them.** That is a hard product rule. Dead toggles are bugs.
+- Allow remote computer use → client may drive the Mac. Host sees a REMOTE SESSION banner with End (kicks the client). Optional: block local input (⌘⇧Esc unlocks), blank the physical screens, keep Mac awake, lock Mac when session ends, record the session to recordings/, chat with the client, send-keys bar, file browser.
+- Allow AI computer use → client (or host) can submit a task; origin loops screenshot → model → same injector (click/type/key/paste/files). Cancel AI stops it.
+- Capture audio → mic/loopback into the stream; Unmute on players. Allow watcher to talk → client Talk button plays on host speakers.
+- Allow unattended access → password field; after PIN expires the client uses that password on the same unlock box.
+- Quality / Balanced / Speed retunes the live encode. Display map switches which screen is captured. Fullscreen and local Record exist on the live view.
+- Kill switch: uncheck Allow remote computer use. Host always wins.
 
----
+CLIENT (same origin in a second browser profile, or the Worker watch page if publish_url is set)
+- No STREAM_TOKEN in the URL. They type the PIN (or unattended password). Wrong PIN = visible error, not a silent no-op. Right PIN = session cookie, video plays.
+- Watch the live screen. Fullscreen. Quality picker. Local Record.
+- If host enabled control: click / right-click / drag / scroll / type on the video, paste text/images/files, use Send-keys for shortcuts the browser would steal (⌘Tab, ⌘W, Alt+Tab, Ctrl+Alt+Del, …). Chat must go to the chat panel, NOT as keystrokes into whatever app is focused on the host.
+- Files: browse Inbox / Home / Desktop / Documents / Downloads, two panes, drop, zip Get, multi-select, copy/cut/paste, rename, mkdir, recursive delete — like a small remote Finder, jailed to those roots.
+- If host enabled AI: submit a task; AI should click/type and also list/mkdir/rename/copy/move/delete via the same file handlers.
+- If the host origin drops, the Worker watch page should say host offline (not “live”) and still show Copy MAC. A sleeping Mac cannot send its own wake packet.
 
-## Product snapshot (do not rediscover from scratch)
+APIs fail closed: bad JSON / missing PIN / missing token → 400 JSON `{error}`; wrong PIN → 401; rate limit → 429; valid redeem → 200 + `Set-Cookie: streamaid_session=`. No 5xx on those paths.
 
-- **Checkpoint tag:** `checkpoint-2026-09-02-streammm`
-- **Likely HEAD:** `69bab38` or later on `main` — *Let AI drive Files panel list/mkdir/rename/copy/move/delete*
-- Origin: Rust `streamaid`. UI: `web/index.html` + `web/app.js` (compiled into the binary via `include_str!` — **rebuild after UI edits**).
-- Watch path: WebSocket `/stream.ws` (not HTTP `/stream.mp4` through a tunnel).
-- PIN: 6-digit in host header (`#pin-pill`), ~5 min. Redeem `POST /api/otp/redeem` `{ "pin": "…" }` → `streamaid_session`.
-- Host token login: `POST /api/login` `{ "token": "…" }` only if `config.token` is set. Current `config.json` token is **empty** → no login overlay.
-- Worker: `cloudflare/` (`streamaid-edge`). `config.json` currently has **empty** `publish_url` / `watch_url` — client tests on **localhost** unless you find a live watch URL in Settings. Historical worker: `streamaid-edge.sakshamiscool3434.workers.dev` — only use if Settings still has it or captain confirms.
-- Kill switch: uncheck **Allow remote computer use**.
+════════════════════════════════════
+WHAT YOU WILL DO (TWO HATS)
+════════════════════════════════════
 
-Documented non-goals (do not file as product bugs):
+Play both people yourself with two Playwright (or real browser) contexts. Separate cookies. Headed if you can.
 
-- Sleeping Mac cannot send its own Wake-on-LAN packet (browser/Worker cannot UDP-broadcast; lid-close often ignores WoL).
-- System audio needs BlackHole/Loopback; mic picker is the in-app path.
-- Inactive-monitor thumbs are ~15 fps stills, extra avfoundation HUD possible.
+HAT A — HOST USER
+You are Saksham at the Mac. You want to share this computer safely.
+1. Start origin as a one-shot (rules below). Open http://127.0.0.1:8080.
+2. Confirm you see live video (or an honest capture error). Read the PIN.
+3. Open Settings. Enable **Allow remote computer use**. Confirm Send-keys, Chat, and Files actually appear. Disable and confirm they hide.
+4. Enable **Allow AI computer use**. Confirm the AI box appears.
+5. Leave those ON for the client hat. Do not enable Blank screen, Block local input, or Lock on end on the real Mac.
 
----
+HAT B — REMOTE CLIENT
+You are a friend on another laptop. You only have a browser and a PIN someone read to you.
+1. New browser context. Same URL (localhost is fine for this scout; Worker only if Settings has a watch URL).
+2. Unlock with the PIN from the host header. Then try a wrong PIN on a fresh context and demand a visible error.
+3. Confirm video. Click the remote desktop. Type. Open Files, create `qa-scout-*` under Inbox only, upload a tiny text file, Get it, Delete that qa folder. Do not touch real Desktop documents.
+4. If AI is on, submit a trivial task (“move the mouse slightly” or the model’s done). Host Cancel AI if it runs away.
+5. Chat: send “hello from client” — it must show in host chat, not get typed into TextEdit on the Mac.
 
-## Setup checklist
+Then take HOST hat again: End session if the banner is up. Uncheck remote control (kill switch). Confirm client can no longer inject.
 
-1. `cd /Users/saksham/streammm && git status && git log -1 --oneline`
-2. Build release if needed; start origin in background; `curl -sS http://127.0.0.1:8080/api/status` → 200 JSON with `capture`, `stream`, `otp`, `control`, `permissions`.
-3. Playwright: context A = HOST, context B = CLIENT. Both `http://127.0.0.1:8080` unless a watch URL exists.
-4. Screenshots into the scout worktree `qa/` (or `/tmp/streammm-qa/` if worktree is awkward). Name them `host-…png` / `client-…png`.
+════════════════════════════════════
+HARD RULES
+════════════════════════════════════
 
----
+- Do NOT launchctl load/bootstrap/kickstart com.streamaid.origin. KeepAlive caused a Screen Recording permission storm last time. The agent is disabled.
+- Start origin yourself:
+    cd /Users/saksham/streammm
+    export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+    rustup run stable cargo build --release --bin streamaid   # if binary older than HEAD
+    ./target/release/streamaid -c ./config.json
+  Bind 127.0.0.1:8080. If 8080 is already taken by something you did not start, blocked: and stop.
+- Kill the pid you started when the scout ends. 8080 must be free. Do not leave ffmpeg capturing.
+- Do not loop System Settings / POST /api/permissions/open. Accessibility nag is only valid when remote control is on.
+- config.json token is empty → no host-token login wall. PIN is the client door.
+- Scout only: no git push, no LaunchAgent, no “fix the product” unless the captain follows up.
 
-## Script — HOST USER
+════════════════════════════════════
+REPORT
+════════════════════════════════════
 
-Do these as a human at the capture machine. After each step: screenshot + one line pass/fail.
+data/<task-id>/report.md
 
-1. **Land.** Page loads, live video or a clear capture error, status pill, PIN pill shows 6 digits. No permission banner if Screen Recording already works (status `permissions.screen` true **or** capture width>0). Accessibility banner must **not** show while remote control is off.
-2. **Settings gear.** Drawer opens; Close / backdrop / Escape dismiss it.
-3. **Toggles reveal controls (P0).** One at a time, enable then confirm the matching UI appears; disable and confirm it hides:
-   - Allow remote computer use → Send-keys, Chat, Files, session-related settings
-   - Allow AI computer use → Have AI use this computer / Cancel AI
-   - LLM analysis → LLM fields
-   - Capture audio → device picker + Unmute (hide picker in MJPEG)
-   - Allow unattended access → password field
-   - Encoder MJPEG → JPEG quality shown; bitrate/GOP hidden
-4. **PIN.** Note the 6-digit PIN from `#pin-pill` for the client. Optional: regenerate via Settings/`POST /api/otp` (host token empty → mint should work).
-5. **With remote control ON:** Files panel (Inbox/Home/Desktop/Documents/Downloads), Split second pane, New folder, Rename, select-all / Shift-click, Copy/Cut/Paste here. Do not delete the captain’s real Desktop files — use Inbox or a folder you create named `qa-scout-*` and delete that tree at the end.
-6. **Session banner.** If you can get a client driving, host shows REMOTE SESSION + End. End kicks the client.
-7. **Do not** enable Blank screen, Block local input, or Lock on end on the captain’s real Mac unless they are at the keyboard and asked. Note “skipped — destructive” instead.
+# streammm QA
+HEAD: <sha>
+What I thought the product was: <2 sentences>
+Origin pid / killed: 
+permissions from /api/status:
+capture width x height / error:
 
----
+## Host user
+- live view:
+- PIN visible:
+- settings reveal (control / AI / each toggle you touched):
+- kill switch:
 
-## Script — REMOTE CLIENT
+## Remote client
+- wrong PIN error:
+- right PIN → video:
+- mouse/keyboard:
+- chat did not leak into host OS:
+- files Inbox qa-scout-* :
 
-Separate browser context (no host cookies).
+## P0 bugs (product does not do what it is supposed to)
+## P1
+## skipped (destructive: blank/lock/block-local)
 
-1. **Unlock.** Open the same origin. If login overlay: enter the host PIN (not a guess). Wrong PIN → visible error, not a silent no-op. Right PIN → overlay gone, video plays. Unattended password only if host set one (likely not).
-2. **Watch.** Live video moves (or MJPEG). Full (F11) enters fullscreen; Escape exits without injecting keys into the host OS.
-3. **Quality.** Quality / Balanced / Speed control exists; changing it does not 5xx.
-4. **Control (only if host enabled remote control).** Click/drag on the video. Send-keys bar visible. Type in Chat — must **not** appear as keystrokes in a host text field; host Chat should show the message (or report if chat did not fan).
-5. **Files.** Same Files UI: list a root, do **not** delete user documents. Create `qa-scout-*` under Inbox, drop/upload a tiny text file, Get it back, Delete it.
-6. **AI (only if host enabled AI).** Submit a tiny task like “do nothing / done”. Expect JSON ok or a clear disabled/403 — not a blank hang. Cancel AI on host if a loop starts.
-7. **Talk / Record.** If visible, confirm the control exists; do not blast speaker audio. Local Record button should start/stop without crashing the player.
-8. **Host offline (optional).** Do not kill origin unless you started it. If you briefly stop origin, client pill should not stay “live”; WoL/Copy MAC may appear. Restart origin if you stopped it.
-
----
-
-## API smoke (no UI)
-
-Drive the live origin. Do not hardcode PINs.
-
-```bash
-# status
-curl -sS http://127.0.0.1:8080/api/status | jq '.capture,.control,.permissions,.otp'
-
-# PIN mint + redeem (empty host token)
-PIN=$(curl -sS -X POST http://127.0.0.1:8080/api/otp | jq -r .pin)
-curl -sS -D - -X POST http://127.0.0.1:8080/api/otp/redeem \
-  -H 'content-type: application/json' -d "{\"pin\":\"$PIN\"}" | head
-
-# fail-closed
-curl -sS -D - -X POST http://127.0.0.1:8080/api/otp/redeem \
-  -H 'content-type: application/json' -d '{'   # expect 400 JSON error
-curl -sS -D - -X POST http://127.0.0.1:8080/api/login \
-  -H 'content-type: application/json' -d '{"token":""}'  # expect 400
-```
-
-Computer-use without AI enabled → 403 JSON `error`. Missing session with token configured → 401. Current config token is empty.
-
----
-
-## Pass / fail bar
-
-**Pass** if: origin serves UI + status; PIN redeem works; settings reveals; client can unlock and see video; files happy-path in Inbox without wrecking Desktop; no permission dialog storm; origin is dead and 8080 free when you leave.
-
-**Fail (P0)** if: LaunchAgent left enabled; Screen Recording dialogs looping; Accessibility banner with remote control off; enabling a setting does not show controls; PIN unlock silent-fail; 5xx on redeem/login/config; you left ffmpeg/streamaid running.
-
----
-
-## Report shape (`data/<task-id>/report.md`)
-
-```
-# streammm live QA
-HEAD: <sha> <subject>
-origin: started-by-scout yes/no  pid  killed-at-end yes/no
-permissions.screen/accessibility/input: <from /api/status>
-capture: running/size/error
-
-## Host
-- land:
-- settings reveal:
-- PIN:
-- files (Inbox only):
-- skipped destructive:
-
-## Client
-- unlock:
-- video:
-- control/chat:
-- files:
-- AI:
-
-## API
-- redeem 200:
-- bad JSON 400:
-
-## P0/P1 list
-## Screenshots
-```
-
-Status to Firstmate: `done:` with the report path, or `blocked:` if 8080 busy / no ffmpeg / TCC actually denied and you cannot capture.
-
----
-
-## Firstmate spawn sketch (primary does this)
-
-```text
-Scout, not ship. Repo streammm.
-Brief: HANDOFF-QA-FIRSTMATE.md in the repo root (this file).
-Harness: grok. Mode: scout.
-Kill origin on teardown if this task started it.
-```
+Status: done: with that path, or blocked: if you could not start origin.
+````
