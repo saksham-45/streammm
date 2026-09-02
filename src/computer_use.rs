@@ -91,7 +91,8 @@ impl LlmActionModel {
         format!(
             "You operate a computer from a screenshot like a human at the keyboard and mouse. Task: {task}\nStep: {step}\n\
              Coordinates are normalized 0–1 relative to the image.\n\
-             Use right-click, drag (down/move/up), modifier keys, and paste when a person would.\n\
+             Use right-click, drag (down/move/up), modifier keys, paste, and switch displays when a person would.\n\
+             If the task lists [displays]=JSON, pick another screen with action display and that id, then wait.\n\
              Respond ONLY with JSON: {{\"actions\":[{{\"action\":\"click\",\"x\":0.5,\"y\":0.5}},\
 {{\"action\":\"click\",\"x\":0.5,\"y\":0.5,\"button\":\"right\"}},\
 {{\"action\":\"dblclick\",\"x\":0.5,\"y\":0.5}},\
@@ -100,6 +101,7 @@ impl LlmActionModel {
 {{\"action\":\"type\",\"text\":\"hi\"}},{{\"action\":\"key\",\"key\":\"Enter\"}},\
 {{\"action\":\"key\",\"key\":\"c\",\"modifiers\":[\"Meta\"]}},\
 {{\"action\":\"paste\",\"text\":\"clipboard text\"}},\
+{{\"action\":\"display\",\"id\":\"2:\"}},\
 {{\"action\":\"scroll\",\"x\":0.5,\"y\":0.5,\"dy\":-1}},{{\"action\":\"wait\",\"ms\":200}},\
 {{\"action\":\"done\"}}]}}."
         )
@@ -306,6 +308,11 @@ where
                         tokio::time::sleep(Duration::from_millis(20)).await;
                     }
                 }
+                Action::Display { .. } => {
+                    injector.apply(&a);
+                    applied.push(a);
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                }
                 _ => {
                     injector.apply(&a);
                     applied.push(a);
@@ -394,6 +401,8 @@ mod tests {
         assert!(p.contains("paste"));
         assert!(p.contains("modifiers"));
         assert!(p.contains("down"));
+        assert!(p.contains("display"));
+        assert!(p.contains("[displays]"));
     }
 
     #[test]
@@ -434,6 +443,11 @@ mod tests {
                 if key == "c" && modifiers.iter().any(|m| m == "Meta")
         ));
         assert_eq!(acts[2], Action::Paste { text: "hi".into() });
+        let disp = serde_json::json!({"action":"display","id":"3:"});
+        assert_eq!(
+            actions_from_model_json(&disp),
+            vec![Action::Display { id: "3:".into() }]
+        );
     }
 
     #[tokio::test]

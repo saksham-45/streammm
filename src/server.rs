@@ -61,6 +61,44 @@ pub struct App {
     pub last_clip: Mutex<String>,
 }
 
+struct DisplaySwitchInjector {
+    inner: Arc<dyn Injector>,
+    app: Arc<App>,
+}
+
+impl Injector for DisplaySwitchInjector {
+    fn apply(&self, action: &input::Action) {
+        if let input::Action::Display { id } = action {
+            self.app.select_display(id);
+        }
+        self.inner.apply(action);
+    }
+    fn set_screen_size(&self, w: u32, h: u32) {
+        self.inner.set_screen_size(w, h);
+    }
+    fn screen_size(&self) -> (u32, u32) {
+        self.inner.screen_size()
+    }
+    fn set_display_rect(&self, x: i32, y: i32, w: u32, h: u32) {
+        self.inner.set_display_rect(x, y, w, h);
+    }
+    fn display_rect(&self) -> (i32, i32, u32, u32) {
+        self.inner.display_rect()
+    }
+    fn clipboard_set(&self, text: &str) {
+        self.inner.clipboard_set(text);
+    }
+    fn clipboard_get(&self) -> Option<String> {
+        self.inner.clipboard_get()
+    }
+    fn clipboard_set_png(&self, png: &[u8]) {
+        self.inner.clipboard_set_png(png);
+    }
+    fn clipboard_get_png(&self) -> Option<Vec<u8>> {
+        self.inner.clipboard_get_png()
+    }
+}
+
 impl App {
     pub fn new(cfg: Config, cfg_path: PathBuf) -> Arc<Self> {
         let model = computer_use::production_model(&cfg.llm);
@@ -345,7 +383,7 @@ impl App {
         }
     }
 
-    pub async fn run_computer_use(&self, task: &str) -> Vec<input::Action> {
+    pub async fn run_computer_use(self: &Arc<Self>, task: &str) -> Vec<input::Action> {
         if !self.cfg.lock().control.ai_enabled {
             return Vec::new();
         }
@@ -353,10 +391,16 @@ impl App {
         let model = self.model.lock().clone();
         let hub = self.hub.clone();
         let injector = self.injector.clone();
+        let catalog = serde_json::to_string(&*self.displays.lock()).unwrap_or_else(|_| "[]".into());
+        let task = format!("{task}\n[displays]={catalog}");
+        let hook = DisplaySwitchInjector {
+            inner: injector,
+            app: self.clone(),
+        };
         computer_use::run_task_async(
-            task,
+            &task,
             model.as_ref(),
-            injector.as_ref(),
+            &hook,
             || computer_use::grab_jpeg(&hub),
             computer_use::MAX_STEPS,
             &self.ai_cancel,
@@ -1965,5 +2009,46 @@ mod tests {
         assert!(msg.contains("image/png"), "{msg}");
         assert!(msg.contains(&crate::files::encode_b64(TINY_PNG)), "{msg}");
         assert!(!app.poll_clipboard(), "same png must not resend");
+    }
+
+    #[tokio::test]
+    async fn ai_display_action_switches_capture() {
+        use crate::computer_use::ActionModel;
+        use crate::input::{Action, FakeInjector};
+        use crate::otp::FakeClock;
+
+        struct SwitchThenDone;
+        impl ActionModel for SwitchThenDone {
+            fn plan(&self, _task: &str, step: u32, _jpeg: &[u8]) -> Vec<Action> {
+                match step {
+                    0 => vec![
+                        Action::Display { id: "9:".into() },
+                        Action::Done,
+                    ],
+                    _ => vec![Action::Done],
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.ai_enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(SwitchThenDone),
+        );
+        let applied = app.run_computer_use("look at the other monitor").await;
+        assert!(
+            applied.iter().any(|a| matches!(a, Action::Display { id } if id == "9:")),
+            "{applied:?}"
+        );
+        assert_eq!(app.cfg.lock().capture.input, "9:");
+        assert!(fake.recorded().iter().any(|e| matches!(e, crate::input::Injected::Display { id } if id == "9:")));
     }
 }

@@ -82,6 +82,9 @@ pub enum Action {
     ClipboardPng {
         png: Vec<u8>,
     },
+    Display {
+        id: String,
+    },
     Paste {
         text: String,
     },
@@ -312,6 +315,14 @@ pub fn parse_control_json(v: &serde_json::Value) -> Option<Action> {
                 modifiers: parse_modifiers(v),
             }
         }
+        "display" => Action::Display {
+            id: v
+                .get("id")
+                .or_else(|| v.get("input"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .into(),
+        },
         "clipboard" => {
             let mime = v.get("mime").and_then(|m| m.as_str()).unwrap_or("");
             if mime.contains("png") || v.get("png").is_some() {
@@ -595,6 +606,9 @@ pub enum Injected {
     ClipboardPng {
         png: Vec<u8>,
     },
+    Display {
+        id: String,
+    },
     Paste {
         text: String,
     },
@@ -704,6 +718,7 @@ impl Injector for FakeInjector {
                 self.clipboard_set_png(png);
                 Injected::ClipboardPng { png: png.clone() }
             }
+            Action::Display { id } => Injected::Display { id: id.clone() },
             Action::Paste { text } => {
                 if !text.is_empty() {
                     self.clipboard_set(text);
@@ -1330,6 +1345,7 @@ end try"#
                         let _ = clipboard_set_png_os(png);
                         self.apply_key("v", None, &["Meta".into()]);
                     }
+                    Action::Display { .. } => {}
                     Action::Paste { text } => {
                         if !text.is_empty() {
                             let _ = clipboard_set_os(text);
@@ -1462,6 +1478,11 @@ mod tests {
             Some(Action::Paste {
                 text: "hello from clip".into()
             })
+        );
+        let disp = serde_json::json!({"action":"display","id":"4:"});
+        assert_eq!(
+            parse_control_json(&disp),
+            Some(Action::Display { id: "4:".into() })
         );
         let clip = serde_json::json!({"action":"clipboard","text":"abc"});
         assert_eq!(
