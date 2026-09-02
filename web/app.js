@@ -224,11 +224,19 @@ function renderStatus(s) {
   if (featureFlags().record) refreshRecordings();
 }
 
+let lastWolMacs = [];
 function fillWolMacs(macs) {
+  lastWolMacs = (macs || []).filter(Boolean);
   const el = $("wol-host-mac");
-  if (!el) return;
-  const list = (macs || []).filter(Boolean);
-  el.textContent = list.length ? ("This Mac: " + list.join(", ")) : "This Mac: —";
+  if (el) el.textContent = lastWolMacs.length ? ("This Mac: " + lastWolMacs.join(", ")) : "This Mac: —";
+  setHidden($("wol-copy"), !lastWolMacs.length);
+}
+
+function copyWolMac() {
+  const t = lastWolMacs.join(", ");
+  if (!t) return "";
+  applyClipboardText(t);
+  return t;
 }
 
 function wolPayload(mac) {
@@ -2012,6 +2020,10 @@ function onReady() {
   if (wolSend) {
     wolSend.addEventListener("click", function () { sendWol(); });
   }
+  const wolCopy = $("wol-copy");
+  if (wolCopy) {
+    wolCopy.addEventListener("click", function () { copyWolMac(); });
+  }
   const cancelAi = $("cu-cancel");
   if (cancelAi) {
     cancelAi.addEventListener("click", async function () {
@@ -2117,6 +2129,7 @@ if (typeof window !== "undefined") {
     openPrivacyPane: openPrivacyPane,
     wolPayload: wolPayload,
     fillWolMacs: fillWolMacs,
+    copyWolMac: copyWolMac,
   };
 }
 

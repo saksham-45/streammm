@@ -172,9 +172,11 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         html.contains("id=\"wol-fields\"")
             && html.contains("id=\"cfg-wol-mac\"")
             && html.contains("id=\"wol-send\"")
+            && html.contains("id=\"wol-copy\"")
             && js.contains("function wolPayload")
+            && js.contains("function copyWolMac")
             && js.contains("/api/wol"),
-        "unattended/remote control must reveal Wake-on-LAN MAC and Send wake packet"
+        "unattended/remote control must reveal Wake-on-LAN MAC, Copy MAC, and Send wake packet"
     );
     assert!(
         html.contains("id=\"cfg-lock-on-end\"")
@@ -736,6 +738,7 @@ const nodes = {{
   "wol-host-mac": el(false),
   "cfg-wol-mac": el(false),
   "wol-send": el(false),
+  "wol-copy": el(true),
   "wol-hint": el(false),
   "cfg-voice": el(false),
   "voice-hint": el(true),
@@ -808,6 +811,11 @@ if (nodes["keep-awake-fields"].classList.contains("hidden")) throw new Error("ke
 if (nodes["wol-fields"].classList.contains("hidden")) throw new Error("WoL still hidden after control enable");
 const wol = window.streamaidUi.wolPayload("  AA:BB:CC:DD:EE:FF  ");
 if (wol.mac !== "AA:BB:CC:DD:EE:FF") throw new Error("wolPayload");
+window.streamaidUi.fillWolMacs(["aa:bb:cc:dd:ee:ff"]);
+if (nodes["wol-copy"].classList.contains("hidden")) throw new Error("Copy MAC hidden when this Mac has an address");
+if (window.streamaidUi.copyWolMac() !== "aa:bb:cc:dd:ee:ff") throw new Error("copyWolMac");
+window.streamaidUi.fillWolMacs([]);
+if (!nodes["wol-copy"].classList.contains("hidden")) throw new Error("Copy MAC visible with no address");
 if (!nodes["keep-awake-hint"].classList.contains("hidden")) throw new Error("keep-awake hint visible while off");
 nodes["cfg-keep-awake"].checked = true;
 window.streamaidUi.syncFeatureUi();
