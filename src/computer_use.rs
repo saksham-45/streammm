@@ -91,7 +91,7 @@ impl LlmActionModel {
         format!(
             "You operate a computer from a screenshot like a human at the keyboard and mouse. Task: {task}\nStep: {step}\n\
              Coordinates are normalized 0–1 relative to the image.\n\
-             Use right-click, drag (down/move/up), modifier keys, paste, clipboard images, inbox files (including files the person pasted or copied in Finder; incoming files are on the pasteboard as Finder files so Cmd-V pastes them), and switch displays when a person would.\n\
+             Use right-click, drag (down/move/up), modifier keys, paste, clipboard images, inbox files (including files the person pasted or copied in Finder; incoming files land on the Desktop and on the pasteboard as Finder files so Cmd-V pastes them), and switch displays when a person would.\n\
              If the task lists [displays]=JSON, pick another screen with action display and that id, then wait.\n\
              Respond ONLY with JSON: {{\"actions\":[{{\"action\":\"click\",\"x\":0.5,\"y\":0.5}},\
 {{\"action\":\"click\",\"x\":0.5,\"y\":0.5,\"button\":\"right\"}},\

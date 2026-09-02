@@ -373,6 +373,71 @@ impl Inbox {
     }
 }
 
+/// Unique path in `dir` for `name` (`a.txt`, then `a-1.txt`, …).
+pub fn unique_dest(dir: &Path, name: &str) -> Option<PathBuf> {
+    let name = sanitize_name(name)?;
+    let dest = dir.join(&name);
+    if !dest.exists() {
+        return Some(dest);
+    }
+    let path = Path::new(&name);
+    let stem = path.file_stem()?.to_str()?.to_string();
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    for i in 1..100 {
+        let cand = if ext.is_empty() {
+            dir.join(format!("{stem}-{i}"))
+        } else {
+            dir.join(format!("{stem}-{i}.{ext}"))
+        };
+        if !cand.exists() {
+            return Some(cand);
+        }
+    }
+    Some(dest)
+}
+
+pub fn copy_into_dir(src: &Path, dir: &Path) -> Result<PathBuf, String> {
+    if !src.is_file() {
+        return Err("not a file".into());
+    }
+    if !dir.is_dir() {
+        return Err("not a directory".into());
+    }
+    let name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "invalid file name".to_string())?;
+    let dest = unique_dest(dir, name).ok_or_else(|| "invalid file name".to_string())?;
+    if src.canonicalize().ok() == dest.canonicalize().ok() {
+        return Ok(dest);
+    }
+    fs::copy(src, &dest).map_err(|e| e.to_string())?;
+    Ok(dest)
+}
+
+/// Copy an inbox file onto ~/Desktop. Skips temp-dir sources so tests do not
+/// pollute the real Desktop; production inbox sits next to config.json.
+pub fn deliver_to_desktop(src: &Path) -> Option<PathBuf> {
+    if !src.is_file() {
+        return None;
+    }
+    let tmp = std::env::temp_dir();
+    if src.starts_with(&tmp) {
+        return None;
+    }
+    if let Ok(canon) = src.canonicalize() {
+        if canon.starts_with(&tmp) {
+            return None;
+        }
+    }
+    let home = std::env::var_os("HOME")?;
+    let desk = PathBuf::from(home).join("Desktop");
+    if !desk.is_dir() {
+        return None;
+    }
+    copy_into_dir(src, &desk).ok()
+}
+
 fn sanitize_id(id: &str) -> Option<String> {
     let id = id.trim();
     if id.is_empty() || id.len() > 64 {
@@ -476,6 +541,26 @@ mod tests {
         assert_eq!(inbox.get_bytes("note.txt").unwrap(), b"from-finder");
         assert!(inbox.import_path(dir.path()).is_err());
         assert!(inbox.list_json().contains("note.txt"));
+    }
+
+    #[test]
+    fn copy_into_dir_uniquifies_and_skips_temp_desktop() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"one").unwrap();
+        let desk = dir.path().join("Desktop");
+        fs::create_dir(&desk).unwrap();
+        let p1 = copy_into_dir(&src, &desk).unwrap();
+        assert_eq!(p1.file_name().unwrap(), "a.txt");
+        assert_eq!(fs::read(&p1).unwrap(), b"one");
+        fs::write(&src, b"two").unwrap();
+        let p2 = copy_into_dir(&src, &desk).unwrap();
+        assert_eq!(p2.file_name().unwrap(), "a-1.txt");
+        assert_eq!(fs::read(&p2).unwrap(), b"two");
+        assert!(
+            deliver_to_desktop(&src).is_none(),
+            "temp-dir inbox files must not land on the real Desktop"
+        );
     }
 
     #[test]

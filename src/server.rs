@@ -526,13 +526,14 @@ impl App {
         any
     }
 
-    /// Put a just-received inbox file on the host pasteboard as a Finder file
-    /// so Cmd-V pastes it (TeamViewer-style), without echoing through poll.
+    /// Put a just-received inbox file on the Desktop (when not a temp path)
+    /// and on the host pasteboard as a Finder file so Cmd-V still works.
     pub fn offer_incoming_file(&self, name: &str) {
         let Ok((path, _)) = self.files.readable_path(name) else {
             return;
         };
-        let paths = vec![path];
+        let dest = crate::files::deliver_to_desktop(&path).unwrap_or(path);
+        let paths = vec![dest];
         *self.last_clip.lock() = input::file_clip_key(&paths);
         self.injector.clipboard_set_files(&paths);
     }
