@@ -309,6 +309,24 @@ export const PLAYER_HTML = `<!doctype html>
     a.click();
     setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 2000);
   }
+  function startInboxGet(name, size) {
+    var out = document.getElementById("file-out");
+    function sendGet() {
+      sendFileJson({ type: "file", action: "get", name: name });
+    }
+    if (typeof window.showSaveFilePicker === "function") {
+      window.showSaveFilePicker({ suggestedName: name || "file" }).then(function (handle) {
+        return handle.createWritable();
+      }).then(function (writable) {
+        incomingFiles[name] = { writable: writable, written: 0, size: size || 0, queue: Promise.resolve() };
+        if (out) out.textContent = "saving " + name + "…";
+        sendGet();
+      }).catch(function () {});
+      return;
+    }
+    incomingFiles[name] = { parts: [] };
+    sendGet();
+  }
   function renderFileList(files) {
     var ul = document.getElementById("file-list");
     if (!ul) return;
@@ -320,7 +338,7 @@ export const PLAYER_HTML = `<!doctype html>
       btn.type = "button";
       btn.textContent = "Get";
       btn.addEventListener("click", function () {
-        sendFileJson({ type: "file", action: "get", name: f.name });
+        startInboxGet(f.name, f.size);
       });
       li.appendChild(btn);
       ul.appendChild(li);
@@ -375,15 +393,51 @@ export const PLAYER_HTML = `<!doctype html>
     }
     if (msg.action === "error" && out) { out.textContent = "error: " + (msg.error || "file"); return; }
     if (msg.action === "blob" && msg.data) {
-      triggerDownload(msg.name, new Blob([b64ToBytes(msg.data)]));
+      var rec0 = incomingFiles[msg.name];
+      var u8 = b64ToBytes(msg.data);
+      delete incomingFiles[msg.name];
+      if (rec0 && rec0.writable) {
+        rec0.queue = rec0.queue.then(function () { return rec0.writable.write(u8); }).then(function () {
+          return rec0.writable.close();
+        }).then(function () {
+          if (out) out.textContent = "saved " + (msg.name || "");
+        }).catch(function () {
+          if (out) out.textContent = "error: failed to save " + (msg.name || "");
+        });
+        return;
+      }
+      triggerDownload(msg.name, new Blob([u8]));
       return;
     }
-    if (msg.action === "blob-begin") { incomingFiles[msg.name] = []; return; }
-    if (msg.action === "blob-chunk" && incomingFiles[msg.name]) incomingFiles[msg.name].push(b64ToBytes(msg.data));
+    if (msg.action === "blob-begin") {
+      if (!incomingFiles[msg.name]) incomingFiles[msg.name] = { parts: [] };
+      if (incomingFiles[msg.name].writable) incomingFiles[msg.name].size = msg.size || incomingFiles[msg.name].size;
+      else incomingFiles[msg.name].parts = [];
+      return;
+    }
+    if (msg.action === "blob-chunk" && incomingFiles[msg.name]) {
+      var rec = incomingFiles[msg.name];
+      var chunk = b64ToBytes(msg.data);
+      if (rec.writable) {
+        rec.queue = rec.queue.then(function () { return rec.writable.write(chunk); });
+        rec.written = (rec.written || 0) + chunk.length;
+        if (out && rec.size) out.textContent = "saving " + msg.name + " " + Math.min(100, Math.round((rec.written * 100) / rec.size)) + "%";
+      } else {
+        rec.parts.push(chunk);
+      }
+    }
     if (msg.action === "blob-end" && incomingFiles[msg.name]) {
-      var parts = incomingFiles[msg.name];
+      var done = incomingFiles[msg.name];
       delete incomingFiles[msg.name];
-      triggerDownload(msg.name, new Blob(parts));
+      if (done.writable) {
+        done.queue.then(function () { return done.writable.close(); }).then(function () {
+          if (out) out.textContent = "saved " + (msg.name || "");
+        }).catch(function () {
+          if (out) out.textContent = "error: failed to save " + (msg.name || "");
+        });
+        return;
+      }
+      triggerDownload(msg.name, new Blob(done.parts));
     }
   }
   function uploadFile(file) {
