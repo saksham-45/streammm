@@ -748,6 +748,84 @@ async fn host_cancel_stops_running_ai_loop() {
 }
 
 #[tokio::test]
+async fn computer_use_file_panel_ops_hit_real_handlers() {
+    use std::sync::Arc;
+    use streamaid::computer_use::ActionModel;
+    use streamaid::input::{Action, FakeInjector};
+    use streamaid::otp::FakeClock;
+
+    struct MkdirThenDone;
+    impl ActionModel for MkdirThenDone {
+        fn plan(&self, _task: &str, step: u32, _jpeg: &[u8]) -> Vec<Action> {
+            match step {
+                0 => vec![Action::FileManage {
+                    op: "mkdir".into(),
+                    name: "FromHttp".into(),
+                    names: vec!["FromHttp".into()],
+                    root: "inbox".into(),
+                    path: String::new(),
+                    to: String::new(),
+                    to_root: String::new(),
+                    to_path: String::new(),
+                }],
+                1 => vec![
+                    Action::FileManage {
+                        op: "rename".into(),
+                        name: "FromHttp".into(),
+                        names: vec!["FromHttp".into()],
+                        root: "inbox".into(),
+                        path: String::new(),
+                        to: "RenamedHttp".into(),
+                        to_root: String::new(),
+                        to_path: String::new(),
+                    },
+                    Action::Done,
+                ],
+                _ => vec![Action::Done],
+            }
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let mut cfg = Config::default();
+    cfg.token = "s3cret".into();
+    cfg.control.ai_enabled = true;
+    streamaid::config::save(&cfg, &path).unwrap();
+    let app = App::new_for_test(
+        cfg,
+        path,
+        FakeClock::new(),
+        FakeInjector::new(),
+        Arc::new(MkdirThenDone),
+    );
+    let router = app.clone().router();
+    let res = router
+        .oneshot(
+            Request::post("/api/computer-use")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"task": "make a folder"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_json(res).await;
+    assert_eq!(body["ok"], true);
+    assert!(app
+        .files
+        .join_under("inbox", "", "RenamedHttp")
+        .unwrap()
+        .is_dir());
+    assert!(!app
+        .files
+        .join_under("inbox", "", "FromHttp")
+        .unwrap()
+        .exists());
+}
+
+#[tokio::test]
 async fn production_app_wires_llm_model() {
     let (_dir, app) = temp_app();
     assert_eq!(app.model.lock().kind(), "llm");

@@ -413,7 +413,7 @@ pub fn parse_control_json(v: &serde_json::Value) -> Option<Action> {
                 .unwrap_or("")
                 .trim()
                 .to_ascii_lowercase();
-            let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+            let mut name = v.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
             let names = crate::files::names_from_value(v);
             let root = v
                 .get("root")
@@ -447,6 +447,12 @@ pub fn parse_control_json(v: &serde_json::Value) -> Option<Action> {
                 op.as_str(),
                 "list" | "mkdir" | "rename" | "copy" | "move" | "delete"
             ) {
+                // Files UI may send `names` without `name` (bulk copy/cut/delete).
+                if name.is_empty() {
+                    if let Some(first) = names.first() {
+                        name = first.clone();
+                    }
+                }
                 Action::FileManage {
                     op,
                     name,
@@ -2235,6 +2241,50 @@ mod tests {
                 assert_eq!(op, "copy");
                 assert_eq!(name, "a.txt");
                 assert_eq!(to_root, "documents");
+            }
+            other => panic!("{other:?}"),
+        }
+        let mkdir_names = serde_json::json!({
+            "action":"file","op":"mkdir","names":["Work"],"root":"inbox"
+        });
+        match parse_control_json(&mkdir_names) {
+            Some(Action::FileManage { op, name, names, .. }) => {
+                assert_eq!(op, "mkdir");
+                assert_eq!(name, "Work");
+                assert_eq!(names, vec!["Work".to_string()]);
+            }
+            other => panic!("{other:?}"),
+        }
+        let rename = serde_json::json!({
+            "action":"file","op":"rename","name":"a.txt","to":"b.txt","root":"inbox","path":""
+        });
+        match parse_control_json(&rename) {
+            Some(Action::FileManage { op, name, to, .. }) => {
+                assert_eq!(op, "rename");
+                assert_eq!(name, "a.txt");
+                assert_eq!(to, "b.txt");
+            }
+            other => panic!("{other:?}"),
+        }
+        let moving = serde_json::json!({
+            "action":"file","op":"move","name":"a.txt","root":"inbox","toRoot":"desktop","toPath":"Work"
+        });
+        match parse_control_json(&moving) {
+            Some(Action::FileManage { op, to_root, to_path, .. }) => {
+                assert_eq!(op, "move");
+                assert_eq!(to_root, "desktop");
+                assert_eq!(to_path, "Work");
+            }
+            other => panic!("{other:?}"),
+        }
+        let delete = serde_json::json!({
+            "action":"file","op":"delete","names":["a.txt","b.txt"],"root":"inbox"
+        });
+        match parse_control_json(&delete) {
+            Some(Action::FileManage { op, name, names, .. }) => {
+                assert_eq!(op, "delete");
+                assert_eq!(name, "a.txt");
+                assert_eq!(names, vec!["a.txt".to_string(), "b.txt".to_string()]);
             }
             other => panic!("{other:?}"),
         }

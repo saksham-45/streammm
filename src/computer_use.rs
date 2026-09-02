@@ -94,7 +94,14 @@ impl LlmActionModel {
              Use right-click, drag (down/move/up), modifier keys, paste, clipboard images, inbox files (including files the person pasted or copied in Finder; incoming files land on the Desktop and on the pasteboard as Finder files so Cmd-V pastes them), and switch displays when a person would.\n\
              Send Cmd+Tab, Cmd+Space, Cmd+W, Alt+Tab, Alt+F4, Ctrl+Alt+Del, and Control+Command+Q (lock) with action key — browsers steal those, the injector does not.\n\
              If the task lists [displays]=JSON, pick another screen with action display and that id, then wait.\n\
-             Host files (same as the Files panel): {{\"action\":\"file\",\"op\":\"list\",\"root\":\"desktop\",\"path\":\"\"}}, mkdir/rename/copy/move/delete with name or names, to, toRoot, toPath. List results arrive next step as [files]=JSON. Create a new file with {{\"action\":\"file\",\"name\":\"notes.txt\",\"text\":\"file body\"}}.\n\
+             Host files — drive the Files panel the way a person would (list, New folder, Rename, Copy/Cut+Paste, Delete): \
+{{\"action\":\"file\",\"op\":\"list\",\"root\":\"desktop\",\"path\":\"\"}}, \
+{{\"action\":\"file\",\"op\":\"mkdir\",\"name\":\"Work\",\"root\":\"inbox\"}}, \
+{{\"action\":\"file\",\"op\":\"rename\",\"name\":\"a.txt\",\"to\":\"b.txt\",\"root\":\"inbox\"}}, \
+{{\"action\":\"file\",\"op\":\"copy\",\"name\":\"a.txt\",\"root\":\"inbox\",\"toRoot\":\"documents\"}}, \
+{{\"action\":\"file\",\"op\":\"move\",\"name\":\"a.txt\",\"root\":\"inbox\",\"toRoot\":\"desktop\",\"toPath\":\"Work\"}}, \
+{{\"action\":\"file\",\"op\":\"delete\",\"name\":\"a.txt\",\"root\":\"inbox\"}}. \
+name or names, to, toRoot, toPath. Results (including errors) arrive next step as [files]=JSON. Create a new file with {{\"action\":\"file\",\"name\":\"notes.txt\",\"text\":\"file body\"}}.\n\
              Respond ONLY with JSON: {{\"actions\":[{{\"action\":\"click\",\"x\":0.5,\"y\":0.5}},\
 {{\"action\":\"click\",\"x\":0.5,\"y\":0.5,\"button\":\"right\"}},\
 {{\"action\":\"dblclick\",\"x\":0.5,\"y\":0.5}},\
@@ -109,7 +116,11 @@ impl LlmActionModel {
 {{\"action\":\"clipboard\",\"mime\":\"image/png\",\"data\":\"base64-png\"}},\
 {{\"action\":\"file\",\"name\":\"notes.txt\",\"text\":\"file body\"}},\
 {{\"action\":\"file\",\"op\":\"list\",\"root\":\"desktop\"}},\
+{{\"action\":\"file\",\"op\":\"mkdir\",\"name\":\"Work\",\"root\":\"inbox\"}},\
+{{\"action\":\"file\",\"op\":\"rename\",\"name\":\"a.txt\",\"to\":\"b.txt\",\"root\":\"inbox\"}},\
 {{\"action\":\"file\",\"op\":\"copy\",\"name\":\"a.txt\",\"root\":\"inbox\",\"toRoot\":\"documents\"}},\
+{{\"action\":\"file\",\"op\":\"move\",\"name\":\"a.txt\",\"root\":\"inbox\",\"toRoot\":\"desktop\"}},\
+{{\"action\":\"file\",\"op\":\"delete\",\"name\":\"a.txt\",\"root\":\"inbox\"}},\
 {{\"action\":\"display\",\"id\":\"2:\"}},\
 {{\"action\":\"scroll\",\"x\":0.5,\"y\":0.5,\"dy\":-1}},{{\"action\":\"wait\",\"ms\":200}},\
 {{\"action\":\"done\"}}]}}."
@@ -417,8 +428,13 @@ mod tests {
         assert!(p.contains("image/png"));
         assert!(p.contains("\"file\"") || p.contains("notes.txt"));
         assert!(p.contains("\"op\":\"list\"") || p.contains("op\":\"list\""));
+        assert!(p.contains("\"op\":\"mkdir\"") || p.contains("op\":\"mkdir\""));
+        assert!(p.contains("\"op\":\"rename\"") || p.contains("op\":\"rename\""));
+        assert!(p.contains("\"op\":\"move\"") || p.contains("op\":\"move\""));
+        assert!(p.contains("\"op\":\"delete\"") || p.contains("op\":\"delete\""));
         assert!(p.contains("[files]"));
         assert!(p.contains("toRoot") || p.contains("toRoot"));
+        assert!(p.contains("Files panel") || p.contains("New folder"));
     }
 
     #[test]
@@ -472,6 +488,24 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+        let panel = serde_json::json!({
+            "actions": [
+                {"action":"file","op":"list","root":"inbox"},
+                {"action":"file","op":"mkdir","names":["Work"],"root":"inbox"},
+                {"action":"file","op":"rename","name":"a.txt","to":"b.txt","root":"inbox"},
+                {"action":"file","op":"copy","name":"b.txt","root":"inbox","toRoot":"documents"},
+                {"action":"file","op":"move","name":"b.txt","root":"inbox","toRoot":"desktop","toPath":"Work"},
+                {"action":"file","op":"delete","name":"b.txt","root":"inbox"}
+            ]
+        });
+        let acts = actions_from_model_json(&panel);
+        assert_eq!(acts.len(), 6, "{acts:?}");
+        assert!(matches!(&acts[0], Action::FileManage { op, .. } if op == "list"));
+        assert!(matches!(&acts[1], Action::FileManage { op, name, .. } if op == "mkdir" && name == "Work"));
+        assert!(matches!(&acts[2], Action::FileManage { op, to, .. } if op == "rename" && to == "b.txt"));
+        assert!(matches!(&acts[3], Action::FileManage { op, to_root, .. } if op == "copy" && to_root == "documents"));
+        assert!(matches!(&acts[4], Action::FileManage { op, to_path, .. } if op == "move" && to_path == "Work"));
+        assert!(matches!(&acts[5], Action::FileManage { op, name, .. } if op == "delete" && name == "b.txt"));
     }
 
     #[tokio::test]

@@ -868,10 +868,16 @@ impl App {
         if !to_path.is_empty() {
             v["toPath"] = json!(to_path);
         }
-        for msg in self.files.handle_message(&v) {
-            if op == "list" || msg.contains("\"files\"") {
-                *listing.lock() = msg.clone();
-            }
+        let replies = self.files.handle_message(&v);
+        // Same JSON the Files panel sees: action result, listing, or error.
+        if !replies.is_empty() {
+            *listing.lock() = if replies.len() == 1 {
+                replies[0].clone()
+            } else {
+                format!("[{}]", replies.join(","))
+            };
+        }
+        for msg in replies {
             self.fanout_file_ok(&msg);
             self.publisher.push_wire(msg.clone());
             let _ = self.clip_tx.send(msg);
@@ -3778,12 +3784,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ai_file_list_then_copy_uses_files_panel() {
+    async fn ai_file_panel_list_mkdir_rename_copy_move_delete() {
         use crate::computer_use::ActionModel;
         use crate::input::{Action, FakeInjector};
         use crate::otp::FakeClock;
 
-        fn manage(op: &str, name: &str, root: &str, to_root: &str, to_path: &str) -> Action {
+        fn fm(
+            op: &str,
+            name: &str,
+            path: &str,
+            to: &str,
+            to_root: &str,
+            to_path: &str,
+        ) -> Action {
             Action::FileManage {
                 op: op.into(),
                 name: name.into(),
@@ -3792,26 +3805,62 @@ mod tests {
                 } else {
                     vec![name.into()]
                 },
-                root: root.into(),
-                path: String::new(),
-                to: String::new(),
+                root: "inbox".into(),
+                path: path.into(),
+                to: to.into(),
                 to_root: to_root.into(),
                 to_path: to_path.into(),
             }
         }
 
-        struct ListThenCopy;
-        impl ActionModel for ListThenCopy {
+        struct FilesPanelDrive;
+        impl ActionModel for FilesPanelDrive {
             fn plan(&self, task: &str, step: u32, _jpeg: &[u8]) -> Vec<Action> {
                 match step {
-                    0 => vec![manage("list", "", "inbox", "", "")],
+                    0 => vec![fm("list", "", "", "", "", "")],
                     1 => {
                         assert!(
                             task.contains("[files]") && task.contains("note.txt"),
                             "list result must feed the next AI step: {task}"
                         );
+                        vec![fm("mkdir", "Work", "", "", "", "")]
+                    }
+                    2 => {
+                        assert!(
+                            task.contains("Work") && (task.contains("mkdir") || task.contains("files")),
+                            "mkdir result must feed the next step: {task}"
+                        );
+                        vec![fm("rename", "note.txt", "", "memo.txt", "", "")]
+                    }
+                    3 => {
+                        assert!(
+                            task.contains("memo.txt") || task.contains("renamed"),
+                            "rename result must feed the next step: {task}"
+                        );
+                        vec![fm("copy", "memo.txt", "", "", "inbox", "Work")]
+                    }
+                    4 => {
+                        assert!(
+                            task.contains("copied") || task.contains("memo.txt"),
+                            "copy result must feed the next step: {task}"
+                        );
+                        vec![fm("mkdir", "Other", "", "", "", "")]
+                    }
+                    5 => vec![fm("move", "memo.txt", "", "", "inbox", "Other")],
+                    6 => {
+                        assert!(
+                            task.contains("moved") || task.contains("Other"),
+                            "move result must feed the next step: {task}"
+                        );
+                        vec![fm("delete", "nope.txt", "", "", "", "")]
+                    }
+                    7 => {
+                        assert!(
+                            task.contains("error") || task.contains("not found"),
+                            "delete miss must feed an error: {task}"
+                        );
                         vec![
-                            manage("copy", "note.txt", "inbox", "inbox", "Work"),
+                            fm("delete", "memo.txt", "Work", "", "", ""),
                             Action::Done,
                         ]
                     }
@@ -3831,33 +3880,39 @@ mod tests {
             path,
             FakeClock::new(),
             fake.clone(),
-            Arc::new(ListThenCopy),
+            Arc::new(FilesPanelDrive),
         );
-        app.files.mkdir_at("inbox", "", "Work").unwrap();
         app.files.put_bytes("note.txt", b"hello-ai").unwrap();
-        let applied = app.run_computer_use("copy the note into Work").await;
-        assert!(
-            applied.iter().any(|a| matches!(
-                a,
-                Action::FileManage { op, name, .. } if op == "list" && name.is_empty()
-            )),
-            "{applied:?}"
-        );
-        assert!(
-            applied.iter().any(|a| matches!(
-                a,
-                Action::FileManage { op, name, .. } if op == "copy" && name == "note.txt"
-            )),
+        let applied = app.run_computer_use("organize the note like the Files panel").await;
+        let ops: Vec<&str> = applied
+            .iter()
+            .filter_map(|a| match a {
+                Action::FileManage { op, .. } => Some(op.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ops,
+            ["list", "mkdir", "rename", "copy", "mkdir", "move", "delete", "delete"],
             "{applied:?}"
         );
         assert_eq!(
-            std::fs::read(app.files.join_under("inbox", "Work", "note.txt").unwrap()).unwrap(),
+            std::fs::read(app.files.join_under("inbox", "Other", "memo.txt").unwrap()).unwrap(),
             b"hello-ai"
         );
-        assert!(
-            fake.recorded()
-                .iter()
-                .any(|e| matches!(e, crate::input::Injected::FileManage { op, .. } if op == "copy"))
-        );
+        assert!(!app.files.join_under("inbox", "", "note.txt").unwrap().exists());
+        assert!(!app.files.join_under("inbox", "", "memo.txt").unwrap().exists());
+        assert!(!app.files.join_under("inbox", "Work", "memo.txt").unwrap().exists());
+        assert!(app.files.join_under("inbox", "", "Work").unwrap().is_dir());
+        assert!(app.files.join_under("inbox", "", "Other").unwrap().is_dir());
+        let recorded = fake.recorded();
+        for op in ["list", "mkdir", "rename", "copy", "move", "delete"] {
+            assert!(
+                recorded
+                    .iter()
+                    .any(|e| matches!(e, crate::input::Injected::FileManage { op: o, .. } if o == op)),
+                "missing {op} in {recorded:?}"
+            );
+        }
     }
 }
