@@ -213,6 +213,7 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         html.contains("id=\"cfg-voice\"")
             && html.contains("id=\"voice-hint\"")
             && html.contains("id=\"voice-aec-hint\"")
+            && html.contains("ducked")
             && html.contains("id=\"talk\"")
             && js.contains("function sendVoice")
             && js.contains("function startTalk")

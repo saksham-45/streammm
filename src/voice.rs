@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -50,6 +50,55 @@ pub fn wav_from_pcm_s16le(pcm: &[u8], rate: u32) -> Vec<u8> {
 
 pub trait VoiceSink: Send + Sync {
     fn play_pcm(&self, pcm: &[u8], rate: u32);
+}
+
+/// Mute the default input while Talk plays so Capture audio does not loop the speakers.
+pub fn should_duck_mic(capture_audio: bool) -> bool {
+    capture_audio
+}
+
+pub const MIC_DUCK_HOLD: Duration = Duration::from_millis(750);
+
+pub trait MicDuck: Send + Sync {
+    fn set_ducked(&self, _on: bool) {}
+    fn is_ducked(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct FakeDuck {
+    pub ducked: Arc<AtomicBool>,
+}
+
+impl FakeDuck {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl MicDuck for FakeDuck {
+    fn set_ducked(&self, on: bool) {
+        self.ducked.store(on, Ordering::SeqCst);
+    }
+    fn is_ducked(&self) -> bool {
+        self.ducked.load(Ordering::SeqCst)
+    }
+}
+
+pub struct NullDuck;
+
+impl MicDuck for NullDuck {}
+
+pub fn production_duck() -> Arc<dyn MicDuck> {
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(macos_duck::MacDuck::new())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Arc::new(NullDuck)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -315,6 +364,185 @@ pub fn production_voice() -> Arc<dyn VoiceSink> {
     Arc::new(PipeVoice::new())
 }
 
+#[cfg(target_os = "macos")]
+mod macos_duck {
+    use super::MicDuck;
+    use parking_lot::Mutex;
+    use std::os::raw::c_void;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const SYSTEM: u32 = 1;
+    const DEFAULT_INPUT: u32 = u32::from_be_bytes(*b"dIn ");
+    const SCOPE_GLOBAL: u32 = u32::from_be_bytes(*b"glob");
+    const SCOPE_INPUT: u32 = u32::from_be_bytes(*b"inpt");
+    const VIRTUAL_VOL: u32 = u32::from_be_bytes(*b"vmvc");
+    const VOLUME_SCALAR: u32 = u32::from_be_bytes(*b"volm");
+
+    #[repr(C)]
+    struct Addr {
+        selector: u32,
+        scope: u32,
+        element: u32,
+    }
+
+    #[link(name = "CoreAudio", kind = "framework")]
+    extern "C" {
+        fn AudioObjectGetPropertyData(
+            object: u32,
+            address: *const Addr,
+            qualifier_size: u32,
+            qualifier: *const c_void,
+            io_size: *mut u32,
+            out: *mut c_void,
+        ) -> i32;
+        fn AudioObjectSetPropertyData(
+            object: u32,
+            address: *const Addr,
+            qualifier_size: u32,
+            qualifier: *const c_void,
+            data_size: u32,
+            data: *const c_void,
+        ) -> i32;
+        fn AudioObjectHasProperty(object: u32, address: *const Addr) -> bool;
+    }
+
+    fn default_input() -> Option<u32> {
+        let addr = Addr {
+            selector: DEFAULT_INPUT,
+            scope: SCOPE_GLOBAL,
+            element: 0,
+        };
+        let mut id = 0u32;
+        let mut size = 4u32;
+        let err = unsafe {
+            AudioObjectGetPropertyData(
+                SYSTEM,
+                &addr,
+                0,
+                std::ptr::null(),
+                &mut size,
+                &mut id as *mut u32 as *mut c_void,
+            )
+        };
+        if err == 0 && id != 0 {
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    fn try_get(id: u32, selector: u32, element: u32) -> Option<f32> {
+        let addr = Addr {
+            selector,
+            scope: SCOPE_INPUT,
+            element,
+        };
+        if !unsafe { AudioObjectHasProperty(id, &addr) } {
+            return None;
+        }
+        let mut v = 0f32;
+        let mut size = 4u32;
+        let err = unsafe {
+            AudioObjectGetPropertyData(
+                id,
+                &addr,
+                0,
+                std::ptr::null(),
+                &mut size,
+                &mut v as *mut f32 as *mut c_void,
+            )
+        };
+        if err == 0 {
+            Some(v.clamp(0.0, 1.0))
+        } else {
+            None
+        }
+    }
+
+    fn try_set(id: u32, selector: u32, element: u32, v: f32) -> bool {
+        let addr = Addr {
+            selector,
+            scope: SCOPE_INPUT,
+            element,
+        };
+        if !unsafe { AudioObjectHasProperty(id, &addr) } {
+            return false;
+        }
+        let v = v.clamp(0.0, 1.0);
+        unsafe {
+            AudioObjectSetPropertyData(
+                id,
+                &addr,
+                0,
+                std::ptr::null(),
+                4,
+                &v as *const f32 as *const c_void,
+            ) == 0
+        }
+    }
+
+    fn get_volume() -> Option<f32> {
+        let id = default_input()?;
+        try_get(id, VIRTUAL_VOL, 0)
+            .or_else(|| try_get(id, VOLUME_SCALAR, 0))
+            .or_else(|| try_get(id, VOLUME_SCALAR, 1))
+    }
+
+    fn set_volume(v: f32) -> bool {
+        let Some(id) = default_input() else {
+            return false;
+        };
+        try_set(id, VIRTUAL_VOL, 0, v)
+            || try_set(id, VOLUME_SCALAR, 0, v)
+            || try_set(id, VOLUME_SCALAR, 1, v)
+    }
+
+    pub struct MacDuck {
+        saved: Mutex<Option<f32>>,
+        on: AtomicBool,
+    }
+
+    impl MacDuck {
+        pub fn new() -> Self {
+            Self {
+                saved: Mutex::new(None),
+                on: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl MicDuck for MacDuck {
+        fn set_ducked(&self, on: bool) {
+            let mut saved = self.saved.lock();
+            if on {
+                if saved.is_some() {
+                    return;
+                }
+                let Some(v) = get_volume() else {
+                    return;
+                };
+                if !set_volume(0.0) {
+                    return;
+                }
+                *saved = Some(v);
+                self.on.store(true, Ordering::SeqCst);
+            } else if let Some(v) = saved.take() {
+                let _ = set_volume(v);
+                self.on.store(false, Ordering::SeqCst);
+            }
+        }
+        fn is_ducked(&self) -> bool {
+            self.on.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for MacDuck {
+        fn drop(&mut self) {
+            self.set_ducked(false);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,6 +576,18 @@ mod tests {
         assert_eq!(rec.len(), 1);
         assert_eq!(rec[0].0, 16_000);
         assert_eq!(rec[0].1, vec![9, 8]);
+    }
+
+    #[test]
+    fn duck_mic_only_when_capture_audio_is_on() {
+        assert!(!should_duck_mic(false));
+        assert!(should_duck_mic(true));
+        let d = FakeDuck::new();
+        assert!(!d.is_ducked());
+        d.set_ducked(true);
+        assert!(d.is_ducked());
+        d.set_ducked(false);
+        assert!(!d.is_ducked());
     }
 
     #[test]

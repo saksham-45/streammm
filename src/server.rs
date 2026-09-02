@@ -13,7 +13,7 @@ use crate::power::{self, FakePower, PowerGuard};
 use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};
 use crate::publisher::Publisher;
 use crate::record::Recorder;
-use crate::voice::{self, FakeVoice, VoiceSink};
+use crate::voice::{self, FakeDuck, FakeVoice, MicDuck, VoiceSink};
 use crate::ws::{
     accept_key, decode_frame, encode_frame, OP_BIN, OP_CLOSE, OP_PING, OP_PONG, OP_TEXT,
 };
@@ -75,6 +75,9 @@ pub struct App {
     pub recorder: Recorder,
     pub voice: Arc<dyn VoiceSink>,
     pub fake_voice: FakeVoice,
+    pub duck: Arc<dyn MicDuck>,
+    pub fake_duck: FakeDuck,
+    last_voice: Mutex<Option<Instant>>,
     pub power: Arc<dyn PowerGuard>,
     pub fake_power: FakePower,
 }
@@ -150,6 +153,8 @@ impl App {
             model,
             voice::production_voice(),
             FakeVoice::new(),
+            voice::production_duck(),
+            FakeDuck::new(),
             power::production_power(),
             FakePower::new(),
         )
@@ -163,6 +168,7 @@ impl App {
         model: Arc<dyn ActionModel>,
     ) -> Arc<Self> {
         let fv = FakeVoice::new();
+        let fd = FakeDuck::new();
         let fp = FakePower::new();
         Self::build(
             cfg,
@@ -173,6 +179,8 @@ impl App {
             model,
             Arc::new(fv.clone()),
             fv,
+            Arc::new(fd.clone()),
+            fd,
             Arc::new(fp.clone()),
             fp,
         )
@@ -187,6 +195,8 @@ impl App {
         model: Arc<dyn ActionModel>,
         voice: Arc<dyn VoiceSink>,
         fake_voice: FakeVoice,
+        duck: Arc<dyn MicDuck>,
+        fake_duck: FakeDuck,
         power: Arc<dyn PowerGuard>,
         fake_power: FakePower,
     ) -> Arc<Self> {
@@ -232,6 +242,9 @@ impl App {
             recorder: Recorder::new(rec_dir),
             voice,
             fake_voice,
+            duck,
+            fake_duck,
+            last_voice: Mutex::new(None),
             power,
             fake_power,
         });
@@ -442,6 +455,10 @@ impl App {
                     return;
                 };
                 let rate = v.get("rate").and_then(|r| r.as_u64()).unwrap_or(0) as u32;
+                if voice::should_duck_mic(self.cfg.lock().capture.audio) {
+                    self.duck.set_ducked(true);
+                    *self.last_voice.lock() = Some(Instant::now());
+                }
                 self.voice.play_pcm(&pcm, voice::clamp_rate(rate));
             }
             "chat" => {
@@ -843,6 +860,17 @@ impl App {
         self.release_controller();
     }
 
+    fn maybe_unduck_mic(&self) {
+        let stale = matches!(
+            *self.last_voice.lock(),
+            Some(t) if t.elapsed() >= voice::MIC_DUCK_HOLD
+        );
+        if stale {
+            *self.last_voice.lock() = None;
+            self.duck.set_ducked(false);
+        }
+    }
+
     /// Lid-open / wake: recapture and republish immediately instead of waiting for a stall.
     fn handle_system_wake(&self) {
         let age = self.hub.last_media_age_s().unwrap_or(99.0);
@@ -904,6 +932,7 @@ impl App {
                 if app.power.take_wake() {
                     app.handle_system_wake();
                 }
+                app.maybe_unduck_mic();
                 let _ = app.poll_clipboard();
             }
         });
@@ -998,6 +1027,7 @@ impl App {
                 "record_sessions": cfg.control.record_sessions,
                 "recording": self.recorder.is_active(),
                 "voice": cfg.control.voice,
+                "ducking_mic": self.duck.is_ducked(),
                 "keep_awake": cfg.control.keep_awake,
                 "keeping_awake": self.power.is_awake(),
                 "blocking": cfg.control.block_local && self.controller.lock().is_some(),
@@ -1245,6 +1275,10 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
     }
     app.apply_display(&new_cfg.capture.input);
     app.sync_session_privacy();
+    if !new_cfg.capture.audio || !new_cfg.control.voice {
+        *app.last_voice.lock() = None;
+        app.duck.set_ducked(false);
+    }
     let unattended = if new_cfg.access.unattended {
         new_cfg.access.password_hash.clone()
     } else {
@@ -3104,6 +3138,23 @@ mod tests {
         assert_eq!(rec[0].1, pcm);
         app.handle_inbound_json(r#"{"type":"voice","pcm":"@@@","rate":16000}"#);
         assert_eq!(app.fake_voice.recorded().len(), 1, "bad pcm must not play");
+        assert!(
+            !app.fake_duck.is_ducked(),
+            "capture audio off must not duck the host mic"
+        );
+        app.cfg.lock().capture.audio = true;
+        app.handle_inbound_json(&msg);
+        assert!(
+            app.fake_duck.is_ducked(),
+            "Talk + Capture audio must mute the host mic"
+        );
+        assert_eq!(app.status_json()["control"]["ducking_mic"], true);
+        *app.last_voice.lock() = Some(Instant::now() - Duration::from_secs(2));
+        app.maybe_unduck_mic();
+        assert!(
+            !app.fake_duck.is_ducked(),
+            "mic must unmute after Talk goes idle"
+        );
     }
 
     #[tokio::test]
