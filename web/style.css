@@ -163,6 +163,26 @@ textarea:focus-visible {
   padding: 6px;
   letter-spacing: 3px;
 }
+#perm-banner {
+  background: #7a1010;
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  padding: 6px;
+  letter-spacing: 1px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+#perm-banner button {
+  letter-spacing: 0;
+  font-weight: 650;
+  background: #222;
+  color: #fff;
+  border: 1px solid #fff;
+}
 #session-banner {
   background: #7a4a10;
   color: #fff;

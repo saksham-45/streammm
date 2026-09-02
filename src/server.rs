@@ -965,6 +965,7 @@ impl App {
             .route("/api/files/download", get(api_files_download))
             .route("/api/recordings", get(api_recordings_list))
             .route("/api/recordings/download", get(api_recordings_download))
+            .route("/api/permissions/open", post(api_permissions_open))
             .with_state(self)
     }
 
@@ -1040,6 +1041,10 @@ impl App {
             "access": {
                 "unattended": cfg.access.unattended,
                 "password_set": cfg.access.password_hash.len() == 64,
+            },
+            "permissions": {
+                "screen": crate::perm::screen_ok(),
+                "accessibility": crate::perm::accessibility_ok(),
             }
         })
     }
@@ -1533,6 +1538,25 @@ async fn api_control_release(State(app): State<Arc<App>>, req: Request) -> Respo
     }
     app.end_remote_session();
     Json(json!({"ok": true, "released": true})).into_response()
+}
+
+async fn api_permissions_open(State(app): State<Arc<App>>, req: Request) -> Response {
+    if !host_ok(&app, req.headers(), req.uri()) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    let body = axum::body::to_bytes(req.into_body(), 8_000)
+        .await
+        .unwrap_or_default();
+    let v: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid JSON body"),
+    };
+    let which = v.get("which").and_then(|w| w.as_str()).unwrap_or("");
+    match crate::perm::open_privacy_pane(which) {
+        Ok(()) => Json(json!({ "ok": true, "which": which })).into_response(),
+        Err("unknown pane") => json_err(StatusCode::BAD_REQUEST, "unknown pane"),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
 }
 
 fn files_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> Result<(), Response> {
@@ -2102,6 +2126,8 @@ mod tests {
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert!(v.get("capture").is_some());
         assert!(v.get("stream").is_some());
+        assert!(v["permissions"]["screen"].is_boolean());
+        assert!(v["permissions"]["accessibility"].is_boolean());
 
         let res = router
             .oneshot(

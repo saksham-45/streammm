@@ -217,7 +217,33 @@ function renderStatus(s) {
     lab.textContent = t;
   }
   if (typeof ctl.voice === "boolean") setHidden($("talk"), !ctl.voice);
+  if (s && s.permissions) syncPermissionUi(s.permissions);
   if (featureFlags().record) refreshRecordings();
+}
+
+function syncPermissionUi(p) {
+  p = p || {};
+  const screenOk = p.screen !== false;
+  const axOk = p.accessibility !== false;
+  setHidden($("perm-banner"), screenOk && axOk);
+  setHidden($("perm-screen"), screenOk);
+  setHidden($("perm-ax"), axOk);
+  const lab = $("perm-banner-label");
+  if (!lab) return;
+  const bits = [];
+  if (!screenOk) bits.push("Screen Recording");
+  if (!axOk) bits.push("Accessibility");
+  lab.textContent = bits.length
+    ? ("Allow " + bits.join(" and ") + " in System Settings")
+    : "PERMISSION NEEDED";
+}
+
+function openPrivacyPane(which) {
+  fetch(url("/api/permissions/open"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ which: which })
+  }).catch(function () {});
 }
 
 function wsUrl() {
@@ -1935,6 +1961,14 @@ function onReady() {
       } catch (err) { /* ignore */ }
     });
   }
+  const permScreen = $("perm-screen");
+  if (permScreen) {
+    permScreen.addEventListener("click", function () { openPrivacyPane("screen"); });
+  }
+  const permAx = $("perm-ax");
+  if (permAx) {
+    permAx.addEventListener("click", function () { openPrivacyPane("accessibility"); });
+  }
   const cancelAi = $("cu-cancel");
   if (cancelAi) {
     cancelAi.addEventListener("click", async function () {
@@ -2036,6 +2070,8 @@ if (typeof window !== "undefined") {
     paintMapThumbs: paintMapThumbs,
     currentToken: currentToken,
     url: url,
+    syncPermissionUi: syncPermissionUi,
+    openPrivacyPane: openPrivacyPane,
   };
 }
 

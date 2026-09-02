@@ -122,6 +122,14 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "origin must show a remote-session banner with End"
     );
     assert!(
+        html.contains("id=\"perm-banner\"")
+            && html.contains("id=\"perm-screen\"")
+            && html.contains("id=\"perm-ax\"")
+            && js.contains("function syncPermissionUi")
+            && js.contains("/api/permissions/open"),
+        "missing Screen Recording or Accessibility must reveal a grant banner"
+    );
+    assert!(
         html.contains("id=\"keys-bar\"")
             && html.contains("id=\"keys-hint\"")
             && html.contains("Ctrl+Alt+Del")
@@ -700,6 +708,10 @@ const nodes = {{
   "analysis-section": el(true),
   "analysis-banner": el(true),
   "analysis-pane": el(true),
+  "perm-banner": el(true),
+  "perm-banner-label": el(false),
+  "perm-screen": el(true),
+  "perm-ax": el(true),
   "jpeg-fields": el(true),
   "bitrate-fields": el(false),
   "gop-fields": el(false),
@@ -852,6 +864,15 @@ if (!nodes["audio-fields"].classList.contains("hidden")) throw new Error("audio 
 if (nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality still hidden after MJPEG enable");
 if (!nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate still visible in MJPEG mode");
 if (!nodes["gop-fields"].classList.contains("hidden")) throw new Error("GOP still visible in MJPEG mode");
+if (typeof window.streamaidUi.syncPermissionUi !== "function") throw new Error("syncPermissionUi missing");
+window.streamaidUi.syncPermissionUi({{screen: true, accessibility: true}});
+if (!nodes["perm-banner"].classList.contains("hidden")) throw new Error("perm banner visible when granted");
+window.streamaidUi.syncPermissionUi({{screen: false, accessibility: true}});
+if (nodes["perm-banner"].classList.contains("hidden")) throw new Error("perm banner hidden when screen denied");
+if (nodes["perm-screen"].classList.contains("hidden")) throw new Error("Screen Recording button hidden when denied");
+if (!nodes["perm-ax"].classList.contains("hidden")) throw new Error("Accessibility button visible when granted");
+window.streamaidUi.syncPermissionUi({{screen: true, accessibility: false}});
+if (nodes["perm-ax"].classList.contains("hidden")) throw new Error("Accessibility button hidden when denied");
 nodes["cfg-control-enabled"].checked = false;
 nodes["cfg-keep-awake"].checked = false;
 nodes["cfg-unattended"].checked = true;

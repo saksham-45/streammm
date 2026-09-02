@@ -27,6 +27,22 @@ async fn body_json(res: axum::response::Response) -> Value {
 }
 
 #[tokio::test]
+async fn permissions_open_rejects_unknown_pane() {
+    let (_dir, app) = temp_app();
+    let router = app.router();
+    let res = router
+        .oneshot(
+            Request::post("/api/permissions/open")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"which": "nope"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn config_post_clamps_and_round_trips() {
     let (_dir, app) = temp_app();
     let router = app.router();
