@@ -3,6 +3,7 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub const CLIP_MAX: usize = 512 * 1024;
@@ -634,6 +635,10 @@ pub trait Injector: Send + Sync {
         Vec::new()
     }
     fn clipboard_set_files(&self, _paths: &[PathBuf]) {}
+    fn set_block_local(&self, _on: bool) {}
+    fn take_local_unlock(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -711,6 +716,8 @@ pub struct FakeInjector {
     pub png: Arc<Mutex<Option<Vec<u8>>>>,
     pub files: Arc<Mutex<Vec<PathBuf>>>,
     pub rect: Arc<Mutex<(i32, i32, u32, u32)>>,
+    pub block_local: Arc<AtomicBool>,
+    pub unlock: Arc<AtomicBool>,
 }
 
 impl FakeInjector {
@@ -733,6 +740,8 @@ impl Default for FakeInjector {
             png: Arc::new(Mutex::new(None)),
             files: Arc::new(Mutex::new(Vec::new())),
             rect: Arc::new(Mutex::new((0, 0, 0, 0))),
+            block_local: Arc::new(AtomicBool::new(false)),
+            unlock: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -851,6 +860,12 @@ impl Injector for FakeInjector {
     fn clipboard_set_files(&self, paths: &[PathBuf]) {
         *self.files.lock() = paths.to_vec();
     }
+    fn set_block_local(&self, on: bool) {
+        self.block_local.store(on, Ordering::SeqCst);
+    }
+    fn take_local_unlock(&self) -> bool {
+        self.unlock.swap(false, Ordering::SeqCst)
+    }
 }
 
 pub struct NullInjector;
@@ -868,7 +883,7 @@ mod macos {
     use std::io::Write;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
-    use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -914,6 +929,72 @@ mod macos {
     const RIGHT_BUTTON: CGMouseButton = 1;
     const CENTER_BUTTON: CGMouseButton = 2;
     const CLICK_STATE_FIELD: u32 = 1;
+    const KEYCODE_FIELD: u32 = 9;
+    const USER_DATA_FIELD: u32 = 42;
+    const MAGIC_USER_DATA: i64 = 0x57A1_D01;
+    const FLAG_SHIFT: u64 = 1 << 17;
+    const FLAG_CMD: u64 = 1 << 20;
+    const ESC_KEY: u16 = 53;
+    const SESSION_TAP: u32 = 1;
+
+    static BLOCK_LOCAL: AtomicBool = AtomicBool::new(false);
+    static UNLOCK: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn block_tap(
+        _proxy: *mut std::ffi::c_void,
+        etype: u32,
+        event: CGEventRef,
+        _info: *mut std::ffi::c_void,
+    ) -> CGEventRef {
+        if event.is_null() || !BLOCK_LOCAL.load(Ordering::SeqCst) {
+            return event;
+        }
+        unsafe {
+            if CGEventGetIntegerValueField(event, USER_DATA_FIELD) == MAGIC_USER_DATA {
+                return event;
+            }
+            if etype == KEY_DOWN {
+                let code = CGEventGetIntegerValueField(event, KEYCODE_FIELD) as u16;
+                let flags = CGEventGetFlags(event);
+                if code == ESC_KEY && flags & FLAG_CMD != 0 && flags & FLAG_SHIFT != 0 {
+                    UNLOCK.store(true, Ordering::SeqCst);
+                    BLOCK_LOCAL.store(false, Ordering::SeqCst);
+                    return event;
+                }
+            }
+        }
+        std::ptr::null_mut()
+    }
+
+    fn start_block_tap() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            std::thread::Builder::new()
+                .name("streamaid-hid-lock".into())
+                .spawn(|| unsafe {
+                    let tap = CGEventTapCreate(
+                        SESSION_TAP,
+                        0,
+                        0,
+                        u64::MAX,
+                        block_tap,
+                        std::ptr::null_mut(),
+                    );
+                    if tap.is_null() {
+                        return;
+                    }
+                    let src = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0);
+                    if src.is_null() {
+                        CFRelease(tap);
+                        return;
+                    }
+                    CFRunLoopAddSource(CFRunLoopGetCurrent(), src, kCFRunLoopCommonModes);
+                    CGEventTapEnable(tap, true);
+                    CFRunLoopRun();
+                })
+                .ok();
+        });
+    }
 
     #[link(name = "CoreGraphics", kind = "framework")]
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -942,8 +1023,28 @@ mod macos {
         );
         fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
         fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
+        fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+        fn CGEventGetFlags(event: CGEventRef) -> u64;
         fn CGEventSetFlags(event: CGEventRef, flags: u64);
+        fn CGEventTapCreate(
+            tap: u32,
+            place: u32,
+            options: u32,
+            events_of_interest: u64,
+            callback: extern "C" fn(*mut std::ffi::c_void, u32, CGEventRef, *mut std::ffi::c_void) -> CGEventRef,
+            user_info: *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+        fn CGEventTapEnable(tap: *mut std::ffi::c_void, enable: bool);
+        fn CFMachPortCreateRunLoopSource(
+            allocator: *mut std::ffi::c_void,
+            port: *mut std::ffi::c_void,
+            order: i64,
+        ) -> *mut std::ffi::c_void;
+        fn CFRunLoopGetCurrent() -> *mut std::ffi::c_void;
+        fn CFRunLoopAddSource(rl: *mut std::ffi::c_void, source: *mut std::ffi::c_void, mode: *const std::ffi::c_void);
+        fn CFRunLoopRun();
         fn CFRelease(cf: *mut std::ffi::c_void);
+        static kCFRunLoopCommonModes: *const std::ffi::c_void;
         fn CGMainDisplayID() -> u32;
         fn CGDisplayBounds(id: u32) -> CGRect;
         fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
@@ -1218,6 +1319,7 @@ else {
         if flags != 0 {
             CGEventSetFlags(ev, flags);
         }
+        CGEventSetIntegerValueField(ev, USER_DATA_FIELD, MAGIC_USER_DATA);
         CGEventPost(HID, ev);
         CFRelease(ev);
     }
@@ -1230,6 +1332,7 @@ else {
         if flags != 0 {
             CGEventSetFlags(ev, flags);
         }
+        CGEventSetIntegerValueField(ev, USER_DATA_FIELD, MAGIC_USER_DATA);
         CGEventPost(HID, ev);
         CFRelease(ev);
         let _ = KEY_DOWN;
@@ -1247,6 +1350,7 @@ else {
         if flags != 0 {
             CGEventSetFlags(ev, flags);
         }
+        CGEventSetIntegerValueField(ev, USER_DATA_FIELD, MAGIC_USER_DATA);
         CGEventPost(HID, ev);
         CFRelease(ev);
         let ev = CGEventCreateKeyboardEvent(std::ptr::null_mut(), 0, false);
@@ -1255,6 +1359,7 @@ else {
             if flags != 0 {
                 CGEventSetFlags(ev, flags);
             }
+            CGEventSetIntegerValueField(ev, USER_DATA_FIELD, MAGIC_USER_DATA);
             CGEventPost(HID, ev);
             CFRelease(ev);
         }
@@ -1280,6 +1385,7 @@ else {
                 flags: AtomicU64::new(0),
             };
             s.refresh_display_size();
+            start_block_tap();
             s
         }
         pub fn refresh_display_size(&self) {
@@ -1419,6 +1525,12 @@ else {
         fn clipboard_set_files(&self, paths: &[PathBuf]) {
             let _ = clipboard_set_files_os(paths);
         }
+        fn set_block_local(&self, on: bool) {
+            BLOCK_LOCAL.store(on, Ordering::SeqCst);
+        }
+        fn take_local_unlock(&self) -> bool {
+            UNLOCK.swap(false, Ordering::SeqCst)
+        }
         fn apply(&self, action: &Action) {
             let held = self.flags.load(Ordering::SeqCst);
             unsafe {
@@ -1482,6 +1594,7 @@ else {
                             if held != 0 {
                                 CGEventSetFlags(ev, held);
                             }
+                            CGEventSetIntegerValueField(ev, USER_DATA_FIELD, MAGIC_USER_DATA);
                             CGEventPost(HID, ev);
                             CFRelease(ev);
                         }

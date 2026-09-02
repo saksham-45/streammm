@@ -110,6 +110,12 @@ impl Injector for DisplaySwitchInjector {
     fn clipboard_set_files(&self, paths: &[std::path::PathBuf]) {
         self.inner.clipboard_set_files(paths);
     }
+    fn set_block_local(&self, on: bool) {
+        self.inner.set_block_local(on);
+    }
+    fn take_local_unlock(&self) -> bool {
+        self.inner.take_local_unlock()
+    }
 }
 
 impl App {
@@ -575,9 +581,15 @@ impl App {
         };
         drop(g);
         if ok && was_none {
+            self.sync_block_local();
             self.bump_status();
         }
         ok
+    }
+
+    fn sync_block_local(&self) {
+        let on = self.cfg.lock().control.block_local && self.controller.lock().is_some();
+        self.injector.set_block_local(on);
     }
 
     fn bump_status(&self) {
@@ -586,6 +598,7 @@ impl App {
 
     pub fn release_controller(&self) {
         *self.controller.lock() = None;
+        self.sync_block_local();
         self.bump_status();
     }
 
@@ -660,6 +673,9 @@ impl App {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(400)).await;
+                if app.injector.take_local_unlock() {
+                    app.release_controller();
+                }
                 let _ = app.poll_clipboard();
             }
         });
@@ -745,6 +761,8 @@ impl App {
                 "enabled": cfg.control.enabled,
                 "ai_enabled": cfg.control.ai_enabled,
                 "controller": self.controller.lock().is_some(),
+                "block_local": cfg.control.block_local,
+                "blocking": cfg.control.block_local && self.controller.lock().is_some(),
                 "files": self.files.list().len(),
             },
             "otp": {
@@ -978,6 +996,7 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
         app.publisher.start();
     }
     app.apply_display(&new_cfg.capture.input);
+    app.sync_block_local();
     app.push_otp_wire();
     if recapture {
         app.capture.restart(new_cfg);
@@ -2458,21 +2477,29 @@ mod tests {
         let path = dir.path().join("config.json");
         let mut cfg = crate::config::Config::default();
         cfg.control.enabled = true;
+        cfg.control.block_local = true;
         crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
         let app = App::new_for_test(
             cfg,
             path,
             FakeClock::new(),
-            FakeInjector::new(),
+            fake.clone(),
             Arc::new(DoneModel),
         );
         assert_eq!(app.status_json()["control"]["controller"], false);
+        assert!(!fake.block_local.load(std::sync::atomic::Ordering::SeqCst));
         app.handle_inbound_json(
             r#"{"type":"control","session":"abc","action":"click","x":0.1,"y":0.2}"#,
         );
         assert_eq!(app.status_json()["control"]["controller"], true);
+        assert_eq!(app.status_json()["control"]["blocking"], true);
+        assert!(fake.block_local.load(std::sync::atomic::Ordering::SeqCst));
+        fake.unlock.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(app.injector.take_local_unlock());
         app.release_controller();
         assert_eq!(app.status_json()["control"]["controller"], false);
+        assert!(!fake.block_local.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[tokio::test]

@@ -18,7 +18,7 @@
   <button id="gear" type="button">Settings</button>
 </header>
 <div id="analysis-banner" class="hidden">ANALYSIS ACTIVE</div>
-<div id="session-banner" class="hidden">REMOTE SESSION <button type="button" id="session-end">End</button></div>
+<div id="session-banner" class="hidden"><span id="session-banner-label">REMOTE SESSION</span> <button type="button" id="session-end">End</button></div>
 <main>
   <section id="stream-pane">
     <img id="stream-img" class="hidden" alt="screen stream">
@@ -111,6 +111,8 @@
   <label>Cloudflare watch URL <input id="cfg-watch" type="text" placeholder="wss://…/watch (optional)"></label>
   <label><input id="cfg-control-enabled" type="checkbox"> Allow remote computer use (kill switch off = blocked)</label>
   <p id="ctl-hint" class="cfg-hint hidden">Watchers can click (left/right/middle), drag, scroll, type, paste clipboard text or files, and drop files into the host inbox. Incoming files appear on the Desktop and on this Mac's pasteboard as Finder files (Cmd-V). Copy on this Mac (text, PNG, and Finder files) is pushed to the watcher automatically. Uncheck to kill remote input immediately after Save.</p>
+  <label id="block-local-fields" class="hidden"><input id="cfg-block-local" type="checkbox"> Block local input during remote session</label>
+  <p id="block-hint" class="cfg-hint hidden">While a watcher is driving, this Mac's keyboard and mouse are locked (remote inject still works). Press ⌘⇧Esc to reclaim — the End button will not receive clicks. Requires Accessibility.</p>
   <label><input id="cfg-ai-enabled" type="checkbox"> Allow AI computer use</label>
   <p id="ai-hint" class="cfg-hint hidden">Watchers (and this host page) can submit a task in Have AI use this computer. Cancel AI stops a running loop.</p>
   <label><input id="cfg-llm-enabled" type="checkbox"> LLM analysis</label>

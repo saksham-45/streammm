@@ -68,7 +68,7 @@ Remote control is **off by default**. On the origin UI, enable:
 
 macOS: grant **Streamaid** Accessibility (and Input Monitoring if prompted) in System Settings → Privacy & Security, in addition to Screen Recording. CI tests use a fake injector; they never post real HID events.
 
-One remote controller at a time. The origin UI shows a **REMOTE SESSION** banner with **End** (`POST /api/control/release`) while someone is driving. Local host input / the kill switch always wins.
+One remote controller at a time. The origin UI shows a **REMOTE SESSION** banner with **End** (`POST /api/control/release`) while someone is driving. Optional **Block local input during remote session** swallows this Mac's HID until **⌘⇧Esc** or End (End cannot be clicked while locked). Local host input / the kill switch always wins when unlocked.
 
 Control path: viewer WebSocket JSON → Durable Object → publisher WebSocket → origin injector. Type-4 LLM snapshots still never go to viewers.
 

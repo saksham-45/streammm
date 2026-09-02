@@ -200,6 +200,9 @@ pub struct ControlConfig {
     /// AI computer-use from OTP viewers. OFF by default.
     #[serde(default)]
     pub ai_enabled: bool,
+    /// Swallow host HID while a remote controller is driving. ⌘⇧Esc unlocks.
+    #[serde(default)]
+    pub block_local: bool,
 }
 
 impl CloudflareConfig {

@@ -122,6 +122,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "origin must show a remote-session banner with End"
     );
     assert!(
+        html.contains("id=\"cfg-block-local\"") && html.contains("id=\"block-hint\"") && html.contains("id=\"block-local-fields\""),
+        "block-local must be a Settings control revealed when remote control is on"
+    );
+    assert!(
         html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
         "origin analysis/AI/Ask chrome must not sit on the live stream"
     );
@@ -517,6 +521,9 @@ const nodes = {{
   "cfg-control-enabled": el(false),
   "llm-fields": el(true),
   "ctl-hint": el(true),
+  "block-local-fields": el(true),
+  "cfg-block-local": el(false),
+  "block-hint": el(true),
   "ai-hint": el(true),
   "cu-cancel": el(true),
   "cu-section": el(true),
@@ -571,6 +578,11 @@ nodes["cfg-control-enabled"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["ctl-hint"].classList.contains("hidden")) throw new Error("control hint still hidden after enable");
 if (nodes["files-section"].classList.contains("hidden")) throw new Error("files panel still hidden after control enable");
+if (nodes["block-local-fields"].classList.contains("hidden")) throw new Error("block-local still hidden after control enable");
+if (!nodes["block-hint"].classList.contains("hidden")) throw new Error("block hint visible while off");
+nodes["cfg-block-local"].checked = true;
+window.streamaidUi.syncFeatureUi();
+if (nodes["block-hint"].classList.contains("hidden")) throw new Error("block hint still hidden after enable");
 if (nodes["analysis-pane"].classList.contains("hidden")) throw new Error("side pane still hidden after control enable");
 if (!nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality visible in H.264 mode");
 if (nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate hidden in H.264 mode");

@@ -76,6 +76,7 @@ function featureFlags() {
     llm: llmEl ? !!llmEl.checked : !!(cfg && cfg.llm && cfg.llm.enabled),
     ai: aiEl ? !!aiEl.checked : !!(cfg && cfg.control && cfg.control.ai_enabled),
     ctl: ctlEl ? !!ctlEl.checked : !!(cfg && cfg.control && cfg.control.enabled),
+    block: ($("cfg-block-local") ? !!$("cfg-block-local").checked : !!(cfg && cfg.control && cfg.control.block_local)),
     audio: audioEl ? !!audioEl.checked : !!(cfg && cfg.capture && cfg.capture.audio),
     mjpeg: mode === "mjpeg",
   };
@@ -94,6 +95,8 @@ function syncFeatureUi() {
   const f = featureFlags();
   setHidden($("llm-fields"), !f.llm);
   setHidden($("ctl-hint"), !f.ctl);
+  setHidden($("block-local-fields"), !f.ctl);
+  setHidden($("block-hint"), !(f.ctl && f.block));
   setHidden($("ai-hint"), !f.ai);
   setHidden($("cu-cancel"), !f.ai);
   setHidden($("cu-section"), !f.ai);
@@ -179,6 +182,8 @@ function renderStatus(s) {
   }
   const ctl = (s && s.control) || {};
   setHidden($("session-banner"), !ctl.controller);
+  const lab = $("session-banner-label");
+  if (lab) lab.textContent = ctl.blocking ? "REMOTE SESSION · LOCAL INPUT LOCKED" : "REMOTE SESSION";
 }
 
 function wsUrl() {
@@ -1141,6 +1146,8 @@ function fillConfigForm(c) {
   set("cfg-watch", c.cloudflare && c.cloudflare.watch_url || "");
   const ctl = $("cfg-control-enabled");
   if (ctl) ctl.checked = !!(c.control && c.control.enabled);
+  const blk = $("cfg-block-local");
+  if (blk) blk.checked = !!(c.control && c.control.block_local);
   const ai = $("cfg-ai-enabled");
   if (ai) ai.checked = !!(c.control && c.control.ai_enabled);
   const en = $("cfg-llm-enabled");
@@ -1169,6 +1176,7 @@ function readConfigForm() {
     control: {
       enabled: !!(ctlEn && ctlEn.checked),
       ai_enabled: !!(aiEn && aiEn.checked),
+      block_local: !!( $("cfg-block-local") && $("cfg-block-local").checked ),
     },
     capture: {
       driver: "ffmpeg",
@@ -1344,7 +1352,7 @@ function onReady() {
       if (jv) jv.textContent = jpeg.value;
     });
   }
-  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio"].forEach(function (id) {
+  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-block-local"].forEach(function (id) {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", function () { syncFeatureUi(); });
