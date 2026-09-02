@@ -4,7 +4,7 @@ use crate::capture::{enumerate_devices, Capture, Device};
 use crate::chat;
 use crate::computer_use::{self, ActionModel};
 use crate::config::{self, Config};
-use crate::files::Inbox;
+use crate::files::{FolderZip, Inbox};
 use crate::headers::stream_header_map;
 use crate::hub::Hub;
 use crate::input::{self, FakeInjector, Injector};
@@ -76,6 +76,51 @@ impl Write for ChanWrite {
     }
     fn flush(&mut self) -> std::io::Result<()> {
         self.flush_buf()
+    }
+}
+
+fn zip_download_response(zip: FolderZip) -> Response {
+    let disp = format!(
+        "attachment; filename=\"{}\"",
+        zip.download_name.replace('"', "")
+    );
+    let len = zip.size;
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+    tokio::task::spawn_blocking(move || {
+        let mut w = ChanWrite {
+            tx: tx.clone(),
+            buf: Vec::with_capacity(64 * 1024),
+        };
+        if let Err(err) = zip.write_to(&mut w) {
+            let _ = tx.blocking_send(Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                err,
+            )));
+            return;
+        }
+        let _ = w.flush();
+    });
+    let mut res = Response::new(Body::from_stream(ReceiverStream::new(rx)));
+    res.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
+    if let Ok(v) = HeaderValue::from_str(&disp) {
+        res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&len.to_string()) {
+        res.headers_mut().insert(header::CONTENT_LENGTH, v);
+    }
+    res
+}
+
+fn zip_err_response(e: String) -> Response {
+    if e == "file not found" || e == "not a folder" {
+        json_err(StatusCode::NOT_FOUND, "file not found")
+    } else if e == "folder too large" {
+        json_err(StatusCode::CONFLICT, "folder too large")
+    } else if e == "file too large" {
+        json_err(StatusCode::PAYLOAD_TOO_LARGE, "file too large")
+    } else {
+        json_err(StatusCode::BAD_REQUEST, &e)
     }
 }
 
@@ -433,10 +478,10 @@ impl App {
                 }
                 let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
                 if action == "get" {
-                    let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let names = crate::files::names_from_value(&v);
                     let root = v.get("root").and_then(|n| n.as_str()).unwrap_or("inbox");
                     let path = v.get("path").and_then(|n| n.as_str()).unwrap_or("");
-                    if let Err(e) = self.files.emit_blob_at(root, path, name, |msg| {
+                    if let Err(e) = self.files.emit_blob_names_at(root, path, &names, |msg| {
                         self.publisher.push_wire(msg.clone());
                         let _ = self.clip_tx.send(msg);
                     }) {
@@ -1641,19 +1686,30 @@ async fn api_permissions_open(State(app): State<Arc<App>>, req: Request) -> Resp
     }
 }
 
-fn file_loc_from_query(query: &str) -> (String, String, String) {
-    let mut name = String::new();
+fn file_names_from_query(query: &str) -> (String, String, Vec<String>) {
+    let mut names = Vec::new();
     let mut root = String::from("inbox");
     let mut path = String::new();
     for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
         match &*k {
-            "name" => name = v.into_owned(),
+            "name" => {
+                if let Some(n) = crate::files::sanitize_name(&v) {
+                    if !names.contains(&n) && names.len() < crate::files::SEL_MAX {
+                        names.push(n);
+                    }
+                }
+            }
             "root" => root = v.into_owned(),
             "path" => path = v.into_owned(),
             _ => {}
         }
     }
-    (root, path, name)
+    (root, path, names)
+}
+
+fn file_loc_from_query(query: &str) -> (String, String, String) {
+    let (root, path, names) = file_names_from_query(query);
+    (root, path, names.into_iter().next().unwrap_or_default())
 }
 
 fn files_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> Result<(), Response> {
@@ -1823,19 +1879,17 @@ async fn api_files_transfer(app: Arc<App>, req: Request, moving: bool) -> Respon
     if !v.is_object() {
         return json_err(StatusCode::BAD_REQUEST, "expected JSON object");
     }
-    let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("").trim();
-    if name.is_empty() {
+    let names = crate::files::names_from_value(&v);
+    if names.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "missing name");
     }
     let root = v.get("root").and_then(|n| n.as_str()).unwrap_or("inbox");
     let path = v.get("path").and_then(|n| n.as_str()).unwrap_or("");
     let to_root = v.get("toRoot").and_then(|n| n.as_str()).unwrap_or(root);
     let to_path = v.get("toPath").and_then(|n| n.as_str()).unwrap_or("");
-    let result = if moving {
-        app.files.move_at(root, path, name, to_root, to_path)
-    } else {
-        app.files.copy_at(root, path, name, to_root, to_path)
-    };
+    let result = app
+        .files
+        .transfer_names_at(root, path, &names, to_root, to_path, moving);
     match result {
         Ok(ent) => Json(json!({
             "ok": true,
@@ -1866,11 +1920,11 @@ async fn api_files_delete(State(app): State<Arc<App>>, req: Request) -> Response
         return e;
     }
     let query = req.uri().query().unwrap_or("");
-    let (root, path, name) = file_loc_from_query(query);
-    if name.is_empty() {
+    let (root, path, names) = file_names_from_query(query);
+    if names.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "missing name");
     }
-    match app.files.remove_at(&root, &path, &name) {
+    match app.files.remove_names_at(&root, &path, &names) {
         Ok(ent) => Json(json!({
             "ok": true,
             "deleted": true,
@@ -1891,10 +1945,17 @@ async fn api_files_download(State(app): State<Arc<App>>, req: Request) -> Respon
         return e;
     }
     let query = req.uri().query().unwrap_or("");
-    let (root, path, name) = file_loc_from_query(query);
-    if name.is_empty() {
+    let (root, path, names) = file_names_from_query(query);
+    if names.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "missing name");
     }
+    if names.len() > 1 {
+        return match app.files.folder_zip_names_at(&root, &path, &names) {
+            Ok(zip) => zip_download_response(zip),
+            Err(e) => zip_err_response(e),
+        };
+    }
+    let name = names[0].clone();
     match app.files.readable_path_at(&root, &path, &name) {
         Ok((path, len)) => {
             let mut file = match tokio::fs::File::open(&path).await {
@@ -1934,44 +1995,8 @@ async fn api_files_download(State(app): State<Arc<App>>, req: Request) -> Respon
             res
         }
         Err(e) if e == "not a file" => match app.files.folder_zip_at(&root, &path, &name) {
-            Ok(zip) => {
-                let disp = format!(
-                    "attachment; filename=\"{}\"",
-                    zip.download_name.replace('"', "")
-                );
-                let len = zip.size;
-                let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(4);
-                tokio::task::spawn_blocking(move || {
-                    let mut w = ChanWrite {
-                        tx: tx.clone(),
-                        buf: Vec::with_capacity(64 * 1024),
-                    };
-                    if let Err(err) = zip.write_to(&mut w) {
-                        let _ = tx.blocking_send(Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            err,
-                        )));
-                        return;
-                    }
-                    let _ = w.flush();
-                });
-                let mut res = Response::new(Body::from_stream(ReceiverStream::new(rx)));
-                res.headers_mut()
-                    .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
-                if let Ok(v) = HeaderValue::from_str(&disp) {
-                    res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
-                }
-                if let Ok(v) = HeaderValue::from_str(&len.to_string()) {
-                    res.headers_mut().insert(header::CONTENT_LENGTH, v);
-                }
-                res
-            }
-            Err(e) if e == "file not found" || e == "not a folder" => {
-                json_err(StatusCode::NOT_FOUND, "file not found")
-            }
-            Err(e) if e == "folder too large" => json_err(StatusCode::CONFLICT, "folder too large"),
-            Err(e) if e == "file too large" => json_err(StatusCode::PAYLOAD_TOO_LARGE, "file too large"),
-            Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+            Ok(zip) => zip_download_response(zip),
+            Err(e) => zip_err_response(e),
         },
         Err(e) => json_err(StatusCode::NOT_FOUND, &e),
     }

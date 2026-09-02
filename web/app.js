@@ -795,9 +795,69 @@ function sendFileJson(msg) {
 let fileRoot = "inbox";
 let filePath = "";
 let fileClip = null;
+let fileSelected = [];
 
 function fileLocQuery() {
   return "root=" + encodeURIComponent(fileRoot) + "&path=" + encodeURIComponent(filePath);
+}
+
+function fileNamesQuery(names) {
+  let q = fileLocQuery();
+  (names || []).forEach(function (n) {
+    q += "&name=" + encodeURIComponent(n);
+  });
+  return q;
+}
+
+function selectedFileNames() {
+  return fileSelected.map(function (s) { return s.name; });
+}
+
+function selectedHasDir() {
+  return fileSelected.some(function (s) { return s.dir; });
+}
+
+function toggleFileSel(name, dir, on) {
+  const n = String(name || "").trim();
+  if (!n) return;
+  fileSelected = fileSelected.filter(function (s) { return s.name !== n; });
+  if (on) fileSelected.push({ name: n, dir: !!dir });
+  syncFileSel();
+}
+
+function pruneFileSel(files) {
+  const live = {};
+  (files || []).forEach(function (f) { if (f && f.name) live[f.name] = !!f.dir; });
+  fileSelected = fileSelected.filter(function (s) { return Object.prototype.hasOwnProperty.call(live, s.name); });
+  fileSelected.forEach(function (s) { s.dir = live[s.name]; });
+  syncFileSel();
+}
+
+function syncFileSel() {
+  const n = fileSelected.length;
+  const names = selectedFileNames();
+  ["file-sel-copy", "file-sel-cut", "file-sel-delete"].forEach(function (id) {
+    setHidden($(id), n === 0);
+  });
+  const get = $("file-sel-get");
+  if (get) {
+    setHidden(get, n === 0);
+    if (n) {
+      get.href = url("/api/files/download?" + fileNamesQuery(names));
+      get.download = n === 1 ? (fileSelected[0].dir ? names[0] + ".zip" : names[0]) : "files.zip";
+    }
+  }
+}
+
+function addFileCheck(li, f) {
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.setAttribute("aria-label", "Select " + f.name);
+  cb.checked = fileSelected.some(function (s) { return s.name === f.name; });
+  cb.addEventListener("click", function (ev) { ev.stopPropagation(); });
+  cb.addEventListener("change", function () { toggleFileSel(f.name, !!f.dir, cb.checked); });
+  li.appendChild(cb);
+  return cb;
 }
 
 function joinFilePath(base, name) {
@@ -812,6 +872,8 @@ function parentFilePath(p) {
 function browseFiles(root, path) {
   if (root) fileRoot = String(root);
   filePath = path == null ? filePath : String(path);
+  fileSelected = [];
+  syncFileSel();
   const roots = $("file-roots");
   if (roots) {
     roots.querySelectorAll("button").forEach(function (b) {
@@ -860,8 +922,10 @@ function renderFileList(files, root, path) {
     up.appendChild(btn);
     ul.appendChild(up);
   }
+  pruneFileSel(files);
   (files || []).forEach(function (f) {
     const li = document.createElement("li");
+    addFileCheck(li, f);
     if (f.dir) {
       const open = document.createElement("button");
       open.type = "button";
@@ -952,12 +1016,20 @@ function renameInboxFile(from, to) {
   return dest;
 }
 
+function clipNames(clip) {
+  if (!clip) return [];
+  if (clip.names && clip.names.length) return clip.names.slice();
+  return clip.name ? [clip.name] : [];
+}
+
 function syncFilePaste() {
   const btn = $("file-paste");
   if (!btn) return;
-  if (fileClip && fileClip.name) {
+  const names = clipNames(fileClip);
+  if (names.length) {
     setHidden(btn, false);
-    btn.textContent = (fileClip.op === "move" ? "Move" : "Paste") + " " + fileClip.name + " here";
+    const label = names.length === 1 ? names[0] : (names.length + " items");
+    btn.textContent = (fileClip.op === "move" ? "Move" : "Paste") + " " + label + " here";
   } else {
     setHidden(btn, true);
     btn.textContent = "Paste here";
@@ -965,34 +1037,39 @@ function syncFilePaste() {
 }
 
 function clipFile(op, name) {
-  const n = String(name || "").trim();
-  if (!n || (op !== "copy" && op !== "move")) {
+  const names = (Array.isArray(name) ? name : [name]).map(function (n) {
+    return String(n || "").trim();
+  }).filter(Boolean);
+  if (!names.length || (op !== "copy" && op !== "move")) {
     fileClip = null;
     syncFilePaste();
     return null;
   }
-  fileClip = { op: op, root: fileRoot, path: filePath, name: n };
+  fileClip = { op: op, root: fileRoot, path: filePath, name: names[0], names: names };
   syncFilePaste();
   const out = $("file-out");
-  if (out) out.textContent = (op === "move" ? "cut " : "copied ") + n + " — browse to a folder and Paste here";
+  const label = names.length === 1 ? names[0] : (names.length + " items");
+  if (out) out.textContent = (op === "move" ? "cut " : "copied ") + label + " — browse to a folder and Paste here";
   return fileClip;
 }
 
 function pasteHere() {
   const out = $("file-out");
-  if (!fileClip || !fileClip.name) return;
+  const names = clipNames(fileClip);
+  if (!names.length) return;
   const clip = fileClip;
   const msg = {
     type: "file",
     action: clip.op,
-    name: clip.name,
+    name: names[0],
+    names: names,
     root: clip.root,
     path: clip.path,
     toRoot: fileRoot,
     toPath: filePath
   };
   if (sendFileJson(msg)) {
-    if (out) out.textContent = (clip.op === "move" ? "moving " : "copying ") + clip.name + "…";
+    if (out) out.textContent = (clip.op === "move" ? "moving " : "copying ") + (names.length === 1 ? names[0] : (names.length + " items")) + "…";
     if (clip.op === "move") fileClip = null;
     syncFilePaste();
     return;
@@ -1005,7 +1082,7 @@ function pasteHere() {
     body: JSON.stringify(msg)
   }).then(function (r) { return r.json(); }).then(function (body) {
     if (!body) return;
-    if (out) out.textContent = body.error ? ("error: " + body.error) : ((clip.op === "move" ? "moved " : "copied ") + (body.name || clip.name));
+    if (out) out.textContent = body.error ? ("error: " + body.error) : ((clip.op === "move" ? "moved " : "copied ") + (body.name || names[0]));
     if (clip.op === "move") fileClip = null;
     syncFilePaste();
     refreshFiles();
@@ -1074,6 +1151,54 @@ function deleteInboxFile(name, isDir) {
     .catch(function (err) {
       if (out) out.textContent = "error: " + err.message;
     });
+}
+
+function deleteInboxFiles(names, hasDir) {
+  const list = (names || []).map(function (n) { return String(n || "").trim(); }).filter(Boolean);
+  if (!list.length) return;
+  if (list.length === 1) {
+    deleteInboxFile(list[0], hasDir);
+    return;
+  }
+  const out = $("file-out");
+  if (typeof window.confirm === "function"
+      && !window.confirm("Delete " + list.length + " items" + (hasDir ? " and everything inside folders" : "") + "?")) {
+    return;
+  }
+  if (sendFileJson({ type: "file", action: "delete", name: list[0], names: list, root: fileRoot, path: filePath })) {
+    if (out) out.textContent = "deleting " + list.length + " items…";
+    return;
+  }
+  if (typeof fetch !== "function") return;
+  fetch(url("/api/files?" + fileNamesQuery(list)), { method: "DELETE" })
+    .then(function (r) { return r.json(); })
+    .then(function (body) {
+      if (!body) return;
+      if (out) out.textContent = body.error ? ("error: " + body.error) : ("deleted " + list.length + " items");
+      refreshFiles();
+    })
+    .catch(function (err) {
+      if (out) out.textContent = "error: " + err.message;
+    });
+}
+
+function bindFileSel() {
+  const copy = $("file-sel-copy");
+  if (copy && !copy.dataset.selBound) {
+    copy.dataset.selBound = "1";
+    copy.addEventListener("click", function () { clipFile("copy", selectedFileNames()); });
+  }
+  const cut = $("file-sel-cut");
+  if (cut && !cut.dataset.selBound) {
+    cut.dataset.selBound = "1";
+    cut.addEventListener("click", function () { clipFile("move", selectedFileNames()); });
+  }
+  const del = $("file-sel-delete");
+  if (del && !del.dataset.selBound) {
+    del.dataset.selBound = "1";
+    del.addEventListener("click", function () { deleteInboxFiles(selectedFileNames(), selectedHasDir()); });
+  }
+  syncFileSel();
 }
 
 function renderRecordingsList(files, recording, name) {
@@ -2233,6 +2358,7 @@ function onReady() {
   bindFileRoots($("file-roots"));
   bindFileMkdir($("file-mkdir"));
   bindFilePaste($("file-paste"));
+  bindFileSel();
   syncFilePaste();
   const fileInput = $("file-input");
   if (fileInput) {
@@ -2428,6 +2554,8 @@ if (typeof window !== "undefined") {
     renameInboxFile: renameInboxFile,
     clipFile: clipFile,
     pasteHere: pasteHere,
+    selectedFileNames: selectedFileNames,
+    deleteInboxFiles: deleteInboxFiles,
   };
 }
 

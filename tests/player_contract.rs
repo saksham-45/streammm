@@ -326,6 +326,13 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must reveal Get on folders as a zip download"
     );
     assert!(
+        html.contains("id=\"file-sel-copy\"")
+            && html.contains("id=\"file-sel-get\"")
+            && js.contains("type = \"checkbox\"")
+            && js.contains("names: names"),
+        "enabling remote control must reveal multi-select Copy/Cut/Get/Delete"
+    );
+    assert!(
         html.contains("id=\"file-mkdir\"")
             && js.contains("function mkdirInboxFolder")
             && js.contains("action: \"mkdir\""),
@@ -502,6 +509,13 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         s.contains("startInboxGet(f.name, 0, f.name + \".zip\")")
             && s.contains("saveAs"),
         "watch page must Get folders as a zip download"
+    );
+    assert!(
+        s.contains("id=\"file-sel-copy\"")
+            && s.contains("type = \"checkbox\"")
+            && s.contains("files.zip")
+            && s.contains("names: names"),
+        "watch page must reveal multi-select Copy/Cut/Get/Delete"
     );
     assert!(
         s.contains("id=\"file-mkdir\"")

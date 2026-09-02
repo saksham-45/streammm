@@ -13,6 +13,7 @@ pub const HTTP_PUT_MAX: usize = 8 * 1024 * 1024;
 pub const MAX_CHUNK: usize = 24 * 1024;
 pub const MAX_NAME: usize = 128;
 pub const RM_MAX: usize = 2000;
+pub const SEL_MAX: usize = 100;
 
 fn b64_engine() -> &'static base64::engine::GeneralPurpose {
     &base64::engine::general_purpose::STANDARD
@@ -492,6 +493,43 @@ impl Inbox {
         self.transfer_at(from_root, from_rel, name, to_root, to_rel, true)
     }
 
+    pub fn transfer_names_at(
+        &self,
+        from_root: &str,
+        from_rel: &str,
+        names: &[String],
+        to_root: &str,
+        to_rel: &str,
+        moving: bool,
+    ) -> Result<FileEntry, String> {
+        let names = unique_names(names);
+        if names.is_empty() {
+            return Err("missing name".into());
+        }
+        let mut last = None;
+        for name in &names {
+            last = Some(self.transfer_at(from_root, from_rel, name, to_root, to_rel, moving)?);
+        }
+        last.ok_or_else(|| "missing name".into())
+    }
+
+    pub fn remove_names_at(
+        &self,
+        root: &str,
+        rel: &str,
+        names: &[String],
+    ) -> Result<FileEntry, String> {
+        let names = unique_names(names);
+        if names.is_empty() {
+            return Err("missing name".into());
+        }
+        let mut last = None;
+        for name in &names {
+            last = Some(self.remove_at(root, rel, name)?);
+        }
+        last.ok_or_else(|| "missing name".into())
+    }
+
     fn transfer_at(
         &self,
         from_root: &str,
@@ -600,6 +638,48 @@ impl Inbox {
             return Err("not a folder".into());
         }
         FolderZip::from_dir(&path)
+    }
+
+    pub fn folder_zip_names_at(
+        &self,
+        root: &str,
+        rel: &str,
+        names: &[String],
+    ) -> Result<FolderZip, String> {
+        let names = unique_names(names);
+        if names.is_empty() {
+            return Err("missing name".into());
+        }
+        if names.len() == 1 {
+            return self.folder_zip_at(root, rel, &names[0]);
+        }
+        let mut entries = Vec::new();
+        for name in &names {
+            let path = self.join_under(root, rel, name)?;
+            if !path.exists() {
+                return Err("file not found".into());
+            }
+            entries.push((name.clone(), path));
+        }
+        FolderZip::from_named_paths("files.zip".into(), &entries)
+    }
+
+    pub fn emit_blob_names_at<F: FnMut(String)>(
+        &self,
+        root: &str,
+        rel: &str,
+        names: &[String],
+        emit: F,
+    ) -> Result<(), String> {
+        let names = unique_names(names);
+        if names.is_empty() {
+            return Err("missing name".into());
+        }
+        if names.len() == 1 {
+            return self.emit_blob_at(root, rel, &names[0], emit);
+        }
+        let zip = self.folder_zip_names_at(root, rel, &names)?;
+        emit_zip_blob(&zip, emit)
     }
 
     pub fn emit_blob_at<F: FnMut(String)>(
@@ -801,9 +881,9 @@ impl Inbox {
                 }
             }
             "get" => {
-                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let names = names_from_value(v);
                 let mut out = Vec::new();
-                match self.emit_blob_at(root, rel, name, |m| out.push(m)) {
+                match self.emit_blob_names_at(root, rel, &names, |m| out.push(m)) {
                     Ok(()) => out,
                     Err(e) => vec![err_json(&e)],
                 }
@@ -827,16 +907,17 @@ impl Inbox {
                 }
             }
             "copy" | "move" => {
-                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let names = names_from_value(v);
                 let to_root = v.get("toRoot").and_then(|n| n.as_str()).unwrap_or(root);
                 let to_rel = v.get("toPath").and_then(|n| n.as_str()).unwrap_or("");
                 let moving = action == "move";
-                match self.transfer_at(root, rel, name, to_root, to_rel, moving) {
+                match self.transfer_names_at(root, rel, &names, to_root, to_rel, moving) {
                     Ok(ent) => vec![
                         json!({
                             "type": "file",
                             "action": if moving { "moved" } else { "copied" },
                             "name": ent.name,
+                            "names": names,
                             "dir": ent.dir,
                             "root": normalize_root(to_root).unwrap_or("inbox"),
                             "path": sanitize_rel(to_rel).unwrap_or_default()
@@ -868,13 +949,14 @@ impl Inbox {
                 }
             }
             "delete" => {
-                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                match self.remove_at(root, rel, name) {
+                let names = names_from_value(v);
+                match self.remove_names_at(root, rel, &names) {
                     Ok(ent) => vec![
                         json!({
                             "type": "file",
                             "action": "deleted",
                             "name": ent.name,
+                            "names": names,
                             "size": ent.size,
                             "root": normalize_root(root).unwrap_or("inbox"),
                             "path": sanitize_rel(rel).unwrap_or_default()
@@ -894,6 +976,43 @@ pub fn folder_zip_name(name: &str) -> String {
     format!("{name}.zip")
 }
 
+pub fn names_from_value(v: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(arr) = v.get("names").and_then(|a| a.as_array()) {
+        for n in arr {
+            if let Some(s) = n.as_str().and_then(sanitize_name) {
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            }
+            if out.len() >= SEL_MAX {
+                break;
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Some(s) = v.get("name").and_then(|n| n.as_str()).and_then(sanitize_name) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+fn unique_names(names: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in names {
+        if let Some(s) = sanitize_name(n) {
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+        if out.len() >= SEL_MAX {
+            break;
+        }
+    }
+    out
+}
+
 struct ZipMember {
     name: String,
     src: Option<PathBuf>,
@@ -908,6 +1027,21 @@ pub struct FolderZip {
 }
 
 impl FolderZip {
+    fn from_members(download_name: String, members: Vec<ZipMember>) -> Result<Self, String> {
+        if members.is_empty() {
+            return Err("missing name".into());
+        }
+        let size = zip_store_len(&members);
+        if size > MAX_FILE as u64 {
+            return Err("file too large".into());
+        }
+        Ok(Self {
+            download_name,
+            size,
+            members,
+        })
+    }
+
     fn from_dir(dir: &Path) -> Result<Self, String> {
         let shown = dir
             .file_name()
@@ -918,15 +1052,28 @@ impl FolderZip {
         let mut n = 0usize;
         let mut bytes = 0u64;
         collect_zip_tree(dir, &shown, &mut members, &mut n, &mut bytes)?;
-        let size = zip_store_len(&members);
-        if size > MAX_FILE as u64 {
-            return Err("file too large".into());
+        Self::from_members(folder_zip_name(&shown), members)
+    }
+
+    fn from_named_paths(download_name: String, entries: &[(String, PathBuf)]) -> Result<Self, String> {
+        let mut members = Vec::new();
+        let mut n = 0usize;
+        let mut bytes = 0u64;
+        for (name, path) in entries {
+            let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
+            let meta = fs::symlink_metadata(path).map_err(|_| "file not found".to_string())?;
+            if meta.file_type().is_symlink() {
+                return Err("invalid path".into());
+            }
+            if meta.is_dir() {
+                collect_zip_tree(path, &name, &mut members, &mut n, &mut bytes)?;
+            } else if meta.is_file() {
+                push_zip_file(&name, path, &meta, &mut members, &mut bytes)?;
+            } else {
+                return Err("not a file".into());
+            }
         }
-        Ok(Self {
-            download_name: folder_zip_name(&shown),
-            size,
-            members,
-        })
+        Self::from_members(download_name, members)
     }
 
     pub fn write_to<W: Write>(&self, w: &mut W) -> Result<(), String> {
@@ -961,6 +1108,33 @@ fn zip_store_len(members: &[ZipMember]) -> u64 {
         n = n.saturating_add(46 + name);
     }
     n
+}
+
+fn push_zip_file(
+    name: &str,
+    path: &Path,
+    meta: &fs::Metadata,
+    out: &mut Vec<ZipMember>,
+    bytes: &mut u64,
+) -> Result<(), String> {
+    if meta.len() > MAX_FILE as u64 {
+        return Err("file too large".into());
+    }
+    *bytes = bytes.saturating_add(meta.len());
+    if *bytes > MAX_FILE as u64 {
+        return Err("file too large".into());
+    }
+    let (crc, size) = crc32_file(path)?;
+    if u64::from(size) != meta.len() {
+        return Err("file changed".into());
+    }
+    out.push(ZipMember {
+        name: name.to_string(),
+        src: Some(path.to_path_buf()),
+        crc,
+        size,
+    });
+    Ok(())
 }
 
 fn collect_zip_tree(
@@ -1002,23 +1176,7 @@ fn collect_zip_tree(
         if meta.is_dir() {
             collect_zip_tree(&path, &format!("{prefix}/{name}"), out, n, bytes)?;
         } else if meta.is_file() {
-            if meta.len() > MAX_FILE as u64 {
-                return Err("file too large".into());
-            }
-            *bytes = bytes.saturating_add(meta.len());
-            if *bytes > MAX_FILE as u64 {
-                return Err("file too large".into());
-            }
-            let (crc, size) = crc32_file(&path)?;
-            if u64::from(size) != meta.len() {
-                return Err("file changed".into());
-            }
-            out.push(ZipMember {
-                name: format!("{prefix}/{name}"),
-                src: Some(path),
-                crc,
-                size,
-            });
+            push_zip_file(&format!("{prefix}/{name}"), &path, &meta, out, bytes)?;
         }
     }
     Ok(())
@@ -1823,5 +1981,82 @@ mod tests {
             inbox.folder_zip_at("inbox", "", "file.txt").err().as_deref(),
             Some("not a folder")
         );
+    }
+
+    #[test]
+    fn names_from_value_prefers_array_and_dedupes() {
+        let v = json!({"name": "a.txt", "names": ["b.txt", "b.txt", "../x", "c.txt"]});
+        assert_eq!(names_from_value(&v), vec!["b.txt".to_string(), "c.txt".to_string()]);
+        assert_eq!(
+            names_from_value(&json!({"name": "solo.txt"})),
+            vec!["solo.txt".to_string()]
+        );
+        assert!(names_from_value(&json!({"name": "../x"})).is_empty());
+    }
+
+    #[test]
+    fn selection_zip_and_bulk_copy_delete() {
+        let (_dir, inbox) = tmp_inbox();
+        inbox.put_bytes("a.txt", b"AAA").unwrap();
+        inbox.put_bytes("b.txt", b"BBB").unwrap();
+        inbox.mkdir_at("inbox", "", "Pack").unwrap();
+        inbox
+            .put_bytes_at("inbox", "Pack", "in.txt", b"IN")
+            .unwrap();
+        let zip = inbox
+            .folder_zip_names_at(
+                "inbox",
+                "",
+                &["a.txt".into(), "Pack".into(), "b.txt".into()],
+            )
+            .unwrap();
+        assert_eq!(zip.download_name, "files.zip");
+        let mut bytes = Vec::new();
+        zip.write_to(&mut bytes).unwrap();
+        assert_eq!(store_zip_file(&bytes, "a.txt"), Some(&b"AAA"[..]));
+        assert_eq!(store_zip_file(&bytes, "b.txt"), Some(&b"BBB"[..]));
+        assert_eq!(store_zip_file(&bytes, "Pack/in.txt"), Some(&b"IN"[..]));
+
+        let mut msgs = Vec::new();
+        inbox
+            .emit_blob_names_at(
+                "inbox",
+                "",
+                &["a.txt".into(), "b.txt".into()],
+                |m| msgs.push(m),
+            )
+            .unwrap();
+        assert!(msgs[0].contains("\"name\":\"files.zip\""), "{}", msgs[0]);
+
+        inbox
+            .transfer_names_at(
+                "inbox",
+                "",
+                &["a.txt".into(), "b.txt".into()],
+                "inbox",
+                "",
+                false,
+            )
+            .unwrap();
+        assert_eq!(inbox.get_bytes("a-1.txt").unwrap(), b"AAA");
+        assert_eq!(inbox.get_bytes("b-1.txt").unwrap(), b"BBB");
+
+        let cp = inbox.handle_message(&json!({
+            "action": "copy",
+            "names": ["a.txt", "b.txt"],
+            "toRoot": "inbox",
+            "toPath": "Pack"
+        }));
+        assert!(cp.iter().any(|m| m.contains("\"copied\"")), "{cp:?}");
+        assert!(inbox.join_under("inbox", "Pack", "a.txt").unwrap().is_file());
+        assert!(inbox.join_under("inbox", "Pack", "b.txt").unwrap().is_file());
+
+        let del = inbox.handle_message(&json!({
+            "action": "delete",
+            "names": ["a.txt", "b.txt"]
+        }));
+        assert!(del.iter().any(|m| m.contains("\"deleted\"")), "{del:?}");
+        assert!(inbox.get_bytes("a.txt").is_err());
+        assert!(inbox.get_bytes("b.txt").is_err());
     }
 }

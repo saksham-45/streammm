@@ -740,8 +740,13 @@ export class StreamRoom extends DurableObject<Env> {
       if (!this.flags.control) {
         return Response.json({ error: "remote control disabled" }, { status: 403, headers });
       }
-      const name = safeDownloadName(url.searchParams.get("name") ?? "");
-      if (!name) {
+      const names: string[] = [];
+      for (const raw of url.searchParams.getAll("name")) {
+        const n = safeDownloadName(raw);
+        if (n && !names.includes(n)) names.push(n);
+        if (names.length >= 100) break;
+      }
+      if (!names.length) {
         return Response.json({ error: "missing name" }, { status: 400, headers });
       }
       if (this.fileDl) {
@@ -755,10 +760,19 @@ export class StreamRoom extends DurableObject<Env> {
           this.fileDl = null;
         }
       }, 20_000);
+      const name = names.length > 1 ? "files.zip" : names[0];
       this.fileDl = { name, writer, timer };
       const root = cleanRoot(url.searchParams.get("root") ?? "");
       const path = cleanRel(url.searchParams.get("path") ?? "");
-      this.sendPublisher(JSON.stringify({ type: "file", action: "get", name, root, path, session: sess }));
+      this.sendPublisher(JSON.stringify({
+        type: "file",
+        action: "get",
+        name: names[0],
+        names,
+        root,
+        path,
+        session: sess,
+      }));
       const disp = `attachment; filename="${name.replace(/"/g, "")}"`;
       return new Response(readable, {
         headers: {

@@ -1379,6 +1379,70 @@ async fn files_put_list_download_and_reject_traversal() {
         "zip must contain the folder file"
     );
 
+    app.files.put_bytes("sel-a.txt", b"AAA").unwrap();
+    app.files.put_bytes("sel-b.txt", b"BBB").unwrap();
+    let multi_dl = router
+        .clone()
+        .oneshot(
+            Request::get("/api/files/download?name=sel-a.txt&name=sel-b.txt")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(multi_dl.status(), StatusCode::OK);
+    assert_eq!(
+        multi_dl
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("application/zip")
+    );
+    let multi_disp = multi_dl
+        .headers()
+        .get("content-disposition")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(multi_disp.contains("files.zip"), "{multi_disp}");
+    let multi_bytes = multi_dl.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&multi_bytes[..4], b"PK\x03\x04");
+    assert!(multi_bytes.windows(b"AAA".len()).any(|w| w == b"AAA"));
+    assert!(multi_bytes.windows(b"BBB".len()).any(|w| w == b"BBB"));
+
+    let bulk_copy = router
+        .clone()
+        .oneshot(
+            Request::post("/api/files/copy")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"names": ["sel-a.txt", "sel-b.txt"], "root": "inbox", "toRoot": "inbox", "toPath": "Pack"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bulk_copy.status(), StatusCode::OK);
+    assert!(app
+        .files
+        .join_under("inbox", "Pack", "sel-a.txt")
+        .unwrap()
+        .is_file());
+
+    let bulk_del = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/files?name=sel-a.txt&name=sel-b.txt")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bulk_del.status(), StatusCode::OK);
+    assert!(app.files.get_bytes("sel-a.txt").is_err());
+
     let copied = router
         .clone()
         .oneshot(

@@ -449,6 +449,43 @@ describe("StreamRoom", () => {
     pub.close();
   });
 
+  it("streams multi-select Get as files.zip", async () => {
+    const { pub, session } = await viewerSession("dl-multi");
+    pub.send(JSON.stringify({ type: "flags", control: true, ai: false }));
+    await new Promise((r) => setTimeout(r, 30));
+    const got = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes('"get"')) resolve(ev.data);
+      });
+    });
+    const dlP = SELF.fetch(
+      "https://example.com/api/files/download?name=a.txt&name=b.txt&session=" +
+        encodeURIComponent(session) +
+        "&room=dl-multi",
+    );
+    const getRaw = await Promise.race([
+      got,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no multi get")), 3000)),
+    ]);
+    const getMsg = JSON.parse(getRaw) as { action: string; name?: string; names?: string[] };
+    expect(getMsg.action).toBe("get");
+    expect(getMsg.names).toEqual(["a.txt", "b.txt"]);
+    pub.send(
+      JSON.stringify({
+        type: "file",
+        action: "blob",
+        name: "files.zip",
+        size: 4,
+        data: btoa("abcd"),
+      }),
+    );
+    const res = await dlP;
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("abcd");
+    expect(res.headers.get("content-disposition")).toContain("files.zip");
+    pub.close();
+  });
+
   it("rejects HTTP inbox Get when remote control is off or the name is unsafe", async () => {
     const { pub, session } = await viewerSession("dl-off");
     const off = await SELF.fetch(
