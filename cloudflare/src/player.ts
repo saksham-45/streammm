@@ -767,6 +767,13 @@ export const PLAYER_HTML = `<!doctype html>
     a.click();
     setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 2000);
   }
+  function deleteInboxFile(name) {
+    var out = document.getElementById("file-out");
+    if (!name) return;
+    if (sendFileJson({ type: "file", action: "delete", name: name })) {
+      if (out) out.textContent = "deleting " + name + "…";
+    }
+  }
   function startInboxGet(name, size) {
     var out = document.getElementById("file-out");
     function sendGet() {
@@ -804,6 +811,11 @@ export const PLAYER_HTML = `<!doctype html>
         startInboxGet(f.name, f.size);
       });
       li.appendChild(btn);
+      var del = document.createElement("button");
+      del.type = "button";
+      del.textContent = "Delete";
+      del.addEventListener("click", function () { deleteInboxFile(f.name); });
+      li.appendChild(del);
       ul.appendChild(li);
     });
   }
@@ -853,6 +865,11 @@ export const PLAYER_HTML = `<!doctype html>
       if (out) out.textContent = "saved " + (msg.name || "");
       sendFileJson({ type: "file", action: "list" });
       if (msg.offer && msg.name) showFileOffer(msg.name, msg.size);
+      return;
+    }
+    if (msg.action === "deleted") {
+      if (out) out.textContent = "deleted " + (msg.name || "");
+      sendFileJson({ type: "file", action: "list" });
       return;
     }
     if (msg.action === "error" && out) { out.textContent = "error: " + (msg.error || "file"); return; }

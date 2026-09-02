@@ -173,6 +173,19 @@ impl Inbox {
         .to_string()
     }
 
+    pub fn remove(&self, name: &str) -> Result<FileEntry, String> {
+        let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
+        let path = self.dest(&name)?;
+        let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+        let _ = fs::remove_file(self.part_path(&name));
+        self.incoming.lock().retain(|_, inc| inc.name != name);
+        Ok(FileEntry {
+            name,
+            size: meta.len(),
+        })
+    }
+
     pub fn get_bytes(&self, name: &str) -> Result<Vec<u8>, String> {
         let path = self.dest(name)?;
         let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
@@ -368,6 +381,22 @@ impl Inbox {
                     Err(e) => vec![err_json(&e)],
                 }
             }
+            "delete" => {
+                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                match self.remove(name) {
+                    Ok(ent) => vec![
+                        json!({
+                            "type": "file",
+                            "action": "deleted",
+                            "name": ent.name,
+                            "size": ent.size
+                        })
+                        .to_string(),
+                        self.list_json(),
+                    ],
+                    Err(e) => vec![err_json(&e)],
+                }
+            }
             _ => vec![err_json("unknown file action")],
         }
     }
@@ -527,6 +556,18 @@ mod tests {
         assert_eq!(inbox.get_bytes("hello.txt").unwrap(), b"hello world");
         assert!(inbox.get_bytes("../hello.txt").is_err());
         assert!(inbox.put_bytes("../x", b"no").is_err());
+        let gone = inbox.remove("hello.txt").unwrap();
+        assert_eq!(gone.name, "hello.txt");
+        assert!(inbox.list().is_empty());
+        assert!(inbox.remove("hello.txt").is_err());
+        assert!(inbox.remove("../hello.txt").is_err());
+        let del = serde_json::json!({"action":"delete","name":"nope.txt"});
+        let replies = inbox.handle_message(&del);
+        assert!(replies.iter().any(|m| m.contains("file not found")));
+        inbox.put_bytes("bye.txt", b"x").unwrap();
+        let replies = inbox.handle_message(&serde_json::json!({"action":"delete","name":"bye.txt"}));
+        assert!(replies.iter().any(|m| m.contains("\"deleted\"")));
+        assert!(inbox.list().is_empty());
     }
 
     #[test]

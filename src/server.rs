@@ -962,7 +962,10 @@ impl App {
             .route("/api/computer-use", post(api_computer_use))
             .route("/api/computer-use/cancel", post(api_computer_use_cancel))
             .route("/api/control/release", post(api_control_release))
-            .route("/api/files", get(api_files_list).post(api_files_put))
+            .route(
+                "/api/files",
+                get(api_files_list).post(api_files_put).delete(api_files_delete),
+            )
             .route("/api/files/download", get(api_files_download))
             .route("/api/recordings", get(api_recordings_list))
             .route("/api/recordings/download", get(api_recordings_download))
@@ -1644,6 +1647,29 @@ async fn api_files_put(State(app): State<Arc<App>>, req: Request) -> Response {
             app.offer_incoming_file(&ent.name);
             Json(json!({"ok": true, "name": ent.name, "size": ent.size})).into_response()
         }
+        Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+async fn api_files_delete(State(app): State<Arc<App>>, req: Request) -> Response {
+    if let Err(e) = files_ok(&app, req.headers(), req.uri()) {
+        return e;
+    }
+    let query = req.uri().query().unwrap_or("");
+    let mut name = String::new();
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        if k == "name" {
+            name = v.into_owned();
+        }
+    }
+    if name.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "missing name");
+    }
+    match app.files.remove(&name) {
+        Ok(ent) => Json(json!({"ok": true, "deleted": true, "name": ent.name, "size": ent.size}))
+            .into_response(),
+        Err(e) if e == "file not found" => json_err(StatusCode::NOT_FOUND, "file not found"),
+        Err(e) if e == "invalid file name" => json_err(StatusCode::BAD_REQUEST, "invalid file name"),
         Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
     }
 }

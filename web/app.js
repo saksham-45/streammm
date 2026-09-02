@@ -803,8 +803,33 @@ function renderFileList(files) {
     a.textContent = f.name + (f.size != null ? " (" + f.size + " B)" : "");
     a.download = f.name;
     li.appendChild(a);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", function () { deleteInboxFile(f.name); });
+    li.appendChild(del);
     ul.appendChild(li);
   });
+}
+
+function deleteInboxFile(name) {
+  const out = $("file-out");
+  if (!name) return;
+  if (sendFileJson({ type: "file", action: "delete", name: name })) {
+    if (out) out.textContent = "deleting " + name + "…";
+    return;
+  }
+  if (typeof fetch !== "function") return;
+  fetch(url("/api/files?name=" + encodeURIComponent(name)), { method: "DELETE" })
+    .then(function (r) { return r.json(); })
+    .then(function (body) {
+      if (!body) return;
+      if (out) out.textContent = body.error ? ("error: " + body.error) : ("deleted " + name);
+      refreshFiles();
+    })
+    .catch(function (err) {
+      if (out) out.textContent = "error: " + err.message;
+    });
 }
 
 function renderRecordingsList(files, recording, name) {
@@ -1124,6 +1149,11 @@ function handleFileMsg(msg) {
   }
   if (msg.action === "ok") {
     if (out) out.textContent = "saved " + (msg.name || "");
+    refreshFiles();
+    return;
+  }
+  if (msg.action === "deleted") {
+    if (out) out.textContent = "deleted " + (msg.name || "");
     refreshFiles();
     return;
   }

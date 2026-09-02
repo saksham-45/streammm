@@ -1234,6 +1234,7 @@ async fn files_put_list_download_and_reject_traversal() {
     let big = vec![9u8; streamaid::files::MAX_CHUNK + 32];
     app.files.put_bytes("big.bin", &big).unwrap();
     let big_dl = router
+        .clone()
         .oneshot(
             Request::get("/api/files/download?name=big.bin")
                 .header("Authorization", "Bearer s3cret")
@@ -1250,6 +1251,45 @@ async fn files_put_list_download_and_reject_traversal() {
     );
     let got = big_dl.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&got[..], &big[..]);
+
+    let del = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/files?name=hello.txt")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(del.status(), StatusCode::OK);
+    let deleted = body_json(del).await;
+    assert_eq!(deleted["deleted"], true);
+    assert_eq!(deleted["name"], "hello.txt");
+
+    let gone = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/files?name=hello.txt")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+
+    let traversal_del = router
+        .oneshot(
+            Request::delete("/api/files?name=../evil.txt")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (st, _) = json_error_body(traversal_del).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

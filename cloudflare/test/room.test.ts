@@ -393,6 +393,21 @@ describe("StreamRoom", () => {
     const listMsg = JSON.parse(listRaw) as { type: string; action: string; files: { name: string }[] };
     expect(listMsg.action).toBe("list");
     expect(listMsg.files[0].name).toBe("note.txt");
+
+    const delGot = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("\"delete\"")) resolve(ev.data);
+      });
+    });
+    view.send(JSON.stringify({ type: "file", action: "delete", name: "note.txt" }));
+    const delRaw = await Promise.race([
+      delGot,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no file delete")), 3000)),
+    ]);
+    const delMsg = JSON.parse(delRaw) as { type: string; action: string; name?: string };
+    expect(delMsg.type).toBe("file");
+    expect(delMsg.action).toBe("delete");
+    expect(delMsg.name).toBe("note.txt");
     pub.close();
     view.close();
   });
