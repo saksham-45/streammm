@@ -250,7 +250,7 @@ export const PLAYER_HTML = `<!doctype html>
   });
   bindControl(video);
   bindControl(canvas);
-  var FILE_MAX = 64 * 1024 * 1024;
+  var FILE_MAX = 2 * 1024 * 1024 * 1024;
   var FILE_CHUNK = 24 * 1024;
   var incomingFiles = {};
   var pendingUploads = {};
@@ -295,22 +295,36 @@ export const PLAYER_HTML = `<!doctype html>
       ul.appendChild(li);
     });
   }
-  function startChunkPump(id, name, u8, off) {
+  function startChunkPump(id, name, file, off) {
     var out = document.getElementById("file-out");
+    var total = file.size;
     function pump() {
-      var n = 0;
-      while (n < 8 && off < u8.length) {
-        var end = Math.min(off + FILE_CHUNK, u8.length);
-        sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(u8.subarray(off, end)) });
-        off = end;
-        n += 1;
-      }
-      if (out) out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / u8.length)) + "%";
-      if (off >= u8.length) {
+      if (off >= total) {
         sendFileJson({ type: "file", action: "end", id: id });
+        if (out) out.textContent = "sending " + name + " 100%";
         return;
       }
-      setTimeout(pump, 0);
+      function next(n) {
+        if (off >= total) {
+          sendFileJson({ type: "file", action: "end", id: id });
+          if (out) out.textContent = "sending " + name + " 100%";
+          return;
+        }
+        if (n >= 8) {
+          setTimeout(pump, 0);
+          return;
+        }
+        var end = Math.min(off + FILE_CHUNK, total);
+        file.slice(off, end).arrayBuffer().then(function (buf) {
+          sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(new Uint8Array(buf)) });
+          off = end;
+          if (out) out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / total)) + "%";
+          next(n + 1);
+        }).catch(function () {
+          if (out) out.textContent = "error: failed to read " + name;
+        });
+      }
+      next(0);
     }
     pump();
   }
@@ -319,7 +333,7 @@ export const PLAYER_HTML = `<!doctype html>
     if (msg.action === "accept" && msg.id && pendingUploads[msg.id]) {
       var job = pendingUploads[msg.id];
       delete pendingUploads[msg.id];
-      startChunkPump(msg.id, job.name, job.u8, msg.offset || 0);
+      startChunkPump(msg.id, job.name, job.file, msg.offset || 0);
       return;
     }
     if (msg.action === "list") { renderFileList(msg.files || []); return; }
@@ -345,19 +359,19 @@ export const PLAYER_HTML = `<!doctype html>
       triggerDownload(msg.name, u8);
     }
   }
-  function uploadFileBytes(name, u8) {
+  function uploadFile(file) {
     var out = document.getElementById("file-out");
-    if (u8.length > FILE_MAX) { if (out) out.textContent = "file too large (64 MB max)"; return; }
-    if (out) out.textContent = "sending " + name + "…";
-    var id = "f" + Date.now().toString(36);
-    pendingUploads[id] = { name: name, u8: u8 };
-    sendFileJson({ type: "file", action: "begin", id: id, name: name, size: u8.length });
+    if (!file) return;
+    if (file.size > FILE_MAX) { if (out) out.textContent = "file too large (2 GB max)"; return; }
+    if (out) out.textContent = "sending " + file.name + "…";
+    var id = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    pendingUploads[id] = { name: file.name, file: file };
+    sendFileJson({ type: "file", action: "begin", id: id, name: file.name, size: file.size });
   }
   function uploadDroppedFiles(fileList) {
     if (!controlOn) return;
     Array.prototype.forEach.call(fileList || [], function (file) {
-      if (!file) return;
-      file.arrayBuffer().then(function (buf) { uploadFileBytes(file.name, new Uint8Array(buf)); }).catch(function () {});
+      uploadFile(file);
     });
   }
   function bindFileDrop(el) {

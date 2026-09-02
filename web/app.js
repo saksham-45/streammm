@@ -228,7 +228,7 @@ function applyClipboardPng(b64) {
   } catch (e) { /* ignore */ }
 }
 
-const FILE_MAX = 64 * 1024 * 1024;
+const FILE_MAX = 2 * 1024 * 1024 * 1024;
 const FILE_CHUNK = 24 * 1024;
 const pendingUploads = {};
 
@@ -272,30 +272,35 @@ function refreshFiles() {
   }).catch(function () {});
 }
 
-function uploadFileBytes(name, u8) {
+function uploadFile(file) {
   const out = $("file-out");
-  if (u8.length > FILE_MAX) {
-    if (out) out.textContent = "file too large (64 MB max)";
+  if (!file) return;
+  if (file.size > FILE_MAX) {
+    if (out) out.textContent = "file too large (2 GB max)";
     return;
   }
-  if (out) out.textContent = "sending " + name + "…";
   if (ws && ws.readyState === 1) {
-    const id = "f" + Date.now().toString(36);
-    pendingUploads[id] = { name: name, u8: u8 };
-    sendFileJson({ type: "file", action: "begin", id: id, name: name, size: u8.length });
+    if (out) out.textContent = "sending " + file.name + "…";
+    const id = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    pendingUploads[id] = { name: file.name, file: file };
+    sendFileJson({ type: "file", action: "begin", id: id, name: file.name, size: file.size });
     return;
   }
-  if (u8.length > 8 * 1024 * 1024) {
+  if (file.size > 8 * 1024 * 1024) {
     if (out) out.textContent = "file too large for HTTP; wait for the live session";
     return;
   }
   if (typeof fetch !== "function") return;
-  fetch(url("/api/files"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: name, data: bytesToB64(u8) }),
-  }).then(function (r) { return r.json(); }).then(function (body) {
-    if (out) out.textContent = body.error ? ("error: " + body.error) : ("saved " + (body.name || name));
+  file.arrayBuffer().then(function (buf) {
+    const u8 = new Uint8Array(buf);
+    return fetch(url("/api/files"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: file.name, data: bytesToB64(u8) }),
+    });
+  }).then(function (r) { return r && r.json(); }).then(function (body) {
+    if (!body) return;
+    if (out) out.textContent = body.error ? ("error: " + body.error) : ("saved " + (body.name || file.name));
     refreshFiles();
   }).catch(function (err) {
     if (out) out.textContent = "error: " + err.message;
@@ -305,10 +310,7 @@ function uploadFileBytes(name, u8) {
 function uploadDroppedFiles(fileList) {
   if (!featureFlags().ctl) return;
   Array.prototype.forEach.call(fileList || [], function (file) {
-    if (!file) return;
-    file.arrayBuffer().then(function (buf) {
-      uploadFileBytes(file.name, new Uint8Array(buf));
-    }).catch(function () {});
+    uploadFile(file);
   });
 }
 
@@ -493,24 +495,38 @@ function scheduleMseReconnect() {
   }, delay);
 }
 
-function startChunkPump(id, name, u8, off) {
+function startChunkPump(id, name, file, off) {
   const out = $("file-out");
+  const total = file.size;
   function pump() {
-    let n = 0;
-    while (n < 8 && off < u8.length) {
-      const end = Math.min(off + FILE_CHUNK, u8.length);
-      sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(u8.subarray(off, end)) });
-      off = end;
-      n += 1;
-    }
-    if (out) {
-      out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / u8.length)) + "%";
-    }
-    if (off >= u8.length) {
+    if (off >= total) {
       sendFileJson({ type: "file", action: "end", id: id });
+      if (out) out.textContent = "sending " + name + " 100%";
       return;
     }
-    setTimeout(pump, 0);
+    function next(n) {
+      if (off >= total) {
+        sendFileJson({ type: "file", action: "end", id: id });
+        if (out) out.textContent = "sending " + name + " 100%";
+        return;
+      }
+      if (n >= 8) {
+        setTimeout(pump, 0);
+        return;
+      }
+      const end = Math.min(off + FILE_CHUNK, total);
+      file.slice(off, end).arrayBuffer().then(function (buf) {
+        sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(new Uint8Array(buf)) });
+        off = end;
+        if (out) {
+          out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / total)) + "%";
+        }
+        next(n + 1);
+      }).catch(function () {
+        if (out) out.textContent = "error: failed to read " + name;
+      });
+    }
+    next(0);
   }
   pump();
 }
@@ -520,7 +536,7 @@ function handleFileMsg(msg) {
   if (msg.action === "accept" && msg.id && pendingUploads[msg.id]) {
     const job = pendingUploads[msg.id];
     delete pendingUploads[msg.id];
-    startChunkPump(msg.id, job.name, job.u8, msg.offset || 0);
+    startChunkPump(msg.id, job.name, job.file, msg.offset || 0);
     return;
   }
   if (msg.action === "list" && msg.files) {

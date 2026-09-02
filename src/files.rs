@@ -5,9 +5,10 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const MAX_FILE: usize = 64 * 1024 * 1024;
+pub const MAX_FILE: usize = 2 * 1024 * 1024 * 1024usize;
 pub const HTTP_PUT_MAX: usize = 8 * 1024 * 1024;
 pub const MAX_CHUNK: usize = 24 * 1024;
 pub const MAX_NAME: usize = 128;
@@ -60,7 +61,7 @@ impl FileEntry {
 
 struct Incoming {
     name: String,
-    buf: Vec<u8>,
+    written: usize,
     size: usize,
 }
 
@@ -137,10 +138,11 @@ impl Inbox {
 
     pub fn get_bytes(&self, name: &str) -> Result<Vec<u8>, String> {
         let path = self.dest(name)?;
-        let data = fs::read(&path).map_err(|_| "file not found".to_string())?;
-        if data.len() > MAX_FILE {
+        let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
+        if meta.len() as usize > MAX_FILE {
             return Err("file too large".into());
         }
+        let data = fs::read(&path).map_err(|_| "file not found".to_string())?;
         Ok(data)
     }
 
@@ -152,16 +154,17 @@ impl Inbox {
         }
         self.ensure_dir()?;
         let part = self.part_path(&name);
-        let mut buf = Vec::new();
-        if let Ok(existing) = fs::read(&part) {
-            if existing.len() < size && existing.len() <= MAX_FILE {
-                buf = existing;
+        let mut written = 0usize;
+        if let Ok(meta) = fs::metadata(&part) {
+            let n = meta.len() as usize;
+            if n < size && n <= MAX_FILE {
+                written = n;
             } else {
                 let _ = fs::remove_file(&part);
             }
         }
-        let offset = buf.len();
         let mut g = self.incoming.lock();
+        g.retain(|k, inc| k == &id || inc.name != name);
         if g.len() >= 4 && !g.contains_key(&id) {
             return Err("too many transfers".into());
         }
@@ -169,11 +172,11 @@ impl Inbox {
             id,
             Incoming {
                 name,
-                buf,
+                written,
                 size,
             },
         );
-        Ok(offset)
+        Ok(written)
     }
 
     pub fn chunk(&self, id: &str, data: &[u8]) -> Result<(), String> {
@@ -183,12 +186,18 @@ impl Inbox {
         }
         let mut g = self.incoming.lock();
         let inc = g.get_mut(&id).ok_or_else(|| "unknown transfer".to_string())?;
-        if inc.buf.len() + data.len() > inc.size || inc.buf.len() + data.len() > MAX_FILE {
+        let next = inc.written.saturating_add(data.len());
+        if next > inc.size || next > MAX_FILE {
             return Err("file too large".into());
         }
-        inc.buf.extend_from_slice(data);
         let part = self.part_path(&inc.name);
-        fs::write(&part, &inc.buf).map_err(|e| e.to_string())?;
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&part)
+            .map_err(|e| e.to_string())?;
+        f.write_all(data).map_err(|e| e.to_string())?;
+        inc.written = next;
         Ok(())
     }
 
@@ -200,16 +209,12 @@ impl Inbox {
             .remove(&id)
             .ok_or_else(|| "unknown transfer".to_string())?;
         let part = self.part_path(&inc.name);
-        if inc.buf.len() != inc.size {
-            let _ = fs::write(&part, &inc.buf);
+        let on_disk = fs::metadata(&part).map(|m| m.len() as usize).unwrap_or(0);
+        if inc.written != inc.size || on_disk != inc.size {
             return Err("incomplete file".into());
         }
         let dest = self.dest(&inc.name)?;
-        if part.exists() {
-            fs::rename(&part, &dest).map_err(|e| e.to_string())?;
-        } else {
-            return self.put_bytes(&inc.name, &inc.buf);
-        }
+        fs::rename(&part, &dest).map_err(|e| e.to_string())?;
         Ok(FileEntry {
             name: inc.name,
             size: inc.size as u64,
@@ -437,10 +442,25 @@ mod tests {
     }
 
     #[test]
-    fn oversized_put_rejected() {
+    fn oversized_begin_rejected_without_allocating() {
         let (_dir, inbox) = tmp_inbox();
-        let big = vec![0u8; MAX_FILE + 1];
-        assert!(inbox.put_bytes("big.bin", &big).is_err());
+        assert!(inbox.begin("t", "big.bin", MAX_FILE + 1).is_err());
+        assert!(inbox.begin("t", "zero.bin", 0).is_err());
+    }
+
+    #[test]
+    fn chunk_appends_to_part_file() {
+        let (_dir, inbox) = tmp_inbox();
+        assert_eq!(inbox.begin("t1", "a.bin", 8).unwrap(), 0);
+        inbox.chunk("t1", b"abcd").unwrap();
+        let part = inbox.dir.join("a.bin.part");
+        assert_eq!(fs::metadata(&part).unwrap().len(), 4);
+        inbox.chunk("t1", b"efgh").unwrap();
+        assert_eq!(fs::metadata(&part).unwrap().len(), 8);
+        let ent = inbox.end("t1").unwrap();
+        assert_eq!(ent.size, 8);
+        assert!(!part.exists());
+        assert_eq!(inbox.get_bytes("a.bin").unwrap(), b"abcdefgh");
     }
 
     #[test]
