@@ -214,28 +214,36 @@ pub fn enumerate_devices() -> Vec<Device> {
         return cg.into_iter().map(Device::from).collect();
     }
     ff.into_iter()
-        .map(|(dev_id, screen_idx, label)| {
-            let bounds = cg.get(screen_idx).or_else(|| cg.first());
-            let (x, y, width, height, main) = match bounds {
-                Some(b) => (b.x, b.y, b.width, b.height, b.main),
-                None => (0, 0, 0, 0, screen_idx == 0),
-            };
-            let name = if width > 0 {
-                format!("{label} — {width}×{height}")
-            } else {
-                label
-            };
-            Device {
-                id: format!("{dev_id}:"),
-                name,
-                x,
-                y,
-                width,
-                height,
-                main,
-            }
-        })
+        .map(|(dev_id, screen_idx, label)| device_from_ffmpeg_screen(&dev_id, screen_idx, &label, &cg))
         .collect()
+}
+
+/// Pair an AVFoundation `Capture screen N` entry with CG bounds at the same index.
+pub fn device_from_ffmpeg_screen(
+    dev_id: &str,
+    screen_idx: usize,
+    label: &str,
+    cg: &[DisplayInfo],
+) -> Device {
+    let bounds = crate::input::display_for_ffmpeg_screen(screen_idx, cg);
+    let (x, y, width, height, main) = match bounds {
+        Some(b) => (b.x, b.y, b.width, b.height, b.main),
+        None => (0, 0, 0, 0, screen_idx == 0),
+    };
+    let name = if width > 0 {
+        format!("{label} — {width}×{height}")
+    } else {
+        label.to_string()
+    };
+    Device {
+        id: format!("{dev_id}:"),
+        name,
+        x,
+        y,
+        width,
+        height,
+        main,
+    }
 }
 
 fn ffmpeg_avfoundation_screens() -> Vec<(String, usize, String)> {
@@ -417,6 +425,39 @@ mod tests {
         assert_eq!(after_stall, Duration::from_secs(1));
         let cold = next_capture_backoff(Duration::from_secs(2), false);
         assert_eq!(cold, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn ffmpeg_screen_1_gets_second_display_bounds_not_main() {
+        let cg = vec![
+            DisplayInfo {
+                id: "cg0".into(),
+                name: "main".into(),
+                x: 0,
+                y: 0,
+                width: 1440,
+                height: 900,
+                main: true,
+            },
+            DisplayInfo {
+                id: "cg1".into(),
+                name: "ext".into(),
+                x: 1440,
+                y: -200,
+                width: 2560,
+                height: 1440,
+                main: false,
+            },
+        ];
+        let d0 = device_from_ffmpeg_screen("2", 0, "Capture screen 0", &cg);
+        let d1 = device_from_ffmpeg_screen("3", 1, "Capture screen 1", &cg);
+        assert_eq!(d0.id, "2:");
+        assert!(d0.main);
+        assert_eq!((d0.x, d0.y, d0.width, d0.height), (0, 0, 1440, 900));
+        assert_eq!(d1.id, "3:");
+        assert!(!d1.main);
+        assert_eq!((d1.x, d1.y, d1.width, d1.height), (1440, -200, 2560, 1440));
+        assert!(d1.name.contains("2560×1440"));
     }
 
     #[test]

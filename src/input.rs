@@ -340,6 +340,21 @@ pub struct DisplayInfo {
     pub main: bool,
 }
 
+/// FFmpeg `Capture screen N` is `CGGetActiveDisplayList()[N]` (N=0 is main).
+/// Do not compact/filter the slice before indexing — that desyncs clicks.
+pub fn display_for_ffmpeg_screen(
+    screen_idx: usize,
+    cg: &[DisplayInfo],
+) -> Option<&DisplayInfo> {
+    if let Some(d) = cg.get(screen_idx) {
+        return Some(d);
+    }
+    if screen_idx == 0 {
+        return cg.iter().find(|d| d.main).or_else(|| cg.first());
+    }
+    cg.iter().filter(|d| !d.main).nth(screen_idx - 1)
+}
+
 pub fn pick_display<'a>(input: &str, displays: &'a [DisplayInfo]) -> Option<&'a DisplayInfo> {
     let want = input.trim();
     if !want.is_empty() {
@@ -782,7 +797,7 @@ mod macos {
 
     pub fn list_cg_displays() -> Vec<super::DisplayInfo> {
         unsafe {
-            let mut ids = [0u32; 16];
+            let mut ids = [0u32; 32];
             let mut n = 0u32;
             let err = CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut n);
             if err != 0 || n == 0 {
@@ -823,7 +838,6 @@ mod macos {
                         main,
                     }
                 })
-                .filter(|d| d.width > 0 && d.height > 0)
                 .collect()
         }
     }
@@ -1413,6 +1427,70 @@ mod tests {
         assert_eq!(
             map_norm_to_global(0.5, 0.5, 1920, 0, 1920, 1080),
             (2880.0, 540.0)
+        );
+    }
+
+    #[test]
+    fn ffmpeg_screen_index_uses_unfiltered_cg_list_order() {
+        let cg = vec![
+            DisplayInfo {
+                id: "0:".into(),
+                name: "main".into(),
+                width: 1440,
+                height: 900,
+                main: true,
+                ..Default::default()
+            },
+            DisplayInfo {
+                id: "1:".into(),
+                name: "ext".into(),
+                x: 1440,
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            },
+        ];
+        assert_eq!(display_for_ffmpeg_screen(0, &cg).unwrap().main, true);
+        assert_eq!(display_for_ffmpeg_screen(1, &cg).unwrap().x, 1440);
+        assert_eq!(display_for_ffmpeg_screen(1, &cg).unwrap().width, 1920);
+
+        // A zero-size slot must not compact the list: Capture screen 1 stays index 1.
+        let with_hole = vec![
+            DisplayInfo {
+                id: "0:".into(),
+                width: 0,
+                height: 0,
+                ..Default::default()
+            },
+            DisplayInfo {
+                id: "1:".into(),
+                name: "main".into(),
+                width: 1440,
+                height: 900,
+                main: true,
+                ..Default::default()
+            },
+            DisplayInfo {
+                id: "2:".into(),
+                name: "ext".into(),
+                x: 1920,
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            },
+        ];
+        assert_eq!(display_for_ffmpeg_screen(0, &with_hole).unwrap().width, 0);
+        assert_eq!(display_for_ffmpeg_screen(1, &with_hole).unwrap().main, true);
+        assert_eq!(display_for_ffmpeg_screen(2, &with_hole).unwrap().x, 1920);
+        let compacted: Vec<_> = with_hole
+            .iter()
+            .filter(|d| d.width > 0)
+            .cloned()
+            .collect();
+        assert_ne!(
+            display_for_ffmpeg_screen(1, &compacted).unwrap().x,
+            display_for_ffmpeg_screen(1, &with_hole).unwrap().x,
+            "filtering before index would send clicks to the wrong screen"
         );
     }
 
