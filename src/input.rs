@@ -96,6 +96,10 @@ pub enum Action {
     Paste {
         text: String,
     },
+    File {
+        name: String,
+        data: Vec<u8>,
+    },
     Wait {
         #[serde(default)]
         ms: u64,
@@ -348,6 +352,26 @@ pub fn parse_control_json(v: &serde_json::Value) -> Option<Action> {
         "paste" => Action::Paste {
             text: v.get("text").and_then(|x| x.as_str()).unwrap_or("").into(),
         },
+        "file" => {
+            let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let data = if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                t.as_bytes().to_vec()
+            } else if let Some(b64) = v.get("data").and_then(|d| d.as_str()) {
+                match crate::files::decode_b64(b64) {
+                    Ok(b) => b,
+                    Err(_) => return None,
+                }
+            } else {
+                return None;
+            };
+            if name.is_empty() || data.is_empty() || data.len() > crate::files::HTTP_PUT_MAX {
+                return None;
+            }
+            Action::File {
+                name: name.to_string(),
+                data,
+            }
+        }
         "wait" => Action::Wait {
             ms: v.get("ms").and_then(|x| x.as_u64()).unwrap_or(0),
         },
@@ -616,6 +640,10 @@ pub enum Injected {
     Paste {
         text: String,
     },
+    File {
+        name: String,
+        data: Vec<u8>,
+    },
 }
 
 impl Injected {
@@ -729,6 +757,10 @@ impl Injector for FakeInjector {
                 }
                 Injected::Paste { text: text.clone() }
             }
+            Action::File { name, data } => Injected::File {
+                name: name.clone(),
+                data: data.clone(),
+            },
             Action::Wait { .. } | Action::Done => return,
         };
         self.events.lock().push(ev);
@@ -1348,6 +1380,7 @@ end try"#
                         }
                         self.apply_key("v", None, &["Meta".into()]);
                     }
+                    Action::File { .. } => {}
                     Action::Wait { .. } | Action::Done => {}
                 }
             }
@@ -1489,6 +1522,14 @@ mod tests {
         let img = serde_json::json!({"action":"clipboard","mime":"image/png","data": png});
         match parse_control_json(&img) {
             Some(Action::ClipboardPng { png }) => assert!(is_png(&png)),
+            other => panic!("{other:?}"),
+        }
+        let file = serde_json::json!({"action":"file","name":"n.txt","text":"abc"});
+        match parse_control_json(&file) {
+            Some(Action::File { name, data }) => {
+                assert_eq!(name, "n.txt");
+                assert_eq!(data, b"abc");
+            }
             other => panic!("{other:?}"),
         }
     }

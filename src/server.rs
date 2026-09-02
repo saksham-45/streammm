@@ -72,6 +72,10 @@ impl Injector for DisplaySwitchInjector {
         if let input::Action::Display { id } = action {
             self.app.select_display(id);
         }
+        if let input::Action::File { name, data } = action {
+            let _ = self.app.files.put_bytes(name, data);
+            return;
+        }
         self.inner.apply(action);
     }
     fn set_screen_size(&self, w: u32, h: u32) {
@@ -2289,5 +2293,50 @@ mod tests {
         );
         assert_eq!(app.cfg.lock().capture.input, "9:");
         assert!(fake.recorded().iter().any(|e| matches!(e, crate::input::Injected::Display { id } if id == "9:")));
+    }
+
+    #[tokio::test]
+    async fn ai_file_action_lands_in_inbox() {
+        use crate::computer_use::ActionModel;
+        use crate::input::{Action, FakeInjector};
+        use crate::otp::FakeClock;
+
+        struct DropThenDone;
+        impl ActionModel for DropThenDone {
+            fn plan(&self, _task: &str, step: u32, _jpeg: &[u8]) -> Vec<Action> {
+                match step {
+                    0 => vec![
+                        Action::File {
+                            name: "from-ai.txt".into(),
+                            data: b"dropped".to_vec(),
+                        },
+                        Action::Done,
+                    ],
+                    _ => vec![Action::Done],
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.ai_enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake,
+            Arc::new(DropThenDone),
+        );
+        let applied = app.run_computer_use("save a note").await;
+        assert!(
+            applied
+                .iter()
+                .any(|a| matches!(a, Action::File { name, .. } if name == "from-ai.txt")),
+            "{applied:?}"
+        );
+        assert_eq!(app.files.get_bytes("from-ai.txt").unwrap(), b"dropped");
     }
 }

@@ -91,7 +91,7 @@ impl LlmActionModel {
         format!(
             "You operate a computer from a screenshot like a human at the keyboard and mouse. Task: {task}\nStep: {step}\n\
              Coordinates are normalized 0–1 relative to the image.\n\
-             Use right-click, drag (down/move/up), modifier keys, paste, and switch displays when a person would.\n\
+             Use right-click, drag (down/move/up), modifier keys, paste, clipboard images, inbox files, and switch displays when a person would.\n\
              If the task lists [displays]=JSON, pick another screen with action display and that id, then wait.\n\
              Respond ONLY with JSON: {{\"actions\":[{{\"action\":\"click\",\"x\":0.5,\"y\":0.5}},\
 {{\"action\":\"click\",\"x\":0.5,\"y\":0.5,\"button\":\"right\"}},\
@@ -101,6 +101,8 @@ impl LlmActionModel {
 {{\"action\":\"type\",\"text\":\"hi\"}},{{\"action\":\"key\",\"key\":\"Enter\"}},\
 {{\"action\":\"key\",\"key\":\"c\",\"modifiers\":[\"Meta\"]}},\
 {{\"action\":\"paste\",\"text\":\"clipboard text\"}},\
+{{\"action\":\"clipboard\",\"mime\":\"image/png\",\"data\":\"base64-png\"}},\
+{{\"action\":\"file\",\"name\":\"notes.txt\",\"text\":\"file body\"}},\
 {{\"action\":\"display\",\"id\":\"2:\"}},\
 {{\"action\":\"scroll\",\"x\":0.5,\"y\":0.5,\"dy\":-1}},{{\"action\":\"wait\",\"ms\":200}},\
 {{\"action\":\"done\"}}]}}."
@@ -403,6 +405,8 @@ mod tests {
         assert!(p.contains("down"));
         assert!(p.contains("display"));
         assert!(p.contains("[displays]"));
+        assert!(p.contains("image/png"));
+        assert!(p.contains("\"file\"") || p.contains("notes.txt"));
     }
 
     #[test]
@@ -448,6 +452,14 @@ mod tests {
             actions_from_model_json(&disp),
             vec![Action::Display { id: "3:".into() }]
         );
+        let file = serde_json::json!({"action":"file","name":"notes.txt","text":"hello"});
+        match actions_from_model_json(&file).as_slice() {
+            [Action::File { name, data }] => {
+                assert_eq!(name, "notes.txt");
+                assert_eq!(data, b"hello");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[tokio::test]
