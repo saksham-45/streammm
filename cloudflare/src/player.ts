@@ -14,9 +14,11 @@ export const PLAYER_HTML = `<!doctype html>
   #displays { display: none; gap: 8px; align-items: center; }
   #displays button { padding: 4px 8px; font-size: 12px; border-radius: 999px; }
   #displays button.on { border-color: var(--accent); color: var(--accent); }
-  #display-map { position: relative; width: 168px; height: 76px; background: #111; border: 1px solid var(--line); border-radius: 6px; flex-shrink: 0; }
-  #display-map .mon { position: absolute; border: 1px solid #555; background: #1c1c1c; border-radius: 3px; cursor: pointer; font-size: 9px; color: var(--muted); overflow: hidden; display: flex; align-items: center; justify-content: center; }
-  #display-map .mon.on { border-color: var(--accent); color: var(--accent); background: #182030; }
+  #display-map { position: relative; width: 220px; height: 100px; background: #111; border: 1px solid var(--line); border-radius: 6px; flex-shrink: 0; }
+  #display-map .mon { position: absolute; border: 1px solid #555; background: #1c1c1c; border-radius: 3px; cursor: pointer; font-size: 9px; color: var(--muted); overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 0; }
+  #display-map .mon-thumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+  #display-map .mon-label { position: relative; z-index: 1; color: #fff; text-shadow: 0 1px 2px #000, 0 0 6px #000; pointer-events: none; font-weight: 650; }
+  #display-map .mon.on { border-color: var(--accent); color: var(--accent); }
   h1 { font-size: 15px; margin: 0; letter-spacing: 0.14em; font-weight: 650; text-transform: uppercase; }
   #pill { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); }
   main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr); gap: 12px; padding: 12px; }
@@ -548,6 +550,22 @@ export const PLAYER_HTML = `<!doctype html>
       };
     });
   }
+  function paintMapThumbs() {
+    var map = document.getElementById("display-map");
+    if (!map || map.style.display === "none") return;
+    var dest = map.querySelector(".mon.on canvas.mon-thumb");
+    if (!dest) return;
+    var src = null;
+    if (video && video.style.display !== "none" && video.videoWidth) src = video;
+    else if (canvas && canvas.style.display !== "none" && canvas.width) src = canvas;
+    if (!src) return;
+    var w = src.videoWidth || src.width, h = src.videoHeight || src.height;
+    if (!w || !h) return;
+    if (dest.width !== w || dest.height !== h) { dest.width = w; dest.height = h; }
+    var ctx = dest.getContext("2d");
+    if (!ctx) return;
+    try { ctx.drawImage(src, 0, 0, w, h); } catch (e) {}
+  }
   function renderDisplays(list, current) {
     var wrap = document.getElementById("displays");
     var map = document.getElementById("display-map");
@@ -568,18 +586,43 @@ export const PLAYER_HTML = `<!doctype html>
       });
     }
     if (!map) return;
-    map.innerHTML = "";
-    if (devices.length < 2) { map.style.display = "none"; return; }
+    if (devices.length < 2) { map.style.display = "none"; map.innerHTML = ""; return; }
     map.style.display = "block";
-    layoutDisplayMap(devices, map.clientWidth || 168, map.clientHeight || 76).forEach(function (m) {
+    var idsKey = devices.map(function (d) { return d.id; }).join("|");
+    if (map.dataset.idsKey === idsKey && map.querySelector(".mon-thumb")) {
+      map.querySelectorAll(".mon").forEach(function (b) {
+        b.classList.toggle("on", b.dataset.id === current);
+      });
+      return;
+    }
+    var prev = {};
+    map.querySelectorAll(".mon").forEach(function (b) {
+      var c = b.querySelector("canvas.mon-thumb");
+      if (c && b.dataset.id) prev[b.dataset.id] = c;
+    });
+    map.innerHTML = "";
+    map.dataset.idsKey = idsKey;
+    layoutDisplayMap(devices, map.clientWidth || 220, map.clientHeight || 100).forEach(function (m) {
       var b = document.createElement("button");
       b.type = "button";
       b.className = "mon" + (m.id === current ? " on" : "");
+      b.dataset.id = m.id;
       b.style.left = m.left + "px";
       b.style.top = m.top + "px";
       b.style.width = m.width + "px";
       b.style.height = m.height + "px";
-      b.textContent = m.label;
+      var c = document.createElement("canvas");
+      c.className = "mon-thumb";
+      var old = prev[m.id];
+      if (old && old.width) {
+        c.width = old.width; c.height = old.height;
+        try { c.getContext("2d").drawImage(old, 0, 0); } catch (e) {}
+      }
+      b.appendChild(c);
+      var lab = document.createElement("span");
+      lab.className = "mon-label";
+      lab.textContent = m.label;
+      b.appendChild(lab);
       b.addEventListener("click", function () {
         if (!controlOn || !ws || ws.readyState !== 1) return;
         try { ws.send(JSON.stringify({ type: "display", id: m.id })); } catch (e) {}
@@ -808,6 +851,7 @@ export const PLAYER_HTML = `<!doctype html>
     startMse();
     refreshLlm();
     setInterval(refreshLlm, 4000);
+    setInterval(paintMapThumbs, 250);
   }
 
   document.getElementById("pin-form").addEventListener("submit", function (e) {

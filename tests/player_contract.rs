@@ -138,6 +138,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "host must show a clickable all-monitors map"
     );
     assert!(
+        js.contains("paintMapThumbs") && js.contains("mon-thumb"),
+        "host display map must paint a live thumbnail into the active monitor tile"
+    );
+    assert!(
         js.contains("function syncFeatureUi") && js.contains("syncFeatureUi()"),
         "enabling LLM/AI/control must drive a UI reveal helper"
     );
@@ -214,6 +218,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("display-map") && s.contains("layoutDisplayMap"),
         "watch page must show a TeamViewer-style all-monitors map"
+    );
+    assert!(
+        s.contains("paintMapThumbs") && s.contains("mon-thumb"),
+        "watch page display map must paint a live thumbnail into the active monitor tile"
     );
     assert!(!s.contains("Add ?token="));
     assert!(
