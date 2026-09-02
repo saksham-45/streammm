@@ -2,9 +2,11 @@
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub const CLIP_MAX: usize = 512 * 1024;
+pub const CLIP_FILES_MAX: usize = 8;
 /// 5K / dual-display screenshots as PNG; never truncate, never a 2 GB RAM blob.
 pub const CLIP_PNG_MAX: usize = 128 * 1024 * 1024;
 pub const PNG_SIG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -23,6 +25,42 @@ pub fn accept_png(png: Vec<u8>) -> Option<Vec<u8>> {
     } else {
         None
     }
+}
+
+/// Parse Finder / pasteboard file paths. Relative paths are dropped.
+pub fn parse_clipboard_file_paths(raw: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        if out.len() >= CLIP_FILES_MAX {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let path = if let Some(rest) = line.strip_prefix("file://") {
+            let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+            PathBuf::from(rest)
+        } else {
+            PathBuf::from(line)
+        };
+        if path.is_absolute() {
+            out.push(path);
+        }
+    }
+    out
+}
+
+pub fn file_clip_key(paths: &[PathBuf]) -> String {
+    let mut parts: Vec<String> = paths
+        .iter()
+        .map(|p| {
+            let len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            format!("{}:{len}", p.to_string_lossy())
+        })
+        .collect();
+    parts.sort();
+    format!("files:{}", parts.join("|"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -592,6 +630,9 @@ pub trait Injector: Send + Sync {
     fn clipboard_get_png(&self) -> Option<Vec<u8>> {
         None
     }
+    fn clipboard_get_files(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -667,6 +708,7 @@ pub struct FakeInjector {
     pub events: Arc<Mutex<Vec<Injected>>>,
     pub clip: Arc<Mutex<String>>,
     pub png: Arc<Mutex<Option<Vec<u8>>>>,
+    pub files: Arc<Mutex<Vec<PathBuf>>>,
     pub rect: Arc<Mutex<(i32, i32, u32, u32)>>,
 }
 
@@ -677,6 +719,9 @@ impl FakeInjector {
     pub fn recorded(&self) -> Vec<Injected> {
         self.events.lock().clone()
     }
+    pub fn clipboard_set_files(&self, paths: Vec<PathBuf>) {
+        *self.files.lock() = paths;
+    }
 }
 
 impl Default for FakeInjector {
@@ -685,6 +730,7 @@ impl Default for FakeInjector {
             events: Arc::new(Mutex::new(Vec::new())),
             clip: Arc::new(Mutex::new(String::new())),
             png: Arc::new(Mutex::new(None)),
+            files: Arc::new(Mutex::new(Vec::new())),
             rect: Arc::new(Mutex::new((0, 0, 0, 0))),
         }
     }
@@ -798,6 +844,9 @@ impl Injector for FakeInjector {
     fn clipboard_get_png(&self) -> Option<Vec<u8>> {
         self.png.lock().clone()
     }
+    fn clipboard_get_files(&self) -> Vec<PathBuf> {
+        self.files.lock().clone()
+    }
 }
 
 pub struct NullInjector;
@@ -813,6 +862,7 @@ mod macos {
         MouseButton, CLIP_MAX,
     };
     use std::io::Write;
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
@@ -1080,6 +1130,42 @@ end try"#
         accept_png(data)
     }
 
+    pub fn clipboard_get_files_os() -> Vec<PathBuf> {
+        let out = Command::new("osascript")
+            .args([
+                "-l",
+                "JavaScript",
+                "-e",
+                r#"
+ObjC.import('AppKit');
+var pb = $.NSPasteboard.generalPasteboard;
+var arr = pb.propertyListForType('NSFilenamesPboardType');
+if (!arr) '';
+else {
+  var n = Number(arr.count);
+  var out = [];
+  for (var i = 0; i < n; i++) out.push(ObjC.unwrap(arr.objectAtIndex(i)));
+  out.join('\n');
+}
+"#,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        let Ok(out) = out else {
+            return Vec::new();
+        };
+        if !out.status.success() {
+            return Vec::new();
+        }
+        let raw = String::from_utf8_lossy(&out.stdout);
+        super::parse_clipboard_file_paths(&raw)
+            .into_iter()
+            .filter(|p| p.is_file())
+            .take(super::CLIP_FILES_MAX)
+            .collect()
+    }
+
     unsafe fn post_mouse(
         ty: CGEventType,
         pos: CGPoint,
@@ -1291,6 +1377,9 @@ end try"#
         }
         fn clipboard_get_png(&self) -> Option<Vec<u8>> {
             clipboard_get_png_os()
+        }
+        fn clipboard_get_files(&self) -> Vec<PathBuf> {
+            clipboard_get_files_os()
         }
         fn apply(&self, action: &Action) {
             let held = self.flags.load(Ordering::SeqCst);
@@ -1537,6 +1626,22 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_clipboard_file_paths_keeps_absolute_and_caps() {
+        let raw = "/Users/me/a.pdf\nrelative.txt\nfile://localhost/Users/me/b.zip\n\n/tmp/c.doc";
+        let paths = parse_clipboard_file_paths(raw);
+        assert!(paths.iter().any(|p| p.ends_with("a.pdf")));
+        assert!(paths.iter().any(|p| p.ends_with("b.zip")));
+        assert!(paths.iter().any(|p| p.ends_with("c.doc")));
+        assert!(!paths.iter().any(|p| p.ends_with("relative.txt")));
+        let many = (0..20)
+            .map(|i| format!("/tmp/f{i}.bin"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(parse_clipboard_file_paths(&many).len(), CLIP_FILES_MAX);
+        assert_eq!(file_clip_key(&[]), "files:");
     }
 
     #[test]

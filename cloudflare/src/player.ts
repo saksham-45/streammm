@@ -313,6 +313,12 @@ export const PLAYER_HTML = `<!doctype html>
   document.addEventListener("paste", function (ev) {
     if (!controlOn) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
+    var files = ev.clipboardData && ev.clipboardData.files;
+    if (clipboardHasNonImageFiles(files)) {
+      ev.preventDefault();
+      uploadDroppedFiles(files);
+      return;
+    }
     var items = ev.clipboardData && ev.clipboardData.items;
     if (items) {
       for (var i = 0; i < items.length; i++) {
@@ -510,6 +516,14 @@ export const PLAYER_HTML = `<!doctype html>
     Array.prototype.forEach.call(fileList || [], function (file) {
       uploadFile(file);
     });
+  }
+  function clipboardHasNonImageFiles(files) {
+    if (!files || !files.length) return false;
+    for (var i = 0; i < files.length; i++) {
+      var t = files[i].type || "";
+      if (t.indexOf("image/") !== 0) return true;
+    }
+    return false;
   }
   function bindFileDrop(el) {
     if (!el) return;

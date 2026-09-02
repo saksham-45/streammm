@@ -411,6 +411,15 @@ function uploadDroppedFiles(fileList) {
   });
 }
 
+function clipboardHasNonImageFiles(files) {
+  if (!files || !files.length) return false;
+  for (let i = 0; i < files.length; i++) {
+    const t = files[i].type || "";
+    if (t.indexOf("image/") !== 0) return true;
+  }
+  return false;
+}
+
 function bindControl(el) {
   if (!el || el.dataset.ctlBound) return;
   el.dataset.ctlBound = "1";
@@ -1394,6 +1403,12 @@ function onReady() {
     if (isDrawerOpen()) return;
     if (!featureFlags().ctl) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
+    const files = ev.clipboardData && ev.clipboardData.files;
+    if (clipboardHasNonImageFiles(files)) {
+      ev.preventDefault();
+      uploadDroppedFiles(files);
+      return;
+    }
     const items = ev.clipboardData && ev.clipboardData.items;
     if (items) {
       for (let i = 0; i < items.length; i++) {

@@ -77,6 +77,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "origin UI must paste PNG clipboard through"
     );
     assert!(
+        js.contains("clipboardHasNonImageFiles") && js.contains("clipboardData.files"),
+        "origin UI must paste Finder files into the host inbox"
+    );
+    assert!(
         js.contains("128 * 1024 * 1024")
             && js.contains("pasteImageFile")
             && js.contains("phase: \"begin\"")
@@ -202,6 +206,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("paste"),
         "watch page must paste clipboard through"
+    );
+    assert!(
+        s.contains("clipboardHasNonImageFiles") && s.contains("clipboardData.files"),
+        "watch page must paste Finder files into the host inbox"
     );
     assert!(
         s.contains("image/png"),

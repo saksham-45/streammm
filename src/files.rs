@@ -136,6 +136,43 @@ impl Inbox {
         })
     }
 
+    /// Copy a host-side file into the inbox without loading it into RAM.
+    pub fn import_path(&self, src: &Path) -> Result<FileEntry, String> {
+        if !src.is_file() {
+            return Err("not a file".into());
+        }
+        let name = src
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| "invalid file name".to_string())?;
+        let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
+        let len = fs::metadata(src).map_err(|e| e.to_string())?.len();
+        if len > MAX_FILE as u64 {
+            return Err("file too large".into());
+        }
+        self.ensure_dir()?;
+        let dest = self.dest(&name)?;
+        if src.canonicalize().ok() == dest.canonicalize().ok() {
+            return Ok(FileEntry { name, size: len });
+        }
+        let tmp = self.part_path(&format!("import-{name}"));
+        fs::copy(src, &tmp).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &dest).map_err(|e| {
+            let _ = fs::remove_file(&tmp);
+            e.to_string()
+        })?;
+        Ok(FileEntry { name, size: len })
+    }
+
+    pub fn list_json(&self) -> String {
+        json!({
+            "type": "file",
+            "action": "list",
+            "files": self.list().iter().map(|e| e.to_json()).collect::<Vec<_>>()
+        })
+        .to_string()
+    }
+
     pub fn get_bytes(&self, name: &str) -> Result<Vec<u8>, String> {
         let path = self.dest(name)?;
         let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
@@ -283,12 +320,7 @@ impl Inbox {
     pub fn handle_message(&self, v: &Value) -> Vec<String> {
         let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
         match action {
-            "list" => vec![json!({
-                "type": "file",
-                "action": "list",
-                "files": self.list().iter().map(|e| e.to_json()).collect::<Vec<_>>()
-            })
-            .to_string()],
+            "list" => vec![self.list_json()],
             "put" => {
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let data = v.get("data").and_then(|d| d.as_str()).unwrap_or("");
@@ -430,6 +462,20 @@ mod tests {
         assert_eq!(inbox.get_bytes("hello.txt").unwrap(), b"hello world");
         assert!(inbox.get_bytes("../hello.txt").is_err());
         assert!(inbox.put_bytes("../x", b"no").is_err());
+    }
+
+    #[test]
+    fn import_path_copies_host_file_into_inbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("note.txt");
+        fs::write(&src, b"from-finder").unwrap();
+        let inbox = Inbox::new(dir.path().join("inbox"));
+        let ent = inbox.import_path(&src).unwrap();
+        assert_eq!(ent.name, "note.txt");
+        assert_eq!(ent.size, 11);
+        assert_eq!(inbox.get_bytes("note.txt").unwrap(), b"from-finder");
+        assert!(inbox.import_path(dir.path()).is_err());
+        assert!(inbox.list_json().contains("note.txt"));
     }
 
     #[test]

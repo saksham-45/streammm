@@ -102,6 +102,9 @@ impl Injector for DisplaySwitchInjector {
     fn clipboard_get_png(&self) -> Option<Vec<u8>> {
         self.inner.clipboard_get_png()
     }
+    fn clipboard_get_files(&self) -> Vec<std::path::PathBuf> {
+        self.inner.clipboard_get_files()
+    }
 }
 
 impl App {
@@ -462,6 +465,10 @@ impl App {
         if !self.cfg.lock().control.enabled {
             return false;
         }
+        let files = self.injector.clipboard_get_files();
+        if !files.is_empty() && self.push_clipboard_files(&files) {
+            return true;
+        }
         if let Some(png) = self.injector.clipboard_get_png() {
             if self.push_clipboard_png(&png) {
                 return true;
@@ -471,6 +478,44 @@ impl App {
             Some(text) => self.push_clipboard_text(&text),
             None => false,
         }
+    }
+
+    fn push_clipboard_files(&self, paths: &[std::path::PathBuf]) -> bool {
+        let key = input::file_clip_key(paths);
+        if key == "files:" {
+            return false;
+        }
+        {
+            let mut last = self.last_clip.lock();
+            if *last == key {
+                return false;
+            }
+            *last = key;
+        }
+        let mut any = false;
+        for p in paths.iter().take(input::CLIP_FILES_MAX) {
+            match self.files.import_path(p) {
+                Ok(ent) => {
+                    any = true;
+                    let msg = json!({
+                        "type": "file",
+                        "action": "ok",
+                        "name": ent.name,
+                        "size": ent.size
+                    })
+                    .to_string();
+                    self.publisher.push_wire(msg.clone());
+                    let _ = self.clip_tx.send(msg);
+                }
+                Err(_) => {}
+            }
+        }
+        if any {
+            let list = self.files.list_json();
+            self.publisher.push_wire(list.clone());
+            let _ = self.clip_tx.send(list);
+        }
+        any
     }
 
     fn spawn_clipboard_push(self: &Arc<Self>) {
@@ -2249,6 +2294,52 @@ mod tests {
             r#"{"type":"control","action":"clipboard","mime":"image/png","phase":"end"}"#,
         );
         assert_eq!(fake.clipboard_get_png().as_deref(), Some(TINY_PNG));
+    }
+
+    #[tokio::test]
+    async fn poll_clipboard_imports_host_finder_files() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("from-finder.txt");
+        std::fs::write(&src, b"finder-bytes").unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        fake.clipboard_set_files(vec![src]);
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        let mut rx = app.clip_tx.subscribe();
+        assert!(app.poll_clipboard(), "first Finder copy must land in inbox");
+        assert_eq!(app.files.get_bytes("from-finder.txt").unwrap(), b"finder-bytes");
+        let mut saw_ok = false;
+        let mut saw_list = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        while tokio::time::Instant::now() < deadline && (!saw_ok || !saw_list) {
+            match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+                Ok(Ok(m)) => {
+                    if m.contains("from-finder.txt") && m.contains("\"ok\"") {
+                        saw_ok = true;
+                    }
+                    if m.contains("\"list\"") && m.contains("from-finder.txt") {
+                        saw_list = true;
+                    }
+                }
+                _ => break,
+            }
+        }
+        assert!(saw_ok, "origin must fan file ok to the watcher");
+        assert!(saw_list, "origin must refresh the inbox list");
+        assert!(!app.poll_clipboard(), "unchanged Finder selection must not resend");
     }
 
     #[tokio::test]
