@@ -130,6 +130,25 @@ textarea:focus-visible {
   padding: 6px;
   letter-spacing: 3px;
 }
+#session-banner {
+  background: #7a4a10;
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  padding: 6px;
+  letter-spacing: 2px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+}
+#session-end {
+  letter-spacing: 0;
+  font-weight: 650;
+  background: #222;
+  color: #fff;
+  border: 1px solid #fff;
+}
 .hidden { display: none !important; }
 
 main {

@@ -322,7 +322,7 @@ impl App {
                 self.select_display(id);
             }
             "revoke" => {
-                *self.controller.lock() = None;
+                self.release_controller();
             }
             _ => {}
         }
@@ -560,18 +560,33 @@ impl App {
 
     fn take_controller(&self, session: &str) -> bool {
         let mut g = self.controller.lock();
-        match g.as_deref() {
+        let was_none = g.is_none();
+        let ok = match g.as_deref() {
             None => {
-                if session.is_empty() {
-                    *g = Some("anon".into());
+                *g = Some(if session.is_empty() {
+                    "anon".into()
                 } else {
-                    *g = Some(session.to_string());
-                }
+                    session.to_string()
+                });
                 true
             }
             Some(cur) if session.is_empty() || cur == session => true,
             Some(_) => false,
+        };
+        drop(g);
+        if ok && was_none {
+            self.bump_status();
         }
+        ok
+    }
+
+    fn bump_status(&self) {
+        let _ = self.events.send(sse_pack("status", &self.status_json()));
+    }
+
+    pub fn release_controller(&self) {
+        *self.controller.lock() = None;
+        self.bump_status();
     }
 
     pub async fn run_computer_use(self: &Arc<Self>, task: &str) -> Vec<input::Action> {
@@ -601,7 +616,7 @@ impl App {
 
     pub fn cancel_computer_use(&self) {
         self.ai_cancel.store(true, Ordering::SeqCst);
-        *self.controller.lock() = None;
+        self.release_controller();
     }
 
     pub fn start_background(self: &Arc<Self>) {
@@ -672,6 +687,7 @@ impl App {
             .route("/api/login", post(api_login))
             .route("/api/computer-use", post(api_computer_use))
             .route("/api/computer-use/cancel", post(api_computer_use_cancel))
+            .route("/api/control/release", post(api_control_release))
             .route("/api/files", get(api_files_list).post(api_files_put))
             .route("/api/files/download", get(api_files_download))
             .with_state(self)
@@ -1197,6 +1213,14 @@ async fn api_computer_use_cancel(State(app): State<Arc<App>>, req: Request) -> R
     }
     app.cancel_computer_use();
     Json(json!({"ok": true, "cancelled": true})).into_response()
+}
+
+async fn api_control_release(State(app): State<Arc<App>>, req: Request) -> Response {
+    if !host_ok(&app, req.headers(), req.uri()) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    app.release_controller();
+    Json(json!({"ok": true, "released": true})).into_response()
 }
 
 fn files_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> Result<(), Response> {
@@ -2422,6 +2446,33 @@ mod tests {
             !app.poll_clipboard(),
             "offering a Finder paste must not echo the same file back to the watcher"
         );
+    }
+
+    #[tokio::test]
+    async fn host_releases_remote_controller() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            FakeInjector::new(),
+            Arc::new(DoneModel),
+        );
+        assert_eq!(app.status_json()["control"]["controller"], false);
+        app.handle_inbound_json(
+            r#"{"type":"control","session":"abc","action":"click","x":0.1,"y":0.2}"#,
+        );
+        assert_eq!(app.status_json()["control"]["controller"], true);
+        app.release_controller();
+        assert_eq!(app.status_json()["control"]["controller"], false);
     }
 
     #[tokio::test]

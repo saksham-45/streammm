@@ -177,6 +177,8 @@ function renderStatus(s) {
   } else {
     qp.textContent = "quality —";
   }
+  const ctl = (s && s.control) || {};
+  setHidden($("session-banner"), !ctl.controller);
 }
 
 function wsUrl() {
@@ -1484,6 +1486,15 @@ function onReady() {
     ev.preventDefault();
     sendControl("paste", { text: text });
   });
+  const sessionEnd = $("session-end");
+  if (sessionEnd) {
+    sessionEnd.addEventListener("click", async function () {
+      try {
+        await fetch(url("/api/control/release"), { method: "POST" });
+        setHidden($("session-banner"), true);
+      } catch (err) { /* ignore */ }
+    });
+  }
   const cancelAi = $("cu-cancel");
   if (cancelAi) {
     cancelAi.addEventListener("click", async function () {

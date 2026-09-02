@@ -91,6 +91,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     assert!(js.contains("streamaid_viewer") || js.contains("hasViewerSession"));
     assert!(js.contains("/api/computer-use/cancel"));
     assert!(
+        js.contains("ctl.controller") && js.contains("/api/control/release"),
+        "host UI must reveal End session from status.control.controller"
+    );
+    assert!(
         js.contains("function currentToken") && js.contains("/api/login"),
         "host UI must read the live token and POST /api/login instead of blindly setting a cookie"
     );
@@ -112,6 +116,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     assert!(
         html.contains("id=\"login-error\""),
         "PIN/token unlock must surface an error instead of failing silently"
+    );
+    assert!(
+        html.contains("id=\"session-banner\"") && html.contains("id=\"session-end\""),
+        "origin must show a remote-session banner with End"
     );
     assert!(
         html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
