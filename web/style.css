@@ -90,6 +90,13 @@ main:has(#analysis-pane:not(.hidden)) {
 }
 #stream-error { color: #f88; font-size: 13px; margin-top: 8px; }
 
+aside {
+  background: #161616;
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 14px;
+  min-height: 0;
+}
 aside h2 { font-size: 15px; margin: 0 0 8px; }
 aside h3 { font-size: 13px; margin: 16px 0 6px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
 #llm-note { font-size: 12px; color: #9a9a9a; margin-bottom: 8px; line-height: 1.4; }
@@ -120,7 +127,9 @@ aside h3 { font-size: 13px; margin: 16px 0 6px; color: #aaa; text-transform: upp
 details { margin-top: 6px; font-size: 13px; color: #aaa; }
 summary { cursor: pointer; }
 
+#cu-form,
 #ask-form { display: flex; gap: 8px; margin: 12px 0; }
+#cu-task,
 #ask-input {
   flex: 1;
   background: #1a1a1a;
@@ -140,6 +149,7 @@ button {
   font: inherit;
 }
 button:disabled { opacity: 0.5; }
+#cu-out,
 #ask-result { font-size: 14px; }
 
 #history { list-style: none; padding: 0; margin: 0; font-size: 13px; }
@@ -208,6 +218,18 @@ button:disabled { opacity: 0.5; }
 #save { margin-top: 4px; }
 #save-note { font-size: 13px; color: #9c9; }
 #restart-note { font-size: 13px; color: #fc8; }
+#config-drawer .cfg-hint {
+  font-size: 12px;
+  color: #9a9a9a;
+  line-height: 1.35;
+  margin: -4px 0 2px;
+}
+#llm-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#cu-section { margin-bottom: 16px; }
 
 #login-overlay {
   position: fixed;

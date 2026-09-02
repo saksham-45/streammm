@@ -67,12 +67,14 @@ export const PLAYER_HTML = `<!doctype html>
     <div id="err"></div>
   </section>
   <aside>
+    <div id="cu-section" style="display:none">
     <h2>Have AI use this computer</h2>
     <form id="cu-form">
       <input id="cu-task" placeholder="Task for the host computer…" autocomplete="off">
       <button type="submit">Run</button>
     </form>
     <div id="cu-out"></div>
+    </div>
     <h2>Screen analysis</h2>
     <div id="llm-note">Waiting for DeepSeek key and a screenshot…</div>
     <div id="summary">No analysis yet.</div>
@@ -93,6 +95,7 @@ export const PLAYER_HTML = `<!doctype html>
   var LIVE = 0.45, CAP = 24;
   var session = "";
   var controlOn = false;
+  var aiOn = false;
   var pill = document.getElementById("pill");
   var err = document.getElementById("err");
   var video = document.getElementById("v");
@@ -240,9 +243,19 @@ export const PLAYER_HTML = `<!doctype html>
     }
   }
 
+  function applyFlags(ctl) {
+    controlOn = !!(ctl && (ctl.enabled || ctl.control));
+    aiOn = !!(ctl && (ctl.ai_enabled || ctl.ai));
+    var cu = document.getElementById("cu-section");
+    if (cu) cu.style.display = aiOn ? "block" : "none";
+  }
   function handleText(text) {
     try {
       var msg = JSON.parse(text);
+      if (msg && msg.type === "flags") {
+        applyFlags({ enabled: !!msg.control, ai_enabled: !!msg.ai });
+        return;
+      }
       if (msg && msg.type === "analysis") {
         renderAnalysis(msg.data);
         refreshLlm();
@@ -389,8 +402,7 @@ export const PLAYER_HTML = `<!doctype html>
       else note.textContent = "DeepSeek " + (st.model || "") + (st.analyzing ? " — analyzing" : " — ready");
       if (body.last) renderAnalysis(body.last);
       renderHistory(body.history);
-      var ctl = body.control || {};
-      controlOn = !!ctl.enabled;
+      applyFlags(body.control || {});
     }).catch(function () {});
   }
   document.getElementById("ask-form").addEventListener("submit", function (e) {

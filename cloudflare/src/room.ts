@@ -134,6 +134,7 @@ export class StreamRoom extends DurableObject<Env> {
         }
       }
     } else {
+      await this.hydrateAuth();
       if (this.lastInit) {
         try {
           server.send(this.lastInit);
@@ -147,6 +148,11 @@ export class StreamRoom extends DurableObject<Env> {
         } catch {
           /* ignore */
         }
+      }
+      try {
+        server.send(JSON.stringify({ type: "flags", control: this.flags.control, ai: this.flags.ai }));
+      } catch {
+        /* ignore */
       }
     }
 
@@ -208,6 +214,7 @@ export class StreamRoom extends DurableObject<Env> {
         this.flags.ai = !!v.ai;
         this.flagsHydrated = true;
         await this.ctx.storage.put("flags", this.flags);
+        this.broadcastViewers(JSON.stringify({ type: "flags", control: this.flags.control, ai: this.flags.ai }));
       }
       return;
     }
@@ -235,6 +242,18 @@ export class StreamRoom extends DurableObject<Env> {
         peer.send(msg);
       } catch {
         /* ignore */
+      }
+    }
+  }
+
+  private broadcastViewers(msg: string): void {
+    for (const peer of this.ctx.getWebSockets()) {
+      const p = peer.deserializeAttachment() as Attachment | null;
+      if (p?.role !== "viewer" || peer.readyState !== WebSocket.OPEN) continue;
+      try {
+        peer.send(msg);
+      } catch {
+        /* skip a full send buffer */
       }
     }
   }

@@ -973,6 +973,8 @@ mod tests {
         assert!(html.contains("pin-pill"));
         assert!(html.contains("cfg-control-enabled"));
         assert!(html.contains("cfg-ai-enabled"));
+        assert!(html.contains("cfg-llm-enabled"));
+        assert!(html.contains("id=\"llm-fields\""));
         assert!(html.contains("Have AI use this computer"));
         assert!(html.contains("cu-cancel"));
 

@@ -52,6 +52,35 @@ function isDrawerOpen() {
   const d = $("config-drawer");
   return !!(d && !d.classList.contains("hidden"));
 }
+function setHidden(el, hidden) {
+  if (!el) return;
+  el.classList.toggle("hidden", !!hidden);
+  if ("hidden" in el) el.hidden = !!hidden;
+}
+
+function featureFlags() {
+  const llmEl = $("cfg-llm-enabled");
+  const aiEl = $("cfg-ai-enabled");
+  const ctlEl = $("cfg-control-enabled");
+  return {
+    llm: llmEl ? !!llmEl.checked : !!(cfg && cfg.llm && cfg.llm.enabled),
+    ai: aiEl ? !!aiEl.checked : !!(cfg && cfg.control && cfg.control.ai_enabled),
+    ctl: ctlEl ? !!ctlEl.checked : !!(cfg && cfg.control && cfg.control.enabled),
+  };
+}
+
+function syncFeatureUi() {
+  const f = featureFlags();
+  setHidden($("llm-fields"), !f.llm);
+  setHidden($("ctl-hint"), !f.ctl);
+  setHidden($("ai-hint"), !f.ai);
+  setHidden($("cu-cancel"), !f.ai);
+  setHidden($("cu-section"), !f.ai);
+  setHidden($("analysis-section"), !f.llm);
+  setHidden($("analysis-banner"), !f.llm);
+  setHidden($("analysis-pane"), !(f.llm || f.ai));
+}
+
 function setDrawerOpen(open) {
   const d = $("config-drawer");
   const backdrop = $("drawer-backdrop");
@@ -541,6 +570,7 @@ function fillConfigForm(c) {
   set("cfg-model", c.llm && c.llm.model || "");
   set("cfg-interval", c.llm && c.llm.interval_sec);
   set("cfg-prompt", c.llm && c.llm.prompt || "");
+  syncFeatureUi();
 }
 
 function readConfigForm() {
@@ -604,13 +634,8 @@ async function loadConfig() {
   }
   hideLogin();
   mode = (cfg.encoder && cfg.encoder.mode) || "ffmpeg";
-  const banner = $("analysis-banner");
-  if (banner) banner.classList.add("hidden");
-  const pane = $("analysis-pane");
-  if (pane) {
-    pane.classList.add("hidden");
-    pane.hidden = true;
-  }
+  fillConfigForm(cfg);
+  syncFeatureUi();
   if (mode === "mjpeg") showMjpeg();
   else showH264();
 }
@@ -694,6 +719,11 @@ function onReady() {
       if (jv) jv.textContent = jpeg.value;
     });
   }
+  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled"].forEach(function (id) {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("change", function () { syncFeatureUi(); });
+  });
   const save = $("save");
   if (save) {
     save.addEventListener("click", async function () {
@@ -826,6 +856,8 @@ if (typeof window !== "undefined") {
     openDrawer: openDrawer,
     isDrawerOpen: isDrawerOpen,
     setDrawerOpen: setDrawerOpen,
+    syncFeatureUi: syncFeatureUi,
+    featureFlags: featureFlags,
   };
 }
 

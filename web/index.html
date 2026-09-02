@@ -23,23 +23,27 @@
     <div id="stream-error" class="hidden"></div>
   </section>
   <aside id="analysis-pane" class="hidden" hidden>
-    <h2>Screen analysis</h2>
-    <div id="llm-note">Analysis is delivered on the Cloudflare watch page. Attach DEEPSEEK_API_KEY there with wrangler.</div>
-    <div id="latest-summary">No analysis yet.</div>
-    <div id="questions"></div>
-    <h2>Have AI use this computer</h2>
-    <form id="cu-form">
-      <input id="cu-task" placeholder="Task for this computer…" autocomplete="off">
-      <button type="submit">Run</button>
-    </form>
-    <div id="cu-out"></div>
-    <form id="ask-form">
-      <input id="ask-input" placeholder="Ask about the screen…" autocomplete="off">
-      <button type="submit">Ask</button>
-    </form>
-    <div id="ask-result"></div>
-    <h3>History</h3>
-    <ul id="history"></ul>
+    <div id="cu-section" class="hidden">
+      <h2>Have AI use this computer</h2>
+      <form id="cu-form">
+        <input id="cu-task" placeholder="Task for this computer…" autocomplete="off">
+        <button type="submit">Run</button>
+      </form>
+      <div id="cu-out"></div>
+    </div>
+    <div id="analysis-section" class="hidden">
+      <h2>Screen analysis</h2>
+      <div id="llm-note">Analysis is delivered on the Cloudflare watch page. Attach DEEPSEEK_API_KEY there with wrangler.</div>
+      <div id="latest-summary">No analysis yet.</div>
+      <div id="questions"></div>
+      <form id="ask-form">
+        <input id="ask-input" placeholder="Ask about the screen…" autocomplete="off">
+        <button type="submit">Ask</button>
+      </form>
+      <div id="ask-result"></div>
+      <h3>History</h3>
+      <ul id="history"></ul>
+    </div>
   </aside>
 </main>
 
@@ -88,15 +92,19 @@
   <label>Cloudflare publish URL <input id="cfg-publish" type="text" placeholder="wss://…/publish"></label>
   <label>Cloudflare watch URL <input id="cfg-watch" type="text" placeholder="wss://…/watch (optional)"></label>
   <label><input id="cfg-control-enabled" type="checkbox"> Allow remote computer use (kill switch off = blocked)</label>
+  <p id="ctl-hint" class="cfg-hint hidden">Watchers can click, move, scroll, and type on the live video. Uncheck to kill remote input immediately after Save.</p>
   <label><input id="cfg-ai-enabled" type="checkbox"> Allow AI computer use</label>
+  <p id="ai-hint" class="cfg-hint hidden">Watchers (and this host page) can submit a task in Have AI use this computer. Cancel AI stops a running loop.</p>
   <label><input id="cfg-llm-enabled" type="checkbox"> LLM analysis</label>
-  <label>Base URL <input id="cfg-base-url" type="text"></label>
-  <label>API key <input id="cfg-api-key" type="password" autocomplete="off"></label>
-  <label>Model <input id="cfg-model" type="text"></label>
-  <label>Interval sec <input id="cfg-interval" type="number" min="2" max="3600"></label>
-  <label>Prompt <textarea id="cfg-prompt" placeholder="empty = default prompt"></textarea></label>
+  <div id="llm-fields" class="hidden">
+    <label>Base URL <input id="cfg-base-url" type="text"></label>
+    <label>API key <input id="cfg-api-key" type="password" autocomplete="off"></label>
+    <label>Model <input id="cfg-model" type="text"></label>
+    <label>Interval sec <input id="cfg-interval" type="number" min="2" max="3600"></label>
+    <label>Prompt <textarea id="cfg-prompt" placeholder="empty = default prompt"></textarea></label>
+  </div>
   <button id="save" type="button">Save</button>
-  <button id="cu-cancel" type="button">Cancel AI</button>
+  <button id="cu-cancel" type="button" class="hidden">Cancel AI</button>
   <div id="save-note"></div>
   <div id="restart-note" class="hidden">Restart the service to apply host/port/token changes.</div>
 </div>

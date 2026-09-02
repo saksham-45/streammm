@@ -202,7 +202,9 @@ describe("StreamRoom", () => {
     const { pub, session } = await viewerSession("snap");
     const view = await openWatch(session, "snap");
     let viewerGot = false;
-    view.addEventListener("message", () => {
+    view.addEventListener("message", (ev) => {
+      // JSON flags are fanned to watchers; JPEG snapshots must not be.
+      if (typeof ev.data === "string") return;
       viewerGot = true;
     });
     pub.send(new Uint8Array([4, 0xff, 0xd8, 0xff, 0xd9, 1, 2, 3, 4, 5]));
@@ -265,6 +267,33 @@ describe("StreamRoom", () => {
     view.send(JSON.stringify({ type: "control", action: "click", x: 0.1, y: 0.1 }));
     await new Promise((r) => setTimeout(r, 200));
     expect(got).toBe(false);
+    pub.close();
+    view.close();
+  });
+
+  it("fans host flags out to watchers so AI chrome can appear", async () => {
+    const { pub, session } = await viewerSession("flags-fan");
+    const view = await openWatch(session, "flags-fan");
+    const got = new Promise<string>((resolve) => {
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data !== "string") return;
+        try {
+          const m = JSON.parse(ev.data) as { type?: string; ai?: boolean; control?: boolean };
+          if (m.type === "flags" && m.ai === true && m.control === true) resolve(ev.data);
+        } catch {
+          /* ignore binary */
+        }
+      });
+    });
+    pub.send(JSON.stringify({ type: "flags", control: true, ai: true }));
+    const raw = await Promise.race([
+      got,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no flags fan-out")), 3000)),
+    ]);
+    const msg = JSON.parse(raw) as { type: string; control: boolean; ai: boolean };
+    expect(msg.type).toBe("flags");
+    expect(msg.control).toBe(true);
+    expect(msg.ai).toBe(true);
     pub.close();
     view.close();
   });
