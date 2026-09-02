@@ -1400,6 +1400,7 @@ mod tests {
         assert!(html.contains("cu-cancel"));
         assert!(html.contains("id=\"cfg-display\""));
         assert!(html.contains("id=\"display-pill\""));
+        assert!(html.contains("id=\"display-map\""));
         assert!(html.contains("Copy on this Mac"));
         assert!(html.contains("id=\"login-overlay\""));
         assert!(html.contains("id=\"login-token\""));

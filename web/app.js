@@ -740,6 +740,66 @@ function showH264() {
   startMse();
 }
 
+function layoutDisplayMap(devices, boxW, boxH) {
+  const list = devices || [];
+  if (!list.length) return [];
+  const hasGeo = list.some(function (d) { return (d.width || 0) > 0 && (d.height || 0) > 0; });
+  if (!hasGeo) {
+    return list.map(function (d, i) {
+      const w = Math.max(8, boxW / list.length - 4);
+      return { id: d.id, left: i * (w + 4), top: 2, width: w, height: boxH - 4, label: String(i + 1) };
+    });
+  }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  list.forEach(function (d) {
+    const x = d.x || 0, y = d.y || 0, w = d.width || 1, h = d.height || 1;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + w);
+    maxY = Math.max(maxY, y + h);
+  });
+  const spanX = Math.max(1, maxX - minX);
+  const spanY = Math.max(1, maxY - minY);
+  const scale = Math.min((boxW - 4) / spanX, (boxH - 4) / spanY);
+  return list.map(function (d, i) {
+    const x = d.x || 0, y = d.y || 0, w = d.width || 1, h = d.height || 1;
+    return {
+      id: d.id,
+      left: 2 + (x - minX) * scale,
+      top: 2 + (y - minY) * scale,
+      width: Math.max(8, w * scale),
+      height: Math.max(8, h * scale),
+      label: String(i + 1),
+    };
+  });
+}
+
+function renderDisplayMap(el, devices, current, onPick) {
+  if (!el) return;
+  const list = devices || [];
+  el.innerHTML = "";
+  if (list.length < 2) {
+    setHidden(el, true);
+    return;
+  }
+  setHidden(el, false);
+  const boxW = el.clientWidth || 168;
+  const boxH = el.clientHeight || 76;
+  layoutDisplayMap(list, boxW, boxH).forEach(function (m) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mon" + (m.id === current ? " on" : "");
+    b.style.left = m.left + "px";
+    b.style.top = m.top + "px";
+    b.style.width = m.width + "px";
+    b.style.height = m.height + "px";
+    b.textContent = m.label;
+    b.title = m.id;
+    b.addEventListener("click", function () { if (onPick) onPick(m.id); });
+    el.appendChild(b);
+  });
+}
+
 function fillDisplaySelect(sel, devices, current) {
   if (!sel) return;
   const list = devices || [];
@@ -765,6 +825,18 @@ function loadDisplays() {
   const apply = function (devices) {
     fillDisplaySelect($("cfg-display"), devices, current);
     fillDisplaySelect($("display-pill"), devices, current);
+    renderDisplayMap($("display-map"), devices, current, function (id) {
+      const input = $("cfg-input");
+      if (input) input.value = id;
+      const pill = $("display-pill");
+      if (pill) pill.value = id;
+      if (typeof fetch !== "function") return;
+      api("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ capture: { input: id } }),
+      }).catch(function () {});
+    });
     const input = $("cfg-input");
     if (input && $("cfg-display") && $("cfg-display").value) input.value = $("cfg-display").value;
   };
@@ -1196,6 +1268,7 @@ if (typeof window !== "undefined") {
     setDrawerOpen: setDrawerOpen,
     syncFeatureUi: syncFeatureUi,
     featureFlags: featureFlags,
+    layoutDisplayMap: layoutDisplayMap,
     currentToken: currentToken,
     url: url,
   };

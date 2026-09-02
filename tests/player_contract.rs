@@ -122,6 +122,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "Display picker must be a visible Settings control, not hidden behind Detect"
     );
     assert!(
+        html.contains("id=\"display-map\"") && js.contains("layoutDisplayMap"),
+        "host must show a clickable all-monitors map"
+    );
+    assert!(
         js.contains("function syncFeatureUi") && js.contains("syncFeatureUi()"),
         "enabling LLM/AI/control must drive a UI reveal helper"
     );
@@ -178,6 +182,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("displays") && s.contains("type: \"display\""),
         "watch page must switch host displays over the control channel"
+    );
+    assert!(
+        s.contains("display-map") && s.contains("layoutDisplayMap"),
+        "watch page must show a TeamViewer-style all-monitors map"
     );
     assert!(!s.contains("Add ?token="));
     assert!(
@@ -259,6 +267,41 @@ console.log("ok");
         .status()
         .expect("node");
     assert!(status.success(), "app.js must eval without throw");
+}
+
+#[test]
+fn display_map_places_secondary_screen_to_the_right() {
+    let js_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/app.js");
+    let status = Command::new("node")
+        .arg("-e")
+        .arg(format!(
+            r#"
+globalThis.window = globalThis;
+globalThis.document = {{
+  readyState: "loading",
+  cookie: "",
+  addEventListener: function() {{}},
+  getElementById: function() {{ return null; }}
+}};
+globalThis.location = {{ href: "http://127.0.0.1:8080/", search: "", protocol: "http:", reload: function(){{}} }};
+globalThis.navigator = {{ userAgent: "test" }};
+globalThis.WebSocket = function() {{}};
+const fs = require("fs");
+(0, eval)(fs.readFileSync({:?}, "utf8"));
+const layout = window.streamaidUi.layoutDisplayMap([
+  {{ id: "2:", x: 0, y: 0, width: 1440, height: 900, main: true }},
+  {{ id: "3:", x: 1440, y: 0, width: 1920, height: 1080 }}
+], 168, 76);
+if (layout.length !== 2) throw new Error("expected 2 monitors");
+if (!(layout[1].left > layout[0].left)) throw new Error("secondary must sit to the right");
+if (!(layout[1].width > layout[0].width)) throw new Error("wider screen must render wider");
+console.log("map-ok");
+"#,
+            js_path
+        ))
+        .status()
+        .expect("node");
+    assert!(status.success(), "display map layout must place screens by global bounds");
 }
 
 #[test]

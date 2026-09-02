@@ -11,9 +11,12 @@ export const PLAYER_HTML = `<!doctype html>
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, sans-serif; }
   header { padding: 10px 16px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  #displays { display: none; gap: 6px; align-items: center; }
+  #displays { display: none; gap: 8px; align-items: center; }
   #displays button { padding: 4px 8px; font-size: 12px; border-radius: 999px; }
   #displays button.on { border-color: var(--accent); color: var(--accent); }
+  #display-map { position: relative; width: 168px; height: 76px; background: #111; border: 1px solid var(--line); border-radius: 6px; flex-shrink: 0; }
+  #display-map .mon { position: absolute; border: 1px solid #555; background: #1c1c1c; border-radius: 3px; cursor: pointer; font-size: 9px; color: var(--muted); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  #display-map .mon.on { border-color: var(--accent); color: var(--accent); background: #182030; }
   h1 { font-size: 15px; margin: 0; letter-spacing: 0.14em; font-weight: 650; text-transform: uppercase; }
   #pill { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); }
   main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr); gap: 12px; padding: 12px; }
@@ -65,6 +68,7 @@ export const PLAYER_HTML = `<!doctype html>
   <h1>streamaid</h1>
   <div id="pill">enter PIN</div>
   <div id="displays"></div>
+  <div id="display-map" style="display:none"></div>
 </header>
 <div id="gate">
   <form id="pin-form">
@@ -464,23 +468,74 @@ export const PLAYER_HTML = `<!doctype html>
     if (controlOn) sendFileJson({ type: "file", action: "list" });
     renderDisplays(ctl && ctl.displays, ctl && (ctl.display || ctl.input));
   }
+  function layoutDisplayMap(devices, boxW, boxH) {
+    var list = devices || [];
+    if (!list.length) return [];
+    var hasGeo = false;
+    list.forEach(function (d) { if ((d.width || 0) > 0 && (d.height || 0) > 0) hasGeo = true; });
+    if (!hasGeo) {
+      return list.map(function (d, i) {
+        var w = Math.max(8, boxW / list.length - 4);
+        return { id: d.id, left: i * (w + 4), top: 2, width: w, height: boxH - 4, label: String(i + 1) };
+      });
+    }
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    list.forEach(function (d) {
+      var x = d.x || 0, y = d.y || 0, w = d.width || 1, h = d.height || 1;
+      minX = Math.min(minX, x); minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+    });
+    var spanX = Math.max(1, maxX - minX), spanY = Math.max(1, maxY - minY);
+    var scale = Math.min((boxW - 4) / spanX, (boxH - 4) / spanY);
+    return list.map(function (d, i) {
+      var x = d.x || 0, y = d.y || 0, w = d.width || 1, h = d.height || 1;
+      return {
+        id: d.id,
+        left: 2 + (x - minX) * scale,
+        top: 2 + (y - minY) * scale,
+        width: Math.max(8, w * scale),
+        height: Math.max(8, h * scale),
+        label: String(i + 1),
+      };
+    });
+  }
   function renderDisplays(list, current) {
     var wrap = document.getElementById("displays");
-    if (!wrap) return;
+    var map = document.getElementById("display-map");
     var devices = list || [];
-    wrap.innerHTML = "";
-    if (devices.length < 2) { wrap.style.display = "none"; return; }
-    wrap.style.display = "flex";
-    devices.forEach(function (d, i) {
+    if (wrap) {
+      wrap.innerHTML = "";
+      wrap.style.display = devices.length >= 2 ? "flex" : "none";
+      devices.forEach(function (d, i) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = d.name ? d.name.replace(/ — .*/, "") : ("Display " + (i + 1));
+        if (d.id === current || (!current && d.main)) b.className = "on";
+        b.addEventListener("click", function () {
+          if (!controlOn || !ws || ws.readyState !== 1) return;
+          try { ws.send(JSON.stringify({ type: "display", id: d.id })); } catch (e) {}
+        });
+        wrap.appendChild(b);
+      });
+    }
+    if (!map) return;
+    map.innerHTML = "";
+    if (devices.length < 2) { map.style.display = "none"; return; }
+    map.style.display = "block";
+    layoutDisplayMap(devices, map.clientWidth || 168, map.clientHeight || 76).forEach(function (m) {
       var b = document.createElement("button");
       b.type = "button";
-      b.textContent = d.name ? d.name.replace(/ — .*/, "") : ("Display " + (i + 1));
-      if (d.id === current || (!current && d.main)) b.className = "on";
+      b.className = "mon" + (m.id === current ? " on" : "");
+      b.style.left = m.left + "px";
+      b.style.top = m.top + "px";
+      b.style.width = m.width + "px";
+      b.style.height = m.height + "px";
+      b.textContent = m.label;
       b.addEventListener("click", function () {
         if (!controlOn || !ws || ws.readyState !== 1) return;
-        try { ws.send(JSON.stringify({ type: "display", id: d.id })); } catch (e) {}
+        try { ws.send(JSON.stringify({ type: "display", id: m.id })); } catch (e) {}
       });
-      wrap.appendChild(b);
+      map.appendChild(b);
     });
   }
   function handleText(text) {
