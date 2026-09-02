@@ -341,6 +341,13 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must reveal Select all and Shift-click range select"
     );
     assert!(
+        js.contains("application/x-streamaid-files")
+            && js.contains("function dropOnFileDest")
+            && js.contains("function bindFileDrag")
+            && js.contains("draggable = true"),
+        "enabling remote control must allow dropping files onto a folder row to move them"
+    );
+    assert!(
         html.contains("id=\"file-mkdir\"")
             && js.contains("function mkdirInboxFolder")
             && js.contains("action: \"mkdir\""),
@@ -534,6 +541,13 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page must reveal Select all and Shift-click range select"
     );
     assert!(
+        s.contains("application/x-streamaid-files")
+            && s.contains("function dropOnFileDest")
+            && s.contains("function bindFileDrag")
+            && s.contains("draggable = true"),
+        "watch page must allow dropping files onto a folder row to move them"
+    );
+    assert!(
         s.contains("id=\"file-mkdir\"")
             && s.contains("function mkdirInboxFolder")
             && s.contains("action: \"mkdir\""),
@@ -712,6 +726,8 @@ const range = window.streamaidUi.fileRangeItems(
   "a"
 );
 if (range.map(function(e){{return e.name;}}).join(",") !== "a,b,c") throw new Error("shift range: " + JSON.stringify(range));
+const keep = window.streamaidUi.filterDropNames(["Pack", "note.txt"], "Work", "Work/Pack");
+if (keep.join(",") !== "note.txt") throw new Error("must not drop a folder into itself: " + keep);
 console.log("ok");
 "#,
             js_path

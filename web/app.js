@@ -975,6 +975,50 @@ function parentFilePath(p) {
   return i < 0 ? "" : p.slice(0, i);
 }
 
+const FILE_DRAG = "application/x-streamaid-files";
+
+function sameFileLoc(aRoot, aPath, bRoot, bPath) {
+  return String(aRoot || "inbox") === String(bRoot || "inbox") && String(aPath || "") === String(bPath || "");
+}
+
+function filterDropNames(names, fromPath, toPath) {
+  fromPath = String(fromPath || "");
+  toPath = String(toPath || "");
+  return (names || []).map(function (n) { return String(n || "").trim(); }).filter(function (n) {
+    if (!n) return false;
+    const src = joinFilePath(fromPath, n);
+    if (src === toPath) return false;
+    if (toPath.indexOf(src + "/") === 0) return false;
+    return true;
+  });
+}
+
+function fileCopyKey(ev) {
+  return !!(ev && (ev.altKey || ev.ctrlKey));
+}
+
+function fileDragPayload(name) {
+  let names = selectedFileNames();
+  const n = String(name || "").trim();
+  if (n && names.indexOf(n) < 0) names = [n];
+  if (!names.length && n) names = [n];
+  return { root: fileRoot, path: filePath, names: names };
+}
+
+function parseFileDrag(dt) {
+  if (!dt) return null;
+  let raw = "";
+  try { raw = dt.getData(FILE_DRAG) || ""; } catch (e) { /* ignore */ }
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    if (!v || !Array.isArray(v.names) || !v.names.length) return null;
+    return { root: v.root || "inbox", path: v.path || "", names: v.names };
+  } catch (e) {
+    return null;
+  }
+}
+
 function browseFiles(root, path) {
   if (root) fileRoot = String(root);
   filePath = path == null ? filePath : String(path);
@@ -1004,6 +1048,11 @@ function bindFileRoots(el) {
     if (!root) return;
     browseFiles(root, "");
   });
+  el.querySelectorAll("button[data-root]").forEach(function (btn) {
+    bindFileDropTarget(btn, function () {
+      return { root: btn.getAttribute("data-root"), path: "" };
+    });
+  });
 }
 
 function renderFileList(files, root, path) {
@@ -1029,6 +1078,9 @@ function renderFileList(files, root, path) {
     btn.textContent = "Up";
     btn.addEventListener("click", function () { browseFiles(fileRoot, parentFilePath(filePath)); });
     up.appendChild(btn);
+    bindFileDropTarget(up, function () {
+      return { root: fileRoot, path: parentFilePath(filePath) };
+    });
     ul.appendChild(up);
   }
   pruneFileSel(files);
@@ -1036,6 +1088,7 @@ function renderFileList(files, root, path) {
     const li = document.createElement("li");
     addFileCheck(li, f);
     bindFileRowSel(li, f);
+    bindFileDrag(li, f);
     if (f.dir) {
       const open = document.createElement("button");
       open.type = "button";
@@ -1081,6 +1134,7 @@ function renderFileList(files, root, path) {
     a.href = url("/api/files/download?name=" + encodeURIComponent(f.name) + "&" + fileLocQuery());
     a.textContent = f.name + (f.size != null ? " (" + f.size + " B)" : "");
     a.download = f.name;
+    a.draggable = false;
     a.addEventListener("click", function (ev) {
       if (ev.shiftKey || ev.metaKey || ev.ctrlKey) {
         ev.preventDefault();
@@ -1176,42 +1230,109 @@ function clipFile(op, name) {
   return fileClip;
 }
 
-function pasteHere() {
+function transferFilesTo(fromRoot, fromPath, names, toRoot, toPath, moving) {
+  names = filterDropNames(names, fromPath, toPath);
+  if (!names.length) return false;
+  if (sameFileLoc(fromRoot, fromPath, toRoot, toPath)) return false;
   const out = $("file-out");
-  const names = clipNames(fileClip);
-  if (!names.length) return;
-  const clip = fileClip;
   const msg = {
     type: "file",
-    action: clip.op,
+    action: moving ? "move" : "copy",
     name: names[0],
     names: names,
-    root: clip.root,
-    path: clip.path,
-    toRoot: fileRoot,
-    toPath: filePath
+    root: fromRoot || "inbox",
+    path: fromPath || "",
+    toRoot: toRoot || "inbox",
+    toPath: toPath || ""
   };
+  const label = names.length === 1 ? names[0] : (names.length + " items");
   if (sendFileJson(msg)) {
-    if (out) out.textContent = (clip.op === "move" ? "moving " : "copying ") + (names.length === 1 ? names[0] : (names.length + " items")) + "…";
-    if (clip.op === "move") fileClip = null;
-    syncFilePaste();
-    return;
+    if (out) out.textContent = (moving ? "moving " : "copying ") + label + "…";
+    return true;
   }
-  if (typeof fetch !== "function") return;
-  const path = clip.op === "move" ? "/api/files/move" : "/api/files/copy";
-  fetch(url(path), {
+  if (typeof fetch !== "function") return false;
+  fetch(url(moving ? "/api/files/move" : "/api/files/copy"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(msg)
   }).then(function (r) { return r.json(); }).then(function (body) {
     if (!body) return;
-    if (out) out.textContent = body.error ? ("error: " + body.error) : ((clip.op === "move" ? "moved " : "copied ") + (body.name || names[0]));
-    if (clip.op === "move") fileClip = null;
-    syncFilePaste();
+    if (out) out.textContent = body.error ? ("error: " + body.error) : ((moving ? "moved " : "copied ") + (body.name || names[0]));
     refreshFiles();
   }).catch(function (err) {
     if (out) out.textContent = "error: " + err.message;
   });
+  return true;
+}
+
+function pasteHere() {
+  const names = clipNames(fileClip);
+  if (!names.length) return;
+  const clip = fileClip;
+  transferFilesTo(clip.root, clip.path, names, fileRoot, filePath, clip.op === "move");
+  if (clip.op === "move") fileClip = null;
+  syncFilePaste();
+}
+
+function dropOnFileDest(ev, toRoot, toPath) {
+  const dt = ev && ev.dataTransfer;
+  if (!dt) return;
+  const payload = parseFileDrag(dt);
+  if (payload && payload.names && payload.names.length) {
+    transferFilesTo(payload.root, payload.path, payload.names, toRoot, toPath, !fileCopyKey(ev));
+    return;
+  }
+  if (dt.files && dt.files.length) {
+    uploadDroppedFiles(dt.files, toRoot, toPath);
+  }
+}
+
+function bindFileDropTarget(el, destFn) {
+  if (!el || el.dataset.dropDestBound) return;
+  el.dataset.dropDestBound = "1";
+  el.addEventListener("dragover", function (ev) {
+    if (!ev.dataTransfer) return;
+    const types = ev.dataTransfer.types;
+    let has = false;
+    if (types) {
+      for (let i = 0; i < types.length; i++) {
+        if (types[i] === FILE_DRAG || types[i] === "Files") has = true;
+      }
+    }
+    if (!has) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.dataTransfer.dropEffect = fileCopyKey(ev) ? "copy" : "move";
+    el.classList.add("drop-hover");
+  });
+  el.addEventListener("dragleave", function () { el.classList.remove("drop-hover"); });
+  el.addEventListener("drop", function (ev) {
+    el.classList.remove("drop-hover");
+    const dest = typeof destFn === "function" ? destFn() : destFn;
+    if (!dest) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    dropOnFileDest(ev, dest.root, dest.path);
+  });
+}
+
+function bindFileDrag(li, f) {
+  if (!li || !f) return;
+  li.draggable = true;
+  li.addEventListener("dragstart", function (ev) {
+    if (!ev.dataTransfer) return;
+    const payload = fileDragPayload(f.name);
+    try { ev.dataTransfer.setData(FILE_DRAG, JSON.stringify(payload)); } catch (e) { /* ignore */ }
+    try { ev.dataTransfer.setData("text/plain", (payload.names || []).join("\n")); } catch (e2) { /* ignore */ }
+    ev.dataTransfer.effectAllowed = "copyMove";
+    li.classList.add("dragging");
+  });
+  li.addEventListener("dragend", function () { li.classList.remove("dragging"); });
+  if (f.dir) {
+    bindFileDropTarget(li, function () {
+      return { root: fileRoot, path: joinFilePath(filePath, f.name) };
+    });
+  }
 }
 
 function bindFilePaste(el) {
@@ -1364,9 +1485,11 @@ function refreshFiles() {
   }).catch(function () {});
 }
 
-function uploadFile(file) {
+function uploadFile(file, root, path) {
   const out = $("file-out");
   if (!file) return;
+  root = root == null ? fileRoot : root;
+  path = path == null ? filePath : path;
   if (file.size > FILE_MAX) {
     if (out) out.textContent = "file too large (2 GB max)";
     return;
@@ -1375,7 +1498,7 @@ function uploadFile(file) {
     if (out) out.textContent = "sending " + file.name + "…";
     const id = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     pendingUploads[id] = { name: file.name, file: file };
-    sendFileJson({ type: "file", action: "begin", id: id, name: file.name, size: file.size, root: fileRoot, path: filePath });
+    sendFileJson({ type: "file", action: "begin", id: id, name: file.name, size: file.size, root: root, path: path });
     return;
   }
   if (file.size > 8 * 1024 * 1024) {
@@ -1388,7 +1511,7 @@ function uploadFile(file) {
     return fetch(url("/api/files"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: file.name, data: bytesToB64(u8), root: fileRoot, path: filePath }),
+      body: JSON.stringify({ name: file.name, data: bytesToB64(u8), root: root, path: path }),
     });
   }).then(function (r) { return r && r.json(); }).then(function (body) {
     if (!body) return;
@@ -1399,10 +1522,10 @@ function uploadFile(file) {
   });
 }
 
-function uploadDroppedFiles(fileList) {
+function uploadDroppedFiles(fileList, root, path) {
   if (!featureFlags().ctl) return;
   Array.prototype.forEach.call(fileList || [], function (file) {
-    uploadFile(file);
+    uploadFile(file, root, path);
   });
 }
 
@@ -2687,6 +2810,9 @@ if (typeof window !== "undefined") {
     fileRangeItems: fileRangeItems,
     clickFileSel: clickFileSel,
     selectAllFiles: selectAllFiles,
+    filterDropNames: filterDropNames,
+    dropOnFileDest: dropOnFileDest,
+    transferFilesTo: transferFilesTo,
   };
 }
 
