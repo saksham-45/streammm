@@ -320,8 +320,9 @@ summary { cursor: pointer; }
 #file-roots button { padding: 4px 8px; font-size: 12px; }
 #file-roots button.on { border-color: #7eb8ff; color: #7eb8ff; }
 #file-path { font-size: 12px; color: #9a9a9a; min-height: 1.2em; }
-#file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
+#file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; outline: none; }
 #file-list li { border-top: 1px solid #333; padding: 6px 0; }
+#file-list li.on { background: #1a2a3a; }
 #file-list button { padding: 2px 8px; margin-left: 8px; }
 #file-list input[type="checkbox"] { margin-right: 8px; vertical-align: middle; }
 #file-sel-get { margin-left: 8px; }

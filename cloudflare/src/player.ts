@@ -77,8 +77,9 @@ export const PLAYER_HTML = `<!doctype html>
   #file-roots button { padding: 4px 8px; font-size: 12px; }
   #file-roots button.on { border-color: var(--accent); color: var(--accent); }
   #file-path { font-size: 12px; color: var(--muted); min-height: 1.2em; }
-  #file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
+  #file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; outline: none; }
   #file-list li { border-top: 1px solid var(--line); padding: 6px 0; }
+  #file-list li.on { background: #1a2a3a; }
   #file-list button { padding: 2px 8px; margin-left: 8px; }
   #file-list input[type="checkbox"] { margin-right: 8px; vertical-align: middle; }
   #file-out { font-size: 12px; color: var(--muted); min-height: 1.2em; }
@@ -168,6 +169,7 @@ export const PLAYER_HTML = `<!doctype html>
     </div>
     <div id="file-path"></div>
     <button id="file-mkdir" type="button">New folder</button>
+    <button id="file-sel-all" type="button" style="display:none">Select all</button>
     <button id="file-sel-copy" type="button" style="display:none">Copy</button>
     <button id="file-sel-cut" type="button" style="display:none">Cut</button>
     <button id="file-sel-get" type="button" style="display:none">Get</button>
@@ -790,6 +792,8 @@ export const PLAYER_HTML = `<!doctype html>
   var filePath = "";
   var fileClip = null;
   var fileSelected = [];
+  var fileListItems = [];
+  var fileSelAnchor = null;
   function fileLocQuery() {
     return "root=" + encodeURIComponent(fileRoot) + "&path=" + encodeURIComponent(filePath);
   }
@@ -806,12 +810,79 @@ export const PLAYER_HTML = `<!doctype html>
   function selectedHasDir() {
     return fileSelected.some(function (s) { return s.dir; });
   }
+  function fileRangeItems(items, from, to) {
+    items = items || [];
+    var a = -1, b = -1, i;
+    for (i = 0; i < items.length; i++) {
+      if (items[i].name === from) a = i;
+      if (items[i].name === to) b = i;
+    }
+    if (a < 0) a = b;
+    if (b < 0) b = a;
+    if (a < 0) return [];
+    if (a > b) { i = a; a = b; b = i; }
+    return items.slice(a, b + 1);
+  }
   function toggleFileSel(name, dir, on) {
     var n = String(name || "").trim();
     if (!n) return;
     fileSelected = fileSelected.filter(function (s) { return s.name !== n; });
     if (on) fileSelected.push({ name: n, dir: !!dir });
+    fileSelAnchor = n;
+    syncFileSelChecks();
     syncFileSel();
+  }
+  function syncFileSelChecks() {
+    var ul = document.getElementById("file-list");
+    if (!ul) return;
+    var selected = {};
+    fileSelected.forEach(function (s) { selected[s.name] = true; });
+    ul.querySelectorAll("li[data-name]").forEach(function (li) {
+      var name = li.getAttribute("data-name");
+      var cb = li.querySelector('input[type="checkbox"]');
+      var on = !!selected[name];
+      if (cb) cb.checked = on;
+      li.classList.toggle("on", on);
+    });
+  }
+  function clickFileSel(ev, name, dir) {
+    var n = String(name || "").trim();
+    if (!n) return fileSelected;
+    var accel = !!(ev && (ev.metaKey || ev.ctrlKey));
+    var shift = !!(ev && ev.shiftKey);
+    if (shift && fileSelAnchor) {
+      var range = fileRangeItems(fileListItems, fileSelAnchor, n);
+      if (accel) {
+        var have = {};
+        fileSelected.forEach(function (s) { have[s.name] = s; });
+        range.forEach(function (e) { have[e.name] = { name: e.name, dir: !!e.dir }; });
+        fileSelected = fileListItems.filter(function (e) { return have[e.name]; }).map(function (e) {
+          return { name: e.name, dir: !!e.dir };
+        });
+      } else {
+        fileSelected = range.map(function (e) { return { name: e.name, dir: !!e.dir }; });
+      }
+      syncFileSelChecks();
+      syncFileSel();
+      return fileSelected;
+    }
+    if (accel) {
+      var on = !fileSelected.some(function (s) { return s.name === n; });
+      toggleFileSel(n, dir, on);
+      return fileSelected;
+    }
+    fileSelected = [{ name: n, dir: !!dir }];
+    fileSelAnchor = n;
+    syncFileSelChecks();
+    syncFileSel();
+    return fileSelected;
+  }
+  function selectAllFiles() {
+    fileSelected = fileListItems.map(function (e) { return { name: e.name, dir: !!e.dir }; });
+    if (fileListItems.length) fileSelAnchor = fileListItems[fileListItems.length - 1].name;
+    syncFileSelChecks();
+    syncFileSel();
+    return fileSelected;
   }
   function pruneFileSel(files) {
     var live = {};
@@ -826,16 +897,43 @@ export const PLAYER_HTML = `<!doctype html>
       var el = document.getElementById(id);
       if (el) el.style.display = n ? "inline-block" : "none";
     });
+    var all = document.getElementById("file-sel-all");
+    if (all) all.style.display = fileListItems.length ? "inline-block" : "none";
   }
   function addFileCheck(li, f) {
     var cb = document.createElement("input");
     cb.type = "checkbox";
     cb.setAttribute("aria-label", "Select " + f.name);
     cb.checked = fileSelected.some(function (s) { return s.name === f.name; });
-    cb.addEventListener("click", function (ev) { ev.stopPropagation(); });
-    cb.addEventListener("change", function () { toggleFileSel(f.name, !!f.dir, cb.checked); });
+    cb.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.shiftKey) clickFileSel(ev, f.name, !!f.dir);
+      else clickFileSel({ metaKey: true, ctrlKey: true, shiftKey: false }, f.name, !!f.dir);
+    });
     li.appendChild(cb);
     return cb;
+  }
+  function bindFileRowSel(li, f) {
+    li.setAttribute("data-name", f.name);
+    li.classList.toggle("on", fileSelected.some(function (s) { return s.name === f.name; }));
+    li.addEventListener("click", function (ev) {
+      if (ev.target && ev.target.closest && ev.target.closest("button, a, input")) return;
+      clickFileSel(ev, f.name, !!f.dir);
+    });
+  }
+  function bindFileListKeys(ul) {
+    if (!ul || ul.dataset.keysBound) return;
+    ul.dataset.keysBound = "1";
+    ul.setAttribute("tabindex", "0");
+    ul.addEventListener("keydown", function (ev) {
+      if (!ev) return;
+      var k = String(ev.key || "");
+      if ((ev.metaKey || ev.ctrlKey) && k.toLowerCase() === "a") {
+        ev.preventDefault();
+        selectAllFiles();
+      }
+    });
   }
   function joinFilePath(base, name) {
     return base ? base + "/" + name : name;
@@ -848,6 +946,7 @@ export const PLAYER_HTML = `<!doctype html>
     if (root) fileRoot = String(root);
     filePath = path == null ? filePath : String(path);
     fileSelected = [];
+    fileSelAnchor = null;
     syncFileSel();
     var roots = document.getElementById("file-roots");
     if (roots) {
@@ -993,6 +1092,11 @@ export const PLAYER_HTML = `<!doctype html>
     }
   }
   function bindFileSel() {
+    var all = document.getElementById("file-sel-all");
+    if (all && !all.dataset.selBound) {
+      all.dataset.selBound = "1";
+      all.addEventListener("click", function () { selectAllFiles(); });
+    }
     var copy = document.getElementById("file-sel-copy");
     if (copy && !copy.dataset.selBound) {
       copy.dataset.selBound = "1";
@@ -1062,6 +1166,8 @@ export const PLAYER_HTML = `<!doctype html>
     var ul = document.getElementById("file-list");
     if (!ul) return;
     ul.innerHTML = "";
+    bindFileListKeys(ul);
+    fileListItems = (files || []).map(function (f) { return { name: f.name, dir: !!f.dir }; });
     if (filePath) {
       var up = document.createElement("li");
       var upBtn = document.createElement("button");
@@ -1075,11 +1181,19 @@ export const PLAYER_HTML = `<!doctype html>
     (files || []).forEach(function (f) {
       var li = document.createElement("li");
       addFileCheck(li, f);
+      bindFileRowSel(li, f);
       if (f.dir) {
         var open = document.createElement("button");
         open.type = "button";
         open.textContent = f.name + "/";
-        open.addEventListener("click", function () { browseFiles(fileRoot, joinFilePath(filePath, f.name)); });
+        open.addEventListener("click", function (ev) {
+          if (ev.shiftKey || ev.metaKey || ev.ctrlKey) {
+            ev.preventDefault();
+            clickFileSel(ev, f.name, true);
+            return;
+          }
+          browseFiles(fileRoot, joinFilePath(filePath, f.name));
+        });
         li.appendChild(open);
         var renDir = document.createElement("button");
         renDir.type = "button";

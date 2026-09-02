@@ -333,6 +333,14 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must reveal multi-select Copy/Cut/Get/Delete"
     );
     assert!(
+        html.contains("id=\"file-sel-all\"")
+            && js.contains("function fileRangeItems")
+            && js.contains("function clickFileSel")
+            && js.contains("function selectAllFiles")
+            && js.contains("ev.shiftKey"),
+        "enabling remote control must reveal Select all and Shift-click range select"
+    );
+    assert!(
         html.contains("id=\"file-mkdir\"")
             && js.contains("function mkdirInboxFolder")
             && js.contains("action: \"mkdir\""),
@@ -518,6 +526,14 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page must reveal multi-select Copy/Cut/Get/Delete"
     );
     assert!(
+        s.contains("id=\"file-sel-all\"")
+            && s.contains("function fileRangeItems")
+            && s.contains("function clickFileSel")
+            && s.contains("function selectAllFiles")
+            && s.contains("ev.shiftKey"),
+        "watch page must reveal Select all and Shift-click range select"
+    );
+    assert!(
         s.contains("id=\"file-mkdir\"")
             && s.contains("function mkdirInboxFolder")
             && s.contains("action: \"mkdir\""),
@@ -690,6 +706,12 @@ const fs = require("fs");
 const src = fs.readFileSync({:?}, "utf8");
 if (typeof module !== "undefined") {{ /* node has module; script must not use it */ }}
 (0, eval)(src);
+const range = window.streamaidUi.fileRangeItems(
+  [{{name:"a",dir:false}},{{name:"b",dir:true}},{{name:"c",dir:false}}],
+  "c",
+  "a"
+);
+if (range.map(function(e){{return e.name;}}).join(",") !== "a,b,c") throw new Error("shift range: " + JSON.stringify(range));
 console.log("ok");
 "#,
             js_path
