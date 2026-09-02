@@ -69,22 +69,27 @@ export const PLAYER_HTML = `<!doctype html>
   #cu-form { display: flex; gap: 6px; margin: 8px 0; }
   #cu-form input { flex: 1; background: #111; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
   #cu-out { font-size: 12px; color: var(--muted); min-height: 1.2em; }
-  #file-drop { border: 1px dashed #555; border-radius: 8px; padding: 10px; font-size: 13px; color: var(--muted); text-align: center; margin: 8px 0; }
-  #file-drop.drop-hover { border-color: var(--accent); }
+  #file-drop, #file-b-drop { border: 1px dashed #555; border-radius: 8px; padding: 10px; font-size: 13px; color: var(--muted); text-align: center; margin: 8px 0; }
+  #file-drop.drop-hover, #file-b-drop.drop-hover { border-color: var(--accent); }
   .file-pick { color: var(--accent); cursor: pointer; }
   .file-pick input { display: none; }
-  #file-roots { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
-  #file-roots button { padding: 4px 8px; font-size: 12px; }
-  #file-roots button.on { border-color: var(--accent); color: var(--accent); }
-  #file-path { font-size: 12px; color: var(--muted); min-height: 1.2em; }
-  #file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; outline: none; }
-  #file-list li { border-top: 1px solid var(--line); padding: 6px 0; }
-  #file-list li.on { background: #1a2a3a; }
-  #file-list li.dragging { opacity: 0.5; }
-  #file-list li.drop-hover,
-  #file-roots button.drop-hover { outline: 1px dashed var(--accent); background: #1a2a3a; }
-  #file-list button { padding: 2px 8px; margin-left: 8px; }
-  #file-list input[type="checkbox"] { margin-right: 8px; vertical-align: middle; }
+  #file-split.on { border-color: var(--accent); color: var(--accent); }
+  #files-panes { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  #files-panes.split { grid-template-columns: 1fr 1fr; }
+  .file-pane { min-width: 0; border: 1px solid transparent; border-radius: 8px; padding: 4px 6px 8px; }
+  .file-pane.on { border-color: var(--accent); }
+  #file-roots, #file-b-roots { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+  #file-roots button, #file-b-roots button { padding: 4px 8px; font-size: 12px; }
+  #file-roots button.on, #file-b-roots button.on { border-color: var(--accent); color: var(--accent); }
+  #file-path, #file-b-path { font-size: 12px; color: var(--muted); min-height: 1.2em; }
+  #file-list, #file-b-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; outline: none; }
+  #file-list li, #file-b-list li { border-top: 1px solid var(--line); padding: 6px 0; }
+  #file-list li.on, #file-b-list li.on { background: #1a2a3a; }
+  #file-list li.dragging, #file-b-list li.dragging { opacity: 0.5; }
+  #file-list li.drop-hover, #file-b-list li.drop-hover,
+  #file-roots button.drop-hover, #file-b-roots button.drop-hover { outline: 1px dashed var(--accent); background: #1a2a3a; }
+  #file-list button, #file-b-list button { padding: 2px 8px; margin-left: 8px; }
+  #file-list input[type="checkbox"], #file-b-list input[type="checkbox"] { margin-right: 8px; vertical-align: middle; }
   #file-out { font-size: 12px; color: var(--muted); min-height: 1.2em; }
   #file-offer { display: none; border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 13px; }
   #file-offer-save { margin-left: 8px; }
@@ -163,6 +168,16 @@ export const PLAYER_HTML = `<!doctype html>
     <div id="files-section" style="display:none">
     <h2>Files</h2>
     <div id="file-offer">Incoming file <span id="file-offer-name"></span><button type="button" id="file-offer-save">Save</button></div>
+    <button id="file-split" type="button">Split</button>
+    <button id="file-mkdir" type="button">New folder</button>
+    <button id="file-sel-all" type="button" style="display:none">Select all</button>
+    <button id="file-sel-copy" type="button" style="display:none">Copy</button>
+    <button id="file-sel-cut" type="button" style="display:none">Cut</button>
+    <button id="file-sel-get" type="button" style="display:none">Get</button>
+    <button id="file-sel-delete" type="button" style="display:none">Delete</button>
+    <button id="file-paste" type="button" style="display:none">Paste here</button>
+    <div id="files-panes">
+    <div id="file-pane-a" class="file-pane on">
     <div id="file-roots" role="tablist" aria-label="Host folders">
       <button type="button" data-root="inbox" class="on">Inbox</button>
       <button type="button" data-root="home">Home</button>
@@ -171,16 +186,23 @@ export const PLAYER_HTML = `<!doctype html>
       <button type="button" data-root="downloads">Downloads</button>
     </div>
     <div id="file-path"></div>
-    <button id="file-mkdir" type="button">New folder</button>
-    <button id="file-sel-all" type="button" style="display:none">Select all</button>
-    <button id="file-sel-copy" type="button" style="display:none">Copy</button>
-    <button id="file-sel-cut" type="button" style="display:none">Cut</button>
-    <button id="file-sel-get" type="button" style="display:none">Get</button>
-    <button id="file-sel-delete" type="button" style="display:none">Delete</button>
-    <button id="file-paste" type="button" style="display:none">Paste here</button>
     <div id="file-drop">Drop files into this folder or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
-    <div id="file-out"></div>
     <ul id="file-list"></ul>
+    </div>
+    <div id="file-pane-b" class="file-pane" style="display:none">
+    <div id="file-b-roots" role="tablist" aria-label="Host folders">
+      <button type="button" data-root="inbox">Inbox</button>
+      <button type="button" data-root="home">Home</button>
+      <button type="button" data-root="desktop" class="on">Desktop</button>
+      <button type="button" data-root="documents">Documents</button>
+      <button type="button" data-root="downloads">Downloads</button>
+    </div>
+    <div id="file-b-path"></div>
+    <div id="file-b-drop">Drop files into this folder</div>
+    <ul id="file-b-list"></ul>
+    </div>
+    </div>
+    <div id="file-out"></div>
     </div>
     <div id="chat-section">
     <h2>Chat</h2>
@@ -791,14 +813,60 @@ export const PLAYER_HTML = `<!doctype html>
     a.click();
     setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 2000);
   }
-  var fileRoot = "inbox";
-  var filePath = "";
+  function makeFilePane(root) {
+    return { root: root || "inbox", path: "", selected: [], items: [], anchor: null };
+  }
+  var filePanes = { a: makeFilePane("inbox"), b: makeFilePane("desktop") };
+  var fileFocus = "a";
+  var fileSplitOn = false;
   var fileClip = null;
-  var fileSelected = [];
-  var fileListItems = [];
-  var fileSelAnchor = null;
-  function fileLocQuery() {
-    return "root=" + encodeURIComponent(fileRoot) + "&path=" + encodeURIComponent(filePath);
+  function P(id) {
+    if (id === "b" && fileSplitOn) return filePanes.b;
+    if (id === "a") return filePanes.a;
+    return fileSplitOn && fileFocus === "b" ? filePanes.b : filePanes.a;
+  }
+  function paneEls(id) {
+    if (id === "b") {
+      return {
+        pane: document.getElementById("file-pane-b"),
+        roots: document.getElementById("file-b-roots"),
+        path: document.getElementById("file-b-path"),
+        list: document.getElementById("file-b-list"),
+        drop: document.getElementById("file-b-drop")
+      };
+    }
+    return {
+      pane: document.getElementById("file-pane-a"),
+      roots: document.getElementById("file-roots"),
+      path: document.getElementById("file-path"),
+      list: document.getElementById("file-list"),
+      drop: document.getElementById("file-drop")
+    };
+  }
+  function setFileFocus(id) {
+    fileFocus = id === "b" && fileSplitOn ? "b" : "a";
+    var a = document.getElementById("file-pane-a");
+    var b = document.getElementById("file-pane-b");
+    if (a) a.classList.toggle("on", fileFocus === "a");
+    if (b) b.classList.toggle("on", fileFocus === "b");
+    syncFileSel();
+    syncFilePaste();
+  }
+  function setFileSplit(on) {
+    fileSplitOn = !!on;
+    var wrap = document.getElementById("files-panes");
+    var btn = document.getElementById("file-split");
+    var paneB = document.getElementById("file-pane-b");
+    if (wrap) wrap.classList.toggle("split", fileSplitOn);
+    if (paneB) paneB.style.display = fileSplitOn ? "block" : "none";
+    if (btn) btn.classList.toggle("on", fileSplitOn);
+    if (!fileSplitOn) setFileFocus("a");
+    else browseFiles(P("b").root, P("b").path, "b");
+    return fileSplitOn;
+  }
+  function fileLocQuery(id) {
+    var p = P(id);
+    return "root=" + encodeURIComponent(p.root) + "&path=" + encodeURIComponent(p.path);
   }
   function fileNamesQuery(names) {
     var q = fileLocQuery();
@@ -808,10 +876,10 @@ export const PLAYER_HTML = `<!doctype html>
     return q;
   }
   function selectedFileNames() {
-    return fileSelected.map(function (s) { return s.name; });
+    return P().selected.map(function (s) { return s.name; });
   }
   function selectedHasDir() {
-    return fileSelected.some(function (s) { return s.dir; });
+    return P().selected.some(function (s) { return s.dir; });
   }
   function fileRangeItems(items, from, to) {
     items = items || [];
@@ -829,9 +897,9 @@ export const PLAYER_HTML = `<!doctype html>
   function toggleFileSel(name, dir, on) {
     var n = String(name || "").trim();
     if (!n) return;
-    fileSelected = fileSelected.filter(function (s) { return s.name !== n; });
-    if (on) fileSelected.push({ name: n, dir: !!dir });
-    fileSelAnchor = n;
+    P().selected = P().selected.filter(function (s) { return s.name !== n; });
+    if (on) P().selected.push({ name: n, dir: !!dir });
+    P().anchor = n;
     syncFileSelChecks();
     syncFileSel();
   }
@@ -839,7 +907,7 @@ export const PLAYER_HTML = `<!doctype html>
     var ul = document.getElementById("file-list");
     if (!ul) return;
     var selected = {};
-    fileSelected.forEach(function (s) { selected[s.name] = true; });
+    P().selected.forEach(function (s) { selected[s.name] = true; });
     ul.querySelectorAll("li[data-name]").forEach(function (li) {
       var name = li.getAttribute("data-name");
       var cb = li.querySelector('input[type="checkbox"]');
@@ -850,64 +918,64 @@ export const PLAYER_HTML = `<!doctype html>
   }
   function clickFileSel(ev, name, dir) {
     var n = String(name || "").trim();
-    if (!n) return fileSelected;
+    if (!n) return P().selected;
     var accel = !!(ev && (ev.metaKey || ev.ctrlKey));
     var shift = !!(ev && ev.shiftKey);
-    if (shift && fileSelAnchor) {
-      var range = fileRangeItems(fileListItems, fileSelAnchor, n);
+    if (shift && P().anchor) {
+      var range = fileRangeItems(P().items, P().anchor, n);
       if (accel) {
         var have = {};
-        fileSelected.forEach(function (s) { have[s.name] = s; });
+        P().selected.forEach(function (s) { have[s.name] = s; });
         range.forEach(function (e) { have[e.name] = { name: e.name, dir: !!e.dir }; });
-        fileSelected = fileListItems.filter(function (e) { return have[e.name]; }).map(function (e) {
+        P().selected = P().items.filter(function (e) { return have[e.name]; }).map(function (e) {
           return { name: e.name, dir: !!e.dir };
         });
       } else {
-        fileSelected = range.map(function (e) { return { name: e.name, dir: !!e.dir }; });
+        P().selected = range.map(function (e) { return { name: e.name, dir: !!e.dir }; });
       }
       syncFileSelChecks();
       syncFileSel();
-      return fileSelected;
+      return P().selected;
     }
     if (accel) {
-      var on = !fileSelected.some(function (s) { return s.name === n; });
+      var on = !P().selected.some(function (s) { return s.name === n; });
       toggleFileSel(n, dir, on);
-      return fileSelected;
+      return P().selected;
     }
-    fileSelected = [{ name: n, dir: !!dir }];
-    fileSelAnchor = n;
+    P().selected = [{ name: n, dir: !!dir }];
+    P().anchor = n;
     syncFileSelChecks();
     syncFileSel();
-    return fileSelected;
+    return P().selected;
   }
   function selectAllFiles() {
-    fileSelected = fileListItems.map(function (e) { return { name: e.name, dir: !!e.dir }; });
-    if (fileListItems.length) fileSelAnchor = fileListItems[fileListItems.length - 1].name;
+    P().selected = P().items.map(function (e) { return { name: e.name, dir: !!e.dir }; });
+    if (P().items.length) P().anchor = P().items[P().items.length - 1].name;
     syncFileSelChecks();
     syncFileSel();
-    return fileSelected;
+    return P().selected;
   }
   function pruneFileSel(files) {
     var live = {};
     (files || []).forEach(function (f) { if (f && f.name) live[f.name] = !!f.dir; });
-    fileSelected = fileSelected.filter(function (s) { return Object.prototype.hasOwnProperty.call(live, s.name); });
-    fileSelected.forEach(function (s) { s.dir = live[s.name]; });
+    P().selected = P().selected.filter(function (s) { return Object.prototype.hasOwnProperty.call(live, s.name); });
+    P().selected.forEach(function (s) { s.dir = live[s.name]; });
     syncFileSel();
   }
   function syncFileSel() {
-    var n = fileSelected.length;
+    var n = P().selected.length;
     ["file-sel-copy", "file-sel-cut", "file-sel-get", "file-sel-delete"].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.style.display = n ? "inline-block" : "none";
     });
     var all = document.getElementById("file-sel-all");
-    if (all) all.style.display = fileListItems.length ? "inline-block" : "none";
+    if (all) all.style.display = P().items.length ? "inline-block" : "none";
   }
   function addFileCheck(li, f) {
     var cb = document.createElement("input");
     cb.type = "checkbox";
     cb.setAttribute("aria-label", "Select " + f.name);
-    cb.checked = fileSelected.some(function (s) { return s.name === f.name; });
+    cb.checked = P().selected.some(function (s) { return s.name === f.name; });
     cb.addEventListener("click", function (ev) {
       ev.preventDefault();
       ev.stopPropagation();
@@ -919,7 +987,7 @@ export const PLAYER_HTML = `<!doctype html>
   }
   function bindFileRowSel(li, f) {
     li.setAttribute("data-name", f.name);
-    li.classList.toggle("on", fileSelected.some(function (s) { return s.name === f.name; }));
+    li.classList.toggle("on", P().selected.some(function (s) { return s.name === f.name; }));
     li.addEventListener("click", function (ev) {
       if (ev.target && ev.target.closest && ev.target.closest("button, a, input")) return;
       clickFileSel(ev, f.name, !!f.dir);
@@ -968,7 +1036,7 @@ export const PLAYER_HTML = `<!doctype html>
     var n = String(name || "").trim();
     if (n && names.indexOf(n) < 0) names = [n];
     if (!names.length && n) names = [n];
-    return { root: fileRoot, path: filePath, names: names };
+    return { root: P().root, path: P().path, names: names };
   }
   function parseFileDrag(dt) {
     if (!dt) return null;
@@ -983,25 +1051,28 @@ export const PLAYER_HTML = `<!doctype html>
       return null;
     }
   }
-  function browseFiles(root, path) {
-    if (root) fileRoot = String(root);
-    filePath = path == null ? filePath : String(path);
-    fileSelected = [];
-    fileSelAnchor = null;
-    syncFileSel();
-    var roots = document.getElementById("file-roots");
-    if (roots) {
-      roots.querySelectorAll("button").forEach(function (b) {
-        b.classList.toggle("on", b.getAttribute("data-root") === fileRoot);
+  function browseFiles(root, path, id) {
+    if (id !== "a" && id !== "b") id = fileFocus;
+    if (id === "b" && !fileSplitOn) id = "a";
+    var p = P(id);
+    if (root) p.root = String(root);
+    p.path = path == null ? p.path : String(path);
+    p.selected = [];
+    p.anchor = null;
+    var els = paneEls(id);
+    if (els.roots) {
+      els.roots.querySelectorAll("button").forEach(function (b) {
+        b.classList.toggle("on", b.getAttribute("data-root") === p.root);
       });
     }
-    var crumb = document.getElementById("file-path");
-    if (crumb) crumb.textContent = filePath ? (fileRoot + " / " + filePath.replace(/\//g, " / ")) : fileRoot;
+    if (els.path) els.path.textContent = p.path ? (p.root + " / " + p.path.replace(/\//g, " / ")) : p.root;
+    syncFileSel();
     syncFilePaste();
-    sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
-    return { root: fileRoot, path: filePath };
+    sendFileJson({ type: "file", action: "list", root: filePanes.a.root, path: filePanes.a.path });
+    if (fileSplitOn) sendFileJson({ type: "file", action: "list", root: filePanes.b.root, path: filePanes.b.path });
+    return { root: p.root, path: p.path };
   }
-  function bindFileRoots(el) {
+  function bindFileRoots(el, id) {
     if (!el || el.dataset.rootsBound) return;
     el.dataset.rootsBound = "1";
     el.addEventListener("click", function (ev) {
@@ -1009,7 +1080,8 @@ export const PLAYER_HTML = `<!doctype html>
       if (!btn || !el.contains(btn)) return;
       var root = btn.getAttribute("data-root");
       if (!root) return;
-      browseFiles(root, "");
+      setFileFocus(id);
+      browseFiles(root, "", id);
     });
     el.querySelectorAll("button[data-root]").forEach(function (btn) {
       bindFileDropTarget(btn, function () {
@@ -1017,7 +1089,8 @@ export const PLAYER_HTML = `<!doctype html>
       });
     });
   }
-  bindFileRoots(document.getElementById("file-roots"));
+  bindFileRoots(document.getElementById("file-roots"), "a");
+  bindFileRoots(document.getElementById("file-b-roots"), "b");
   function renameInboxFile(from, to) {
     var out = document.getElementById("file-out");
     var src = String(from || "").trim();
@@ -1026,7 +1099,7 @@ export const PLAYER_HTML = `<!doctype html>
     if (dest == null && typeof window.prompt === "function") dest = window.prompt("New name", src);
     dest = String(dest || "").trim();
     if (!dest || dest === src) return dest;
-    if (sendFileJson({ type: "file", action: "rename", name: src, to: dest, root: fileRoot, path: filePath })) {
+    if (sendFileJson({ type: "file", action: "rename", name: src, to: dest, root: P().root, path: P().path })) {
       if (out) out.textContent = "renaming " + src + "…";
     }
     return dest;
@@ -1035,7 +1108,7 @@ export const PLAYER_HTML = `<!doctype html>
     var out = document.getElementById("file-out");
     var n = String(name || "").trim();
     if (!n) return "";
-    if (sendFileJson({ type: "file", action: "mkdir", name: n, root: fileRoot, path: filePath })) {
+    if (sendFileJson({ type: "file", action: "mkdir", name: n, root: P().root, path: P().path })) {
       if (out) out.textContent = "creating " + n + "…";
     }
     return n;
@@ -1076,7 +1149,7 @@ export const PLAYER_HTML = `<!doctype html>
       syncFilePaste();
       return null;
     }
-    fileClip = { op: op, root: fileRoot, path: filePath, name: names[0], names: names };
+    fileClip = { op: op, root: P().root, path: P().path, name: names[0], names: names };
     syncFilePaste();
     var out = document.getElementById("file-out");
     var label = names.length === 1 ? names[0] : (names.length + " items");
@@ -1108,7 +1181,7 @@ export const PLAYER_HTML = `<!doctype html>
     var names = clipNames(fileClip);
     if (!names.length) return;
     var clip = fileClip;
-    transferFilesTo(clip.root, clip.path, names, fileRoot, filePath, clip.op === "move");
+    transferFilesTo(clip.root, clip.path, names, P().root, P().path, clip.op === "move");
     if (clip.op === "move") fileClip = null;
     syncFilePaste();
   }
@@ -1166,7 +1239,7 @@ export const PLAYER_HTML = `<!doctype html>
     li.addEventListener("dragend", function () { li.classList.remove("dragging"); });
     if (f.dir) {
       bindFileDropTarget(li, function () {
-        return { root: fileRoot, path: joinFilePath(filePath, f.name) };
+        return { root: P().root, path: joinFilePath(P().path, f.name) };
       });
     }
   }
@@ -1184,7 +1257,7 @@ export const PLAYER_HTML = `<!doctype html>
         && !window.confirm("Delete “" + name + "” and everything inside?")) {
       return;
     }
-    if (sendFileJson({ type: "file", action: "delete", name: name, root: fileRoot, path: filePath })) {
+    if (sendFileJson({ type: "file", action: "delete", name: name, root: P().root, path: P().path })) {
       if (out) out.textContent = "deleting " + name + "…";
     }
   }
@@ -1200,7 +1273,7 @@ export const PLAYER_HTML = `<!doctype html>
         && !window.confirm("Delete " + list.length + " items" + (hasDir ? " and everything inside folders" : "") + "?")) {
       return;
     }
-    if (sendFileJson({ type: "file", action: "delete", name: list[0], names: list, root: fileRoot, path: filePath })) {
+    if (sendFileJson({ type: "file", action: "delete", name: list[0], names: list, root: P().root, path: P().path })) {
       if (out) out.textContent = "deleting " + list.length + " items…";
     }
   }
@@ -1227,7 +1300,7 @@ export const PLAYER_HTML = `<!doctype html>
         var names = selectedFileNames();
         if (!names.length) return;
         var save = names.length === 1
-          ? (fileSelected[0].dir ? names[0] + ".zip" : names[0])
+          ? (P().selected[0].dir ? names[0] + ".zip" : names[0])
           : "files.zip";
         startInboxGet(names[0], 0, save, names);
       });
@@ -1245,7 +1318,7 @@ export const PLAYER_HTML = `<!doctype html>
     var save = saveAs || name;
     var list = names && names.length ? names : [name];
     function sendGet() {
-      sendFileJson({ type: "file", action: "get", name: name, names: list, root: fileRoot, path: filePath });
+      sendFileJson({ type: "file", action: "get", name: name, names: list, root: P().root, path: P().path });
     }
     if (typeof window.showSaveFilePicker === "function") {
       window.showSaveFilePicker({ suggestedName: save || "file" }).then(function (handle) {
@@ -1265,31 +1338,42 @@ export const PLAYER_HTML = `<!doctype html>
     a.remove();
     if (out) out.textContent = "saving " + save + "…";
   }
-  function renderFileList(files, root, path) {
-    if (root) fileRoot = root;
-    if (typeof path === "string") filePath = path;
-    var roots = document.getElementById("file-roots");
-    if (roots) {
-      roots.querySelectorAll("button").forEach(function (b) {
-        b.classList.toggle("on", b.getAttribute("data-root") === fileRoot);
+  function applyFileList(files, root, path) {
+    root = root || "inbox";
+    path = path == null ? "" : String(path);
+    var ids = [];
+    if (filePanes.a.root === root && filePanes.a.path === path) ids.push("a");
+    if (fileSplitOn && filePanes.b.root === root && filePanes.b.path === path) ids.push("b");
+    if (!ids.length) ids.push(fileFocus);
+    ids.forEach(function (id) { renderFileList(files, root, path, id); });
+  }
+  function renderFileList(files, root, path, id) {
+    if (id !== "a" && id !== "b") id = fileFocus;
+    if (id === "b" && !fileSplitOn) id = "a";
+    var p = P(id);
+    var els = paneEls(id);
+    if (root) p.root = root;
+    if (typeof path === "string") p.path = path;
+    if (els.roots) {
+      els.roots.querySelectorAll("button").forEach(function (b) {
+        b.classList.toggle("on", b.getAttribute("data-root") === p.root);
       });
     }
-    var crumb = document.getElementById("file-path");
-    if (crumb) crumb.textContent = filePath ? (fileRoot + " / " + filePath.replace(/\//g, " / ")) : fileRoot;
-    var ul = document.getElementById("file-list");
+    if (els.path) els.path.textContent = p.path ? (p.root + " / " + p.path.replace(/\//g, " / ")) : p.root;
+    var ul = els.list;
     if (!ul) return;
     ul.innerHTML = "";
     bindFileListKeys(ul);
-    fileListItems = (files || []).map(function (f) { return { name: f.name, dir: !!f.dir }; });
-    if (filePath) {
+    p.items = (files || []).map(function (f) { return { name: f.name, dir: !!f.dir }; });
+    if (p.path) {
       var up = document.createElement("li");
       var upBtn = document.createElement("button");
       upBtn.type = "button";
       upBtn.textContent = "Up";
-      upBtn.addEventListener("click", function () { browseFiles(fileRoot, parentFilePath(filePath)); });
+      upBtn.addEventListener("click", function () { browseFiles(P(id).root, parentFilePath(P(id).path), id); });
       up.appendChild(upBtn);
       bindFileDropTarget(up, function () {
-        return { root: fileRoot, path: parentFilePath(filePath) };
+        return { root: P(id).root, path: parentFilePath(P(id).path) };
       });
       ul.appendChild(up);
     }
@@ -1309,7 +1393,7 @@ export const PLAYER_HTML = `<!doctype html>
             clickFileSel(ev, f.name, true);
             return;
           }
-          browseFiles(fileRoot, joinFilePath(filePath, f.name));
+          browseFiles(P(id).root, joinFilePath(P(id).path, f.name), id);
         });
         li.appendChild(open);
         var renDir = document.createElement("button");
@@ -1412,31 +1496,36 @@ export const PLAYER_HTML = `<!doctype html>
       startChunkPump(msg.id, job.name, job.file, msg.offset || 0);
       return;
     }
-    if (msg.action === "list") { renderFileList(msg.files || [], msg.root, msg.path); return; }
+    if (msg.action === "list") { applyFileList(msg.files || [], msg.root, msg.path); return; }
     if (msg.action === "ok") {
       if (out) out.textContent = "saved " + (msg.name || "");
-      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
+      sendFileJson({ type: "file", action: "list", root: filePanes.a.root, path: filePanes.a.path });
+      if (fileSplitOn) sendFileJson({ type: "file", action: "list", root: filePanes.b.root, path: filePanes.b.path });
       if (msg.offer && msg.name) showFileOffer(msg.name, msg.size);
       return;
     }
     if (msg.action === "deleted") {
       if (out) out.textContent = "deleted " + (msg.name || "");
-      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
+      sendFileJson({ type: "file", action: "list", root: filePanes.a.root, path: filePanes.a.path });
+      if (fileSplitOn) sendFileJson({ type: "file", action: "list", root: filePanes.b.root, path: filePanes.b.path });
       return;
     }
     if (msg.action === "mkdir") {
       if (out) out.textContent = "created " + (msg.name || "");
-      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
+      sendFileJson({ type: "file", action: "list", root: filePanes.a.root, path: filePanes.a.path });
+      if (fileSplitOn) sendFileJson({ type: "file", action: "list", root: filePanes.b.root, path: filePanes.b.path });
       return;
     }
     if (msg.action === "renamed") {
       if (out) out.textContent = "renamed " + (msg.name || "");
-      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
+      sendFileJson({ type: "file", action: "list", root: filePanes.a.root, path: filePanes.a.path });
+      if (fileSplitOn) sendFileJson({ type: "file", action: "list", root: filePanes.b.root, path: filePanes.b.path });
       return;
     }
     if (msg.action === "copied" || msg.action === "moved") {
       if (out) out.textContent = (msg.action === "moved" ? "moved " : "copied ") + (msg.name || "");
-      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
+      sendFileJson({ type: "file", action: "list", root: filePanes.a.root, path: filePanes.a.path });
+      if (fileSplitOn) sendFileJson({ type: "file", action: "list", root: filePanes.b.root, path: filePanes.b.path });
       return;
     }
     if (msg.action === "error" && out) { out.textContent = "error: " + (msg.error || "file"); return; }
@@ -1491,8 +1580,8 @@ export const PLAYER_HTML = `<!doctype html>
   function uploadFile(file, root, path) {
     var out = document.getElementById("file-out");
     if (!file) return;
-    root = root == null ? fileRoot : root;
-    path = path == null ? filePath : path;
+    root = root == null ? P().root : root;
+    path = path == null ? P().path : path;
     if (file.size > FILE_MAX) { if (out) out.textContent = "file too large (2 GB max)"; return; }
     if (out) out.textContent = "sending " + file.name + "…";
     var id = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -1549,8 +1638,15 @@ export const PLAYER_HTML = `<!doctype html>
       uploadDroppedFiles(ev.dataTransfer && ev.dataTransfer.files);
     });
   }
-  bindFileDrop(document.getElementById("file-drop"));
   bindFileDrop(video);
+  bindFileDropTarget(document.getElementById("file-drop"), function () { return { root: filePanes.a.root, path: filePanes.a.path }; });
+  bindFileDropTarget(document.getElementById("file-b-drop"), function () { return { root: filePanes.b.root, path: filePanes.b.path }; });
+  var paneA = document.getElementById("file-pane-a");
+  var paneB = document.getElementById("file-pane-b");
+  if (paneA) paneA.addEventListener("mousedown", function () { setFileFocus("a"); });
+  if (paneB) paneB.addEventListener("mousedown", function () { setFileFocus("b"); });
+  var splitBtn = document.getElementById("file-split");
+  if (splitBtn) splitBtn.addEventListener("click", function () { setFileSplit(!fileSplitOn); });
   var fileInput = document.getElementById("file-input");
   if (fileInput) {
     fileInput.addEventListener("change", function () {
@@ -1662,7 +1758,8 @@ export const PLAYER_HTML = `<!doctype html>
     if (!voiceOn) stopTalk();
     var qsel = document.getElementById("stream-quality");
     if (qsel && ctl && ctl.preset && document.activeElement !== qsel) qsel.value = ctl.preset;
-    if (controlOn) sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
+    if (controlOn) sendFileJson({ type: "file", action: "list", root: filePanes.a.root, path: filePanes.a.path });
+      if (fileSplitOn) sendFileJson({ type: "file", action: "list", root: filePanes.b.root, path: filePanes.b.path });
     renderDisplays(ctl && ctl.displays, ctl && (ctl.display || ctl.input));
     fillWolMacs(ctl && ctl.macs);
     if (ctl && typeof ctl.publisher === "boolean") hostLive = ctl.publisher;

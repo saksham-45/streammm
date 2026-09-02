@@ -66,14 +66,7 @@
     </div>
     <div id="files-section" class="hidden">
       <h2>Files</h2>
-      <div id="file-roots" role="tablist" aria-label="Host folders">
-        <button type="button" data-root="inbox" class="on">Inbox</button>
-        <button type="button" data-root="home">Home</button>
-        <button type="button" data-root="desktop">Desktop</button>
-        <button type="button" data-root="documents">Documents</button>
-        <button type="button" data-root="downloads">Downloads</button>
-      </div>
-      <div id="file-path"></div>
+      <button id="file-split" type="button">Split</button>
       <button id="file-mkdir" type="button">New folder</button>
       <button id="file-sel-all" type="button" class="hidden">Select all</button>
       <button id="file-sel-copy" type="button" class="hidden">Copy</button>
@@ -81,9 +74,33 @@
       <a id="file-sel-get" class="hidden">Get</a>
       <button id="file-sel-delete" type="button" class="hidden">Delete</button>
       <button id="file-paste" type="button" class="hidden">Paste here</button>
-      <div id="file-drop" tabindex="0">Drop files into this folder or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
+      <div id="files-panes">
+        <div id="file-pane-a" class="file-pane on">
+          <div id="file-roots" role="tablist" aria-label="Host folders">
+            <button type="button" data-root="inbox" class="on">Inbox</button>
+            <button type="button" data-root="home">Home</button>
+            <button type="button" data-root="desktop">Desktop</button>
+            <button type="button" data-root="documents">Documents</button>
+            <button type="button" data-root="downloads">Downloads</button>
+          </div>
+          <div id="file-path"></div>
+          <div id="file-drop" tabindex="0">Drop files into this folder or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
+          <ul id="file-list"></ul>
+        </div>
+        <div id="file-pane-b" class="file-pane hidden">
+          <div id="file-b-roots" role="tablist" aria-label="Host folders">
+            <button type="button" data-root="inbox">Inbox</button>
+            <button type="button" data-root="home">Home</button>
+            <button type="button" data-root="desktop" class="on">Desktop</button>
+            <button type="button" data-root="documents">Documents</button>
+            <button type="button" data-root="downloads">Downloads</button>
+          </div>
+          <div id="file-b-path"></div>
+          <div id="file-b-drop" tabindex="0">Drop files into this folder</div>
+          <ul id="file-b-list"></ul>
+        </div>
+      </div>
       <div id="file-out"></div>
-      <ul id="file-list"></ul>
     </div>
     <div id="recordings-section" class="hidden">
       <h2>Recordings</h2>

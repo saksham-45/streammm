@@ -287,7 +287,7 @@ aside h3 { font-size: 13px; margin: 16px 0 6px; color: #aaa; text-transform: upp
 details { margin-top: 6px; font-size: 13px; color: #aaa; }
 summary { cursor: pointer; }
 
-#file-drop {
+#file-drop, #file-b-drop {
   border: 1px dashed #555;
   border-radius: 8px;
   padding: 12px;
@@ -297,6 +297,7 @@ summary { cursor: pointer; }
   margin: 8px 0;
 }
 #file-drop.drop-hover,
+#file-b-drop.drop-hover,
 #stream-pane.drop-hover { border-color: #7eb8ff; background: #182030; }
 #chat-section { margin-bottom: 16px; }
 #chat-log {
@@ -316,25 +317,30 @@ summary { cursor: pointer; }
 #chat-form input { flex: 1; }
 .file-pick { color: #7eb8ff; cursor: pointer; }
 .file-pick input { display: none; }
-#file-roots { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
-#file-roots button { padding: 4px 8px; font-size: 12px; }
-#file-roots button.on { border-color: #7eb8ff; color: #7eb8ff; }
-#file-path { font-size: 12px; color: #9a9a9a; min-height: 1.2em; }
-#file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; outline: none; }
-#file-list li { border-top: 1px solid #333; padding: 6px 0; }
-#file-list li.on { background: #1a2a3a; }
-#file-list li.dragging { opacity: 0.5; }
-#file-list li.drop-hover,
-#file-roots button.drop-hover { outline: 1px dashed #7eb8ff; background: #1a2a3a; }
-#file-list button { padding: 2px 8px; margin-left: 8px; }
-#file-list input[type="checkbox"] { margin-right: 8px; vertical-align: middle; }
+#file-split.on { border-color: #7eb8ff; color: #7eb8ff; }
+#files-panes { display: grid; grid-template-columns: 1fr; gap: 12px; }
+#files-panes.split { grid-template-columns: 1fr 1fr; }
+.file-pane { min-width: 0; border: 1px solid transparent; border-radius: 8px; padding: 4px 6px 8px; }
+.file-pane.on { border-color: #7eb8ff; }
+#file-roots, #file-b-roots { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+#file-roots button, #file-b-roots button { padding: 4px 8px; font-size: 12px; }
+#file-roots button.on, #file-b-roots button.on { border-color: #7eb8ff; color: #7eb8ff; }
+#file-path, #file-b-path { font-size: 12px; color: #9a9a9a; min-height: 1.2em; }
+#file-list, #file-b-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; outline: none; }
+#file-list li, #file-b-list li { border-top: 1px solid #333; padding: 6px 0; }
+#file-list li.on, #file-b-list li.on { background: #1a2a3a; }
+#file-list li.dragging, #file-b-list li.dragging { opacity: 0.5; }
+#file-list li.drop-hover, #file-b-list li.drop-hover,
+#file-roots button.drop-hover, #file-b-roots button.drop-hover { outline: 1px dashed #7eb8ff; background: #1a2a3a; }
+#file-list button, #file-b-list button { padding: 2px 8px; margin-left: 8px; }
+#file-list input[type="checkbox"], #file-b-list input[type="checkbox"] { margin-right: 8px; vertical-align: middle; }
 #file-sel-get { margin-left: 8px; }
 #recordings-section { margin-bottom: 16px; }
 #recordings-out { font-size: 12px; color: #9a9a9a; min-height: 1.2em; }
 #recordings-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
 #recordings-list li { border-top: 1px solid #333; padding: 6px 0; }
 #recordings-list a { color: #7eb8ff; }
-#file-list a { color: #7eb8ff; }
+#file-list a, #file-b-list a { color: #7eb8ff; }
 #file-out { font-size: 12px; color: #9a9a9a; min-height: 1.2em; }
 
 #cu-form,

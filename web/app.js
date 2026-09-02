@@ -792,15 +792,79 @@ function sendFileJson(msg) {
   return false;
 }
 
-let fileRoot = "inbox";
-let filePath = "";
+function makeFilePane(root) {
+  return { root: root || "inbox", path: "", selected: [], items: [], anchor: null };
+}
+let filePanes = { a: makeFilePane("inbox"), b: makeFilePane("desktop") };
+let fileFocus = "a";
+let fileSplitOn = false;
 let fileClip = null;
-let fileSelected = [];
-let fileListItems = [];
-let fileSelAnchor = null;
 
-function fileLocQuery() {
-  return "root=" + encodeURIComponent(fileRoot) + "&path=" + encodeURIComponent(filePath);
+function P(id) {
+  if (id === "b" && fileSplitOn) return filePanes.b;
+  if (id === "a") return filePanes.a;
+  return fileSplitOn && fileFocus === "b" ? filePanes.b : filePanes.a;
+}
+
+function paneEls(id) {
+  if (id === "b") {
+    return {
+      pane: $("file-pane-b"),
+      roots: $("file-b-roots"),
+      path: $("file-b-path"),
+      list: $("file-b-list"),
+      drop: $("file-b-drop")
+    };
+  }
+  return {
+    pane: $("file-pane-a"),
+    roots: $("file-roots"),
+    path: $("file-path"),
+    list: $("file-list"),
+    drop: $("file-drop")
+  };
+}
+
+function setFileFocus(id) {
+  fileFocus = id === "b" && fileSplitOn ? "b" : "a";
+  const a = $("file-pane-a");
+  const b = $("file-pane-b");
+  if (a) a.classList.toggle("on", fileFocus === "a");
+  if (b) b.classList.toggle("on", fileFocus === "b");
+  syncFileSel();
+  syncFilePaste();
+}
+
+function setFileSplit(on) {
+  fileSplitOn = !!on;
+  const wrap = $("files-panes");
+  const btn = $("file-split");
+  if (wrap) wrap.classList.toggle("split", fileSplitOn);
+  setHidden($("file-pane-b"), !fileSplitOn);
+  if (btn) btn.classList.toggle("on", fileSplitOn);
+  if (!fileSplitOn) setFileFocus("a");
+  else {
+    setFileFocus(fileFocus);
+    browseFiles(P("b").root, P("b").path, "b");
+  }
+  return fileSplitOn;
+}
+
+function bindFilePane(el, id) {
+  if (!el || el.dataset.paneBound) return;
+  el.dataset.paneBound = "1";
+  el.addEventListener("mousedown", function () { setFileFocus(id); });
+}
+
+function bindFileSplit(el) {
+  if (!el || el.dataset.splitBound) return;
+  el.dataset.splitBound = "1";
+  el.addEventListener("click", function () { setFileSplit(!fileSplitOn); });
+}
+
+function fileLocQuery(id) {
+  const p = P(id);
+  return "root=" + encodeURIComponent(p.root) + "&path=" + encodeURIComponent(p.path);
 }
 
 function fileNamesQuery(names) {
@@ -811,12 +875,12 @@ function fileNamesQuery(names) {
   return q;
 }
 
-function selectedFileNames() {
-  return fileSelected.map(function (s) { return s.name; });
+function selectedFileNames(id) {
+  return P(id).selected.map(function (s) { return s.name; });
 }
 
-function selectedHasDir() {
-  return fileSelected.some(function (s) { return s.dir; });
+function selectedHasDir(id) {
+  return P(id).selected.some(function (s) { return s.dir; });
 }
 
 function fileRangeItems(items, from, to) {
@@ -838,21 +902,22 @@ function fileRangeItems(items, from, to) {
   return items.slice(a, b + 1);
 }
 
-function toggleFileSel(name, dir, on) {
+function toggleFileSel(name, dir, on, id) {
   const n = String(name || "").trim();
   if (!n) return;
-  fileSelected = fileSelected.filter(function (s) { return s.name !== n; });
-  if (on) fileSelected.push({ name: n, dir: !!dir });
-  fileSelAnchor = n;
-  syncFileSelChecks();
+  const p = P(id);
+  p.selected = p.selected.filter(function (s) { return s.name !== n; });
+  if (on) p.selected.push({ name: n, dir: !!dir });
+  p.anchor = n;
+  syncFileSelChecks(id);
   syncFileSel();
 }
 
-function syncFileSelChecks() {
-  const ul = $("file-list");
+function syncFileSelChecks(id) {
+  const ul = paneEls(id).list;
   if (!ul) return;
   const selected = {};
-  fileSelected.forEach(function (s) { selected[s.name] = true; });
+  P(id).selected.forEach(function (s) { selected[s.name] = true; });
   ul.querySelectorAll("li[data-name]").forEach(function (li) {
     const name = li.getAttribute("data-name");
     const cb = li.querySelector('input[type="checkbox"]');
@@ -862,57 +927,62 @@ function syncFileSelChecks() {
   });
 }
 
-function clickFileSel(ev, name, dir) {
+function clickFileSel(ev, name, dir, id) {
   const n = String(name || "").trim();
-  if (!n) return fileSelected;
+  const p = P(id);
+  if (!n) return p.selected;
+  if (id) setFileFocus(id);
   const accel = !!(ev && (ev.metaKey || ev.ctrlKey));
   const shift = !!(ev && ev.shiftKey);
-  if (shift && fileSelAnchor) {
-    const range = fileRangeItems(fileListItems, fileSelAnchor, n);
+  if (shift && p.anchor) {
+    const range = fileRangeItems(p.items, p.anchor, n);
     if (accel) {
       const have = {};
-      fileSelected.forEach(function (s) { have[s.name] = s; });
+      p.selected.forEach(function (s) { have[s.name] = s; });
       range.forEach(function (e) { have[e.name] = { name: e.name, dir: !!e.dir }; });
-      fileSelected = fileListItems.filter(function (e) { return have[e.name]; }).map(function (e) {
+      p.selected = p.items.filter(function (e) { return have[e.name]; }).map(function (e) {
         return { name: e.name, dir: !!e.dir };
       });
     } else {
-      fileSelected = range.map(function (e) { return { name: e.name, dir: !!e.dir }; });
+      p.selected = range.map(function (e) { return { name: e.name, dir: !!e.dir }; });
     }
-    syncFileSelChecks();
+    syncFileSelChecks(id);
     syncFileSel();
-    return fileSelected;
+    return p.selected;
   }
   if (accel) {
-    const on = !fileSelected.some(function (s) { return s.name === n; });
-    toggleFileSel(n, dir, on);
-    return fileSelected;
+    const on = !p.selected.some(function (s) { return s.name === n; });
+    toggleFileSel(n, dir, on, id);
+    return p.selected;
   }
-  fileSelected = [{ name: n, dir: !!dir }];
-  fileSelAnchor = n;
-  syncFileSelChecks();
+  p.selected = [{ name: n, dir: !!dir }];
+  p.anchor = n;
+  syncFileSelChecks(id);
   syncFileSel();
-  return fileSelected;
+  return p.selected;
 }
 
-function selectAllFiles() {
-  fileSelected = fileListItems.map(function (e) { return { name: e.name, dir: !!e.dir }; });
-  if (fileListItems.length) fileSelAnchor = fileListItems[fileListItems.length - 1].name;
-  syncFileSelChecks();
+function selectAllFiles(id) {
+  const p = P(id);
+  p.selected = p.items.map(function (e) { return { name: e.name, dir: !!e.dir }; });
+  if (p.items.length) p.anchor = p.items[p.items.length - 1].name;
+  syncFileSelChecks(id);
   syncFileSel();
-  return fileSelected;
+  return p.selected;
 }
 
-function pruneFileSel(files) {
+function pruneFileSel(files, id) {
   const live = {};
   (files || []).forEach(function (f) { if (f && f.name) live[f.name] = !!f.dir; });
-  fileSelected = fileSelected.filter(function (s) { return Object.prototype.hasOwnProperty.call(live, s.name); });
-  fileSelected.forEach(function (s) { s.dir = live[s.name]; });
+  const p = P(id);
+  p.selected = p.selected.filter(function (s) { return Object.prototype.hasOwnProperty.call(live, s.name); });
+  p.selected.forEach(function (s) { s.dir = live[s.name]; });
   syncFileSel();
 }
 
 function syncFileSel() {
-  const n = fileSelected.length;
+  const p = P();
+  const n = p.selected.length;
   const names = selectedFileNames();
   ["file-sel-copy", "file-sel-cut", "file-sel-delete"].forEach(function (id) {
     setHidden($(id), n === 0);
@@ -922,37 +992,37 @@ function syncFileSel() {
     setHidden(get, n === 0);
     if (n) {
       get.href = url("/api/files/download?" + fileNamesQuery(names));
-      get.download = n === 1 ? (fileSelected[0].dir ? names[0] + ".zip" : names[0]) : "files.zip";
+      get.download = n === 1 ? (p.selected[0].dir ? names[0] + ".zip" : names[0]) : "files.zip";
     }
   }
-  setHidden($("file-sel-all"), fileListItems.length === 0);
+  setHidden($("file-sel-all"), p.items.length === 0);
 }
 
-function addFileCheck(li, f) {
+function addFileCheck(li, f, id) {
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.setAttribute("aria-label", "Select " + f.name);
-  cb.checked = fileSelected.some(function (s) { return s.name === f.name; });
+  cb.checked = P(id).selected.some(function (s) { return s.name === f.name; });
   cb.addEventListener("click", function (ev) {
     ev.preventDefault();
     ev.stopPropagation();
-    if (ev.shiftKey) clickFileSel(ev, f.name, !!f.dir);
-    else clickFileSel({ metaKey: true, ctrlKey: true, shiftKey: false }, f.name, !!f.dir);
+    if (ev.shiftKey) clickFileSel(ev, f.name, !!f.dir, id);
+    else clickFileSel({ metaKey: true, ctrlKey: true, shiftKey: false }, f.name, !!f.dir, id);
   });
   li.appendChild(cb);
   return cb;
 }
 
-function bindFileRowSel(li, f) {
+function bindFileRowSel(li, f, id) {
   li.setAttribute("data-name", f.name);
-  li.classList.toggle("on", fileSelected.some(function (s) { return s.name === f.name; }));
+  li.classList.toggle("on", P(id).selected.some(function (s) { return s.name === f.name; }));
   li.addEventListener("click", function (ev) {
     if (ev.target && ev.target.closest && ev.target.closest("button, a, input")) return;
-    clickFileSel(ev, f.name, !!f.dir);
+    clickFileSel(ev, f.name, !!f.dir, id);
   });
 }
 
-function bindFileListKeys(ul) {
+function bindFileListKeys(ul, id) {
   if (!ul || ul.dataset.keysBound) return;
   ul.dataset.keysBound = "1";
   ul.setAttribute("tabindex", "0");
@@ -961,7 +1031,8 @@ function bindFileListKeys(ul) {
     const k = String(ev.key || "");
     if ((ev.metaKey || ev.ctrlKey) && k.toLowerCase() === "a") {
       ev.preventDefault();
-      selectAllFiles();
+      setFileFocus(id);
+      selectAllFiles(id);
     }
   });
 }
@@ -997,12 +1068,13 @@ function fileCopyKey(ev) {
   return !!(ev && (ev.altKey || ev.ctrlKey));
 }
 
-function fileDragPayload(name) {
-  let names = selectedFileNames();
+function fileDragPayload(name, id) {
+  const p = P(id);
+  let names = p.selected.map(function (s) { return s.name; });
   const n = String(name || "").trim();
   if (n && names.indexOf(n) < 0) names = [n];
   if (!names.length && n) names = [n];
-  return { root: fileRoot, path: filePath, names: names };
+  return { root: p.root, path: p.path, names: names };
 }
 
 function parseFileDrag(dt) {
@@ -1019,26 +1091,28 @@ function parseFileDrag(dt) {
   }
 }
 
-function browseFiles(root, path) {
-  if (root) fileRoot = String(root);
-  filePath = path == null ? filePath : String(path);
-  fileSelected = [];
-  fileSelAnchor = null;
-  syncFileSel();
-  const roots = $("file-roots");
-  if (roots) {
-    roots.querySelectorAll("button").forEach(function (b) {
-      b.classList.toggle("on", b.getAttribute("data-root") === fileRoot);
+function browseFiles(root, path, id) {
+  if (id !== "a" && id !== "b") id = fileFocus;
+  if (id === "b" && !fileSplitOn) id = "a";
+  const p = P(id);
+  if (root) p.root = String(root);
+  p.path = path == null ? p.path : String(path);
+  p.selected = [];
+  p.anchor = null;
+  const els = paneEls(id);
+  if (els.roots) {
+    els.roots.querySelectorAll("button").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-root") === p.root);
     });
   }
-  const crumb = $("file-path");
-  if (crumb) crumb.textContent = filePath ? (fileRoot + " / " + filePath.replace(/\//g, " / ")) : fileRoot;
+  if (els.path) els.path.textContent = p.path ? (p.root + " / " + p.path.replace(/\//g, " / ")) : p.root;
+  syncFileSel();
   syncFilePaste();
   refreshFiles();
-  return { root: fileRoot, path: filePath };
+  return { root: p.root, path: p.path };
 }
 
-function bindFileRoots(el) {
+function bindFileRoots(el, id) {
   if (!el || el.dataset.rootsBound) return;
   el.dataset.rootsBound = "1";
   el.addEventListener("click", function (ev) {
@@ -1046,7 +1120,8 @@ function bindFileRoots(el) {
     if (!btn || !el.contains(btn)) return;
     const root = btn.getAttribute("data-root");
     if (!root) return;
-    browseFiles(root, "");
+    setFileFocus(id);
+    browseFiles(root, "", id);
   });
   el.querySelectorAll("button[data-root]").forEach(function (btn) {
     bindFileDropTarget(btn, function () {
@@ -1055,40 +1130,42 @@ function bindFileRoots(el) {
   });
 }
 
-function renderFileList(files, root, path) {
-  if (root) fileRoot = root;
-  if (typeof path === "string") filePath = path;
-  const roots = $("file-roots");
-  if (roots) {
-    roots.querySelectorAll("button").forEach(function (b) {
-      b.classList.toggle("on", b.getAttribute("data-root") === fileRoot);
+function renderFileList(files, root, path, id) {
+  if (id !== "a" && id !== "b") id = fileFocus;
+  if (id === "b" && !fileSplitOn) id = "a";
+  const p = P(id);
+  const els = paneEls(id);
+  if (root) p.root = root;
+  if (typeof path === "string") p.path = path;
+  if (els.roots) {
+    els.roots.querySelectorAll("button").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-root") === p.root);
     });
   }
-  const crumb = $("file-path");
-  if (crumb) crumb.textContent = filePath ? (fileRoot + " / " + filePath.replace(/\//g, " / ")) : fileRoot;
-  const ul = $("file-list");
+  if (els.path) els.path.textContent = p.path ? (p.root + " / " + p.path.replace(/\//g, " / ")) : p.root;
+  const ul = els.list;
   if (!ul) return;
   ul.innerHTML = "";
-  bindFileListKeys(ul);
-  fileListItems = (files || []).map(function (f) { return { name: f.name, dir: !!f.dir }; });
-  if (filePath) {
+  bindFileListKeys(ul, id);
+  p.items = (files || []).map(function (f) { return { name: f.name, dir: !!f.dir }; });
+  if (p.path) {
     const up = document.createElement("li");
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = "Up";
-    btn.addEventListener("click", function () { browseFiles(fileRoot, parentFilePath(filePath)); });
+    btn.addEventListener("click", function () { browseFiles(p.root, parentFilePath(p.path), id); });
     up.appendChild(btn);
     bindFileDropTarget(up, function () {
-      return { root: fileRoot, path: parentFilePath(filePath) };
+      return { root: P(id).root, path: parentFilePath(P(id).path) };
     });
     ul.appendChild(up);
   }
-  pruneFileSel(files);
+  pruneFileSel(files, id);
   (files || []).forEach(function (f) {
     const li = document.createElement("li");
-    addFileCheck(li, f);
-    bindFileRowSel(li, f);
-    bindFileDrag(li, f);
+    addFileCheck(li, f, id);
+    bindFileRowSel(li, f, id);
+    bindFileDrag(li, f, id);
     if (f.dir) {
       const open = document.createElement("button");
       open.type = "button";
@@ -1096,71 +1173,71 @@ function renderFileList(files, root, path) {
       open.addEventListener("click", function (ev) {
         if (ev.shiftKey || ev.metaKey || ev.ctrlKey) {
           ev.preventDefault();
-          clickFileSel(ev, f.name, true);
+          clickFileSel(ev, f.name, true, id);
           return;
         }
-        browseFiles(fileRoot, joinFilePath(filePath, f.name));
+        browseFiles(P(id).root, joinFilePath(P(id).path, f.name), id);
       });
       li.appendChild(open);
       const renDir = document.createElement("button");
       renDir.type = "button";
       renDir.textContent = "Rename";
-      renDir.addEventListener("click", function () { renameInboxFile(f.name); });
+      renDir.addEventListener("click", function () { setFileFocus(id); renameInboxFile(f.name); });
       li.appendChild(renDir);
       const copyDir = document.createElement("button");
       copyDir.type = "button";
       copyDir.textContent = "Copy";
-      copyDir.addEventListener("click", function () { clipFile("copy", f.name); });
+      copyDir.addEventListener("click", function () { setFileFocus(id); clipFile("copy", f.name); });
       li.appendChild(copyDir);
       const cutDir = document.createElement("button");
       cutDir.type = "button";
       cutDir.textContent = "Cut";
-      cutDir.addEventListener("click", function () { clipFile("move", f.name); });
+      cutDir.addEventListener("click", function () { setFileFocus(id); clipFile("move", f.name); });
       li.appendChild(cutDir);
       const getDir = document.createElement("a");
-      getDir.href = url("/api/files/download?name=" + encodeURIComponent(f.name) + "&" + fileLocQuery());
+      getDir.href = url("/api/files/download?name=" + encodeURIComponent(f.name) + "&" + fileLocQuery(id));
       getDir.textContent = "Get";
       getDir.download = f.name + ".zip";
       li.appendChild(getDir);
       const delDir = document.createElement("button");
       delDir.type = "button";
       delDir.textContent = "Delete";
-      delDir.addEventListener("click", function () { deleteInboxFile(f.name, true); });
+      delDir.addEventListener("click", function () { setFileFocus(id); deleteInboxFile(f.name, true); });
       li.appendChild(delDir);
       ul.appendChild(li);
       return;
     }
     const a = document.createElement("a");
-    a.href = url("/api/files/download?name=" + encodeURIComponent(f.name) + "&" + fileLocQuery());
+    a.href = url("/api/files/download?name=" + encodeURIComponent(f.name) + "&" + fileLocQuery(id));
     a.textContent = f.name + (f.size != null ? " (" + f.size + " B)" : "");
     a.download = f.name;
     a.draggable = false;
     a.addEventListener("click", function (ev) {
       if (ev.shiftKey || ev.metaKey || ev.ctrlKey) {
         ev.preventDefault();
-        clickFileSel(ev, f.name, false);
+        clickFileSel(ev, f.name, false, id);
       }
     });
     li.appendChild(a);
     const ren = document.createElement("button");
     ren.type = "button";
     ren.textContent = "Rename";
-    ren.addEventListener("click", function () { renameInboxFile(f.name); });
+    ren.addEventListener("click", function () { setFileFocus(id); renameInboxFile(f.name); });
     li.appendChild(ren);
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.textContent = "Copy";
-    copyBtn.addEventListener("click", function () { clipFile("copy", f.name); });
+    copyBtn.addEventListener("click", function () { setFileFocus(id); clipFile("copy", f.name); });
     li.appendChild(copyBtn);
     const cutBtn = document.createElement("button");
     cutBtn.type = "button";
     cutBtn.textContent = "Cut";
-    cutBtn.addEventListener("click", function () { clipFile("move", f.name); });
+    cutBtn.addEventListener("click", function () { setFileFocus(id); clipFile("move", f.name); });
     li.appendChild(cutBtn);
     const del = document.createElement("button");
     del.type = "button";
     del.textContent = "Delete";
-    del.addEventListener("click", function () { deleteInboxFile(f.name); });
+    del.addEventListener("click", function () { setFileFocus(id); deleteInboxFile(f.name); });
     li.appendChild(del);
     ul.appendChild(li);
   });
@@ -1174,7 +1251,7 @@ function renameInboxFile(from, to) {
   if (dest == null && typeof window.prompt === "function") dest = window.prompt("New name", src);
   dest = String(dest || "").trim();
   if (!dest || dest === src) return dest;
-  if (sendFileJson({ type: "file", action: "rename", name: src, to: dest, root: fileRoot, path: filePath })) {
+  if (sendFileJson({ type: "file", action: "rename", name: src, to: dest, root: P().root, path: P().path })) {
     if (out) out.textContent = "renaming " + src + "…";
     return dest;
   }
@@ -1182,7 +1259,7 @@ function renameInboxFile(from, to) {
   fetch(url("/api/files/rename"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: src, to: dest, root: fileRoot, path: filePath })
+    body: JSON.stringify({ name: src, to: dest, root: P().root, path: P().path })
   }).then(function (r) { return r.json(); }).then(function (body) {
     if (!body) return;
     if (out) out.textContent = body.error ? ("error: " + body.error) : ("renamed " + dest);
@@ -1222,7 +1299,7 @@ function clipFile(op, name) {
     syncFilePaste();
     return null;
   }
-  fileClip = { op: op, root: fileRoot, path: filePath, name: names[0], names: names };
+  fileClip = { op: op, root: P().root, path: P().path, name: names[0], names: names };
   syncFilePaste();
   const out = $("file-out");
   const label = names.length === 1 ? names[0] : (names.length + " items");
@@ -1269,7 +1346,7 @@ function pasteHere() {
   const names = clipNames(fileClip);
   if (!names.length) return;
   const clip = fileClip;
-  transferFilesTo(clip.root, clip.path, names, fileRoot, filePath, clip.op === "move");
+  transferFilesTo(clip.root, clip.path, names, P().root, P().path, clip.op === "move");
   if (clip.op === "move") fileClip = null;
   syncFilePaste();
 }
@@ -1316,12 +1393,12 @@ function bindFileDropTarget(el, destFn) {
   });
 }
 
-function bindFileDrag(li, f) {
+function bindFileDrag(li, f, id) {
   if (!li || !f) return;
   li.draggable = true;
   li.addEventListener("dragstart", function (ev) {
     if (!ev.dataTransfer) return;
-    const payload = fileDragPayload(f.name);
+    const payload = fileDragPayload(f.name, id);
     try { ev.dataTransfer.setData(FILE_DRAG, JSON.stringify(payload)); } catch (e) { /* ignore */ }
     try { ev.dataTransfer.setData("text/plain", (payload.names || []).join("\n")); } catch (e2) { /* ignore */ }
     ev.dataTransfer.effectAllowed = "copyMove";
@@ -1330,7 +1407,7 @@ function bindFileDrag(li, f) {
   li.addEventListener("dragend", function () { li.classList.remove("dragging"); });
   if (f.dir) {
     bindFileDropTarget(li, function () {
-      return { root: fileRoot, path: joinFilePath(filePath, f.name) };
+      return { root: P(id).root, path: joinFilePath(P(id).path, f.name) };
     });
   }
 }
@@ -1345,7 +1422,7 @@ function mkdirInboxFolder(name) {
   const out = $("file-out");
   const n = String(name || "").trim();
   if (!n) return "";
-  if (sendFileJson({ type: "file", action: "mkdir", name: n, root: fileRoot, path: filePath })) {
+  if (sendFileJson({ type: "file", action: "mkdir", name: n, root: P().root, path: P().path })) {
     if (out) out.textContent = "creating " + n + "…";
     return n;
   }
@@ -1353,7 +1430,7 @@ function mkdirInboxFolder(name) {
   fetch(url("/api/files/mkdir"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: n, root: fileRoot, path: filePath })
+    body: JSON.stringify({ name: n, root: P().root, path: P().path })
   }).then(function (r) { return r.json(); }).then(function (body) {
     if (!body) return;
     if (out) out.textContent = body.error ? ("error: " + body.error) : ("created " + n);
@@ -1380,7 +1457,7 @@ function deleteInboxFile(name, isDir) {
       && !window.confirm("Delete “" + name + "” and everything inside?")) {
     return;
   }
-  if (sendFileJson({ type: "file", action: "delete", name: name, root: fileRoot, path: filePath })) {
+  if (sendFileJson({ type: "file", action: "delete", name: name, root: P().root, path: P().path })) {
     if (out) out.textContent = "deleting " + name + "…";
     return;
   }
@@ -1409,7 +1486,7 @@ function deleteInboxFiles(names, hasDir) {
       && !window.confirm("Delete " + list.length + " items" + (hasDir ? " and everything inside folders" : "") + "?")) {
     return;
   }
-  if (sendFileJson({ type: "file", action: "delete", name: list[0], names: list, root: fileRoot, path: filePath })) {
+  if (sendFileJson({ type: "file", action: "delete", name: list[0], names: list, root: P().root, path: P().path })) {
     if (out) out.textContent = "deleting " + list.length + " items…";
     return;
   }
@@ -1476,20 +1553,36 @@ function refreshRecordings() {
   }).catch(function () {});
 }
 
+function applyFileList(files, root, path) {
+  root = root || "inbox";
+  path = path == null ? "" : String(path);
+  const ids = [];
+  if (filePanes.a.root === root && filePanes.a.path === path) ids.push("a");
+  if (fileSplitOn && filePanes.b.root === root && filePanes.b.path === path) ids.push("b");
+  if (!ids.length) ids.push(fileFocus);
+  ids.forEach(function (id) { renderFileList(files, root, path, id); });
+}
+
+function fetchFileList(id) {
+  if (typeof fetch !== "function") return;
+  fetch(url("/api/files?" + fileLocQuery(id))).then(function (r) { return r.json(); }).then(function (body) {
+    if (body && body.files) renderFileList(body.files, body.root, body.path, id);
+  }).catch(function () {});
+}
+
 function refreshFiles() {
   if (!featureFlags().ctl) return;
-  sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
-  if (typeof fetch !== "function") return;
-  fetch(url("/api/files?" + fileLocQuery())).then(function (r) { return r.json(); }).then(function (body) {
-    if (body && body.files) renderFileList(body.files, body.root, body.path);
-  }).catch(function () {});
+  sendFileJson({ type: "file", action: "list", root: P("a").root, path: P("a").path });
+  if (fileSplitOn) sendFileJson({ type: "file", action: "list", root: P("b").root, path: P("b").path });
+  fetchFileList("a");
+  if (fileSplitOn) fetchFileList("b");
 }
 
 function uploadFile(file, root, path) {
   const out = $("file-out");
   if (!file) return;
-  root = root == null ? fileRoot : root;
-  path = path == null ? filePath : path;
+  root = root == null ? P().root : root;
+  path = path == null ? P().path : path;
   if (file.size > FILE_MAX) {
     if (out) out.textContent = "file too large (2 GB max)";
     return;
@@ -1764,7 +1857,7 @@ function handleFileMsg(msg) {
     return;
   }
   if (msg.action === "list" && msg.files) {
-    renderFileList(msg.files, msg.root, msg.path);
+    applyFileList(msg.files, msg.root, msg.path);
     return;
   }
   if (msg.action === "ok") {
@@ -2604,9 +2697,14 @@ function onReady() {
       uploadDroppedFiles(ev.dataTransfer && ev.dataTransfer.files);
     });
   }
-  bindFileDrop($("file-drop"));
   bindFileDrop($("stream-pane"));
-  bindFileRoots($("file-roots"));
+  bindFileDropTarget($("file-drop"), function () { return { root: filePanes.a.root, path: filePanes.a.path }; });
+  bindFileDropTarget($("file-b-drop"), function () { return { root: filePanes.b.root, path: filePanes.b.path }; });
+  bindFileRoots($("file-roots"), "a");
+  bindFileRoots($("file-b-roots"), "b");
+  bindFilePane($("file-pane-a"), "a");
+  bindFilePane($("file-pane-b"), "b");
+  bindFileSplit($("file-split"));
   bindFileMkdir($("file-mkdir"));
   bindFilePaste($("file-paste"));
   bindFileSel();
@@ -2813,6 +2911,8 @@ if (typeof window !== "undefined") {
     filterDropNames: filterDropNames,
     dropOnFileDest: dropOnFileDest,
     transferFilesTo: transferFilesTo,
+    setFileSplit: setFileSplit,
+    setFileFocus: setFileFocus,
   };
 }
 

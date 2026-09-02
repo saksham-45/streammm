@@ -271,7 +271,7 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
             && html.contains("data-root=\"documents\"")
             && html.contains("data-root=\"downloads\"")
             && js.contains("function browseFiles")
-            && js.contains("root: fileRoot"),
+            && js.contains("filePanes"),
         "enabling remote control must reveal Inbox/Home/Desktop/Documents/Downloads browse"
     );
     assert!(
@@ -280,8 +280,8 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     );
     assert!(
         js.contains("action: \"begin\"")
-            && js.contains("root: fileRoot")
-            && js.contains("path: filePath"),
+            && js.contains("root: P().root")
+            && js.contains("path: P().path"),
         "origin UI must drop files into the browsed host folder, not always Inbox"
     );
     assert!(
@@ -346,6 +346,14 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
             && js.contains("function bindFileDrag")
             && js.contains("draggable = true"),
         "enabling remote control must allow dropping files onto a folder row to move them"
+    );
+    assert!(
+        html.contains("id=\"file-split\"")
+            && html.contains("id=\"file-pane-b\"")
+            && html.contains("id=\"file-b-list\"")
+            && js.contains("function setFileSplit")
+            && js.contains("files-panes"),
+        "enabling remote control must reveal a Split two-pane file browser"
     );
     assert!(
         html.contains("id=\"file-mkdir\"")
@@ -448,7 +456,7 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("data-root=\"home\"")
             && s.contains("data-root=\"desktop\"")
             && s.contains("function browseFiles")
-            && s.contains("root: fileRoot"),
+            && s.contains("filePanes"),
         "watch page must reveal host folder browse when remote control is on"
     );
     assert!(
@@ -481,8 +489,9 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     );
     assert!(
         s.contains("action: \"begin\"")
-            && s.contains("root: fileRoot")
-            && s.contains("path: filePath"),
+            && s.contains("root:")
+            && s.contains("path:")
+            && s.contains("P().root"),
         "watch page must drop files into the browsed host folder, not always Inbox"
     );
     assert!(
@@ -546,6 +555,14 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("function bindFileDrag")
             && s.contains("draggable = true"),
         "watch page must allow dropping files onto a folder row to move them"
+    );
+    assert!(
+        s.contains("id=\"file-split\"")
+            && s.contains("id=\"file-pane-b\"")
+            && s.contains("id=\"file-b-list\"")
+            && s.contains("function setFileSplit")
+            && s.contains("files-panes"),
+        "watch page must reveal a Split two-pane file browser"
     );
     assert!(
         s.contains("id=\"file-mkdir\"")
@@ -728,6 +745,7 @@ const range = window.streamaidUi.fileRangeItems(
 if (range.map(function(e){{return e.name;}}).join(",") !== "a,b,c") throw new Error("shift range: " + JSON.stringify(range));
 const keep = window.streamaidUi.filterDropNames(["Pack", "note.txt"], "Work", "Work/Pack");
 if (keep.join(",") !== "note.txt") throw new Error("must not drop a folder into itself: " + keep);
+if (typeof window.streamaidUi.setFileSplit !== "function") throw new Error("setFileSplit missing");
 console.log("ok");
 "#,
             js_path
