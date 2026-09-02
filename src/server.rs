@@ -634,7 +634,19 @@ async fn api_otp_redeem(State(app): State<Arc<App>>, req: Request) -> Response {
         Ok(v) => v,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid JSON body"),
     };
-    let pin = v.get("pin").and_then(|p| p.as_str()).unwrap_or("").trim();
+    if !v.is_object() {
+        return json_err(StatusCode::BAD_REQUEST, "expected JSON object");
+    }
+    let pin = match v.get("pin") {
+        None => return json_err(StatusCode::BAD_REQUEST, "missing pin"),
+        Some(p) => match p.as_str() {
+            None => return json_err(StatusCode::BAD_REQUEST, "pin must be a string"),
+            Some(s) => s.trim(),
+        },
+    };
+    if pin.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "missing pin");
+    }
     match app.otp.redeem(pin) {
         Ok(sess) => {
             let mut res = Json(json!({

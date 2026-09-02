@@ -76,6 +76,37 @@ function corsHeaders(): Record<string, string> {
   };
 }
 
+async function drain(request: Request): Promise<void> {
+  try {
+    await request.arrayBuffer();
+  } catch {
+    /* already consumed or closed */
+  }
+}
+
+async function readJsonObject(
+  request: Request,
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return { ok: false, error: "invalid JSON body" };
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "expected JSON object" };
+  }
+  return { ok: true, value: raw as Record<string, unknown> };
+}
+
+function requiredString(obj: Record<string, unknown>, field: string): string | { error: string } {
+  if (!(field in obj)) return { error: `missing ${field}` };
+  if (typeof obj[field] !== "string") return { error: `${field} must be a string` };
+  const s = (obj[field] as string).trim();
+  if (!s) return { error: `missing ${field}` };
+  return s;
+}
+
 export class StreamRoom extends DurableObject<Env> {
   private lastInit: ArrayBuffer | null = null;
   private lastFrag: ArrayBuffer | null = null;
@@ -387,6 +418,7 @@ export class StreamRoom extends DurableObject<Env> {
     }
     const sess = requestSession(request, url);
     if (!(await this.sessionOk(sess))) {
+      await drain(request);
       return Response.json({ error: "unauthorized" }, { status: 401, headers });
     }
     if (url.pathname === "/api/analysis" && request.method === "GET") {
@@ -405,17 +437,16 @@ export class StreamRoom extends DurableObject<Env> {
     }
     if (url.pathname === "/api/computer-use" && request.method === "POST") {
       if (!this.flags.ai) {
+        await drain(request);
         return Response.json({ error: "ai control disabled" }, { status: 403, headers });
       }
-      let task = "";
-      try {
-        const body = (await request.json()) as { task?: string };
-        task = (body.task ?? "").trim();
-      } catch {
-        return Response.json({ error: "invalid JSON body" }, { status: 400, headers });
+      const parsed = await readJsonObject(request);
+      if (!parsed.ok) {
+        return Response.json({ error: parsed.error }, { status: 400, headers });
       }
-      if (!task) {
-        return Response.json({ error: "missing task" }, { status: 400, headers });
+      const task = requiredString(parsed.value, "task");
+      if (typeof task !== "string") {
+        return Response.json({ error: task.error }, { status: 400, headers });
       }
       this.sendPublisher(JSON.stringify({ type: "computer-use", task, session: sess }));
       return Response.json({ ok: true, accepted: true }, { headers });
@@ -435,15 +466,13 @@ export class StreamRoom extends DurableObject<Env> {
       return Response.json(result, { headers });
     }
     if (url.pathname === "/api/ask" && request.method === "POST") {
-      let question = "";
-      try {
-        const body = (await request.json()) as { question?: string };
-        question = (body.question ?? "").trim();
-      } catch {
-        return Response.json({ error: "invalid JSON body" }, { status: 400, headers });
+      const parsed = await readJsonObject(request);
+      if (!parsed.ok) {
+        return Response.json({ error: parsed.error }, { status: 400, headers });
       }
-      if (!question) {
-        return Response.json({ error: "missing question" }, { status: 400, headers });
+      const question = requiredString(parsed.value, "question");
+      if (typeof question !== "string") {
+        return Response.json({ error: question.error }, { status: 400, headers });
       }
       if (this.apiKey()) await this.hydrate();
       const ready = this.llmReady();
@@ -471,16 +500,18 @@ export class StreamRoom extends DurableObject<Env> {
 
   private async redeem(request: Request, headers: Record<string, string>): Promise<Response> {
     await this.hydrateAuth();
+    const parsed = await readJsonObject(request);
+    if (!parsed.ok) {
+      return Response.json({ error: parsed.error }, { status: 400, headers });
+    }
+    const pinOrErr = requiredString(parsed.value, "pin");
+    if (typeof pinOrErr !== "string") {
+      return Response.json({ error: pinOrErr.error }, { status: 400, headers });
+    }
+    const pin = pinOrErr;
     const now = Date.now();
     if (this.lockUntil && now < this.lockUntil) {
       return Response.json({ error: "rate limited" }, { status: 429, headers });
-    }
-    let pin = "";
-    try {
-      const body = (await request.json()) as { pin?: string };
-      pin = (body.pin ?? "").trim();
-    } catch {
-      return Response.json({ error: "invalid JSON body" }, { status: 400, headers });
     }
     const hash = await sha256hex(pin);
     const enc = new TextEncoder();

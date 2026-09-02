@@ -685,3 +685,238 @@ async fn production_app_wires_llm_model() {
     let (_dir, app) = temp_app();
     assert_eq!(app.model.lock().kind(), "llm");
 }
+
+async fn json_error_body(res: axum::response::Response) -> (StatusCode, Value) {
+    let status = res.status();
+    assert!(
+        !status.is_server_error(),
+        "fail-closed API must not 5xx, got {status}"
+    );
+    let v = body_json(res).await;
+    assert!(
+        v.get("error")
+            .and_then(|e| e.as_str())
+            .filter(|s| !s.is_empty())
+            .is_some(),
+        "expected JSON error field, got {v}"
+    );
+    (status, v)
+}
+
+async fn post_json(router: axum::Router, path: &str, body: Body) -> axum::response::Response {
+    router
+        .oneshot(
+            Request::post(path)
+                .header("content-type", "application/json")
+                .body(body)
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn otp_redeem_rejects_malformed_empty_and_non_string_pin() {
+    let (_dir, app) = token_app();
+    let router = app.router();
+    let minted = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pin = body_json(minted).await["pin"].as_str().unwrap().to_string();
+    assert_eq!(pin.len(), 6);
+
+    let malformed = post_json(router.clone(), "/api/otp/redeem", Body::from("{")).await;
+    let (st, _) = json_error_body(malformed).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    for body in [
+        json!({}),
+        json!({"pin": ""}),
+        json!({"pin": "   "}),
+        json!({"pin": 123456}),
+        json!({"pin": true}),
+        json!({"pin": null}),
+    ] {
+        let res = post_json(
+            router.clone(),
+            "/api/otp/redeem",
+            Body::from(body.to_string()),
+        )
+        .await;
+        let (st, err) = json_error_body(res).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "body={body} err={err}");
+    }
+
+    let ok = post_json(
+        router,
+        "/api/otp/redeem",
+        Body::from(json!({"pin": pin}).to_string()),
+    )
+    .await;
+    assert_eq!(ok.status(), StatusCode::OK);
+    let cookies: Vec<String> = ok
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        cookies.join("; ").contains("streamaid_session="),
+        "valid redeem must set session cookie, got {cookies:?}"
+    );
+    let sess = body_json(ok).await;
+    assert!(
+        sess["session"].as_str().filter(|s| !s.is_empty()).is_some(),
+        "valid redeem must return session, got {sess}"
+    );
+}
+
+#[tokio::test]
+async fn config_post_rejects_malformed_non_object_and_unauthorized() {
+    let (_dir, app) = token_app();
+    let router = app.router();
+
+    let unauth = post_json(
+        router.clone(),
+        "/api/config",
+        Body::from(json!({"encoder": {"gop_frames": 12}}).to_string()),
+    )
+    .await;
+    let (st, _) = json_error_body(unauth).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+    let malformed = router
+        .clone()
+        .oneshot(
+            Request::post("/api/config")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (st, _) = json_error_body(malformed).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    let non_object = router
+        .oneshot(
+            Request::post("/api/config")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(json!([1, 2, 3]).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (st, _) = json_error_body(non_object).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn computer_use_rejects_unauthorized_malformed_missing_task_and_ai_off() {
+    use std::sync::Arc;
+    use streamaid::computer_use::DoneModel;
+    use streamaid::input::FakeInjector;
+    use streamaid::otp::FakeClock;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let mut cfg = Config::default();
+    cfg.token = "s3cret".into();
+    streamaid::config::save(&cfg, &path).unwrap();
+    let app = App::new_for_test(
+        cfg,
+        path,
+        FakeClock::new(),
+        FakeInjector::new(),
+        Arc::new(DoneModel),
+    );
+    let router = app.clone().router();
+
+    let no_auth = post_json(
+        router.clone(),
+        "/api/computer-use",
+        Body::from(json!({"task": "type hello"}).to_string()),
+    )
+    .await;
+    let (st, _) = json_error_body(no_auth).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+    let minted = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pin = body_json(minted).await["pin"].as_str().unwrap().to_string();
+    let redeemed = post_json(
+        router.clone(),
+        "/api/otp/redeem",
+        Body::from(json!({"pin": pin}).to_string()),
+    )
+    .await;
+    let session = body_json(redeemed).await["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let cookie = format!("streamaid_session={session}");
+
+    let ai_off = router
+        .clone()
+        .oneshot(
+            Request::post("/api/computer-use")
+                .header("Cookie", cookie.clone())
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"task": "type hello"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (st, err) = json_error_body(ai_off).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    assert!(err["error"].as_str().unwrap().contains("disabled"));
+
+    app.cfg.lock().control.ai_enabled = true;
+
+    let malformed = router
+        .clone()
+        .oneshot(
+            Request::post("/api/computer-use")
+                .header("Cookie", cookie.clone())
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (st, _) = json_error_body(malformed).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    for body in [json!({}), json!({"task": ""}), json!({"task": "   "}), json!({"task": 1})] {
+        let res = router
+            .clone()
+            .oneshot(
+                Request::post("/api/computer-use")
+                    .header("Cookie", cookie.clone())
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (st, err) = json_error_body(res).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "body={body} err={err}");
+    }
+}

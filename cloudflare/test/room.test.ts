@@ -306,6 +306,8 @@ describe("StreamRoom", () => {
       body: JSON.stringify({ task: "click then type" }),
     });
     expect(off.status).toBe(403);
+    const offBody = await off.json<{ error: string }>();
+    expect(offBody.error).toBeTruthy();
 
     pub.send(JSON.stringify({ type: "flags", control: true, ai: true }));
     await new Promise((r) => setTimeout(r, 30));
@@ -357,6 +359,115 @@ describe("StreamRoom", () => {
       body: JSON.stringify({ pin: "000000" }),
     });
     expect(res.status).toBe(401);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toBeTruthy();
+    pub.close();
+  });
+
+  async function jsonError(res: Response, status: number): Promise<{ error: string }> {
+    expect(res.status).toBe(status);
+    expect(res.status).toBeLessThan(500);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toBeTruthy();
+    return body;
+  }
+
+  it("redeem rejects malformed, empty, and non-string PIN with 400 JSON", async () => {
+    const pub = await openPublish("redeem-400");
+    await installPin(pub, "123456");
+    const base = "https://example.com/api/otp/redeem?room=redeem-400";
+
+    const malformed = await SELF.fetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{",
+    });
+    await jsonError(malformed, 400);
+
+    for (const body of [
+      JSON.stringify({}),
+      JSON.stringify({ pin: "" }),
+      JSON.stringify({ pin: "   " }),
+      JSON.stringify({ pin: 123456 }),
+      JSON.stringify({ pin: true }),
+      JSON.stringify({ pin: null }),
+    ]) {
+      const res = await SELF.fetch(base, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      await jsonError(res, 400);
+    }
+
+    const ok = await SELF.fetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin: "123456" }),
+    });
+    expect(ok.status).toBe(200);
+    const okBody = await ok.json<{ session: string }>();
+    expect(okBody.session).toBeTruthy();
+    const cookie = ok.headers.get("set-cookie") ?? "";
+    expect(cookie).toContain("streamaid_session=");
+    pub.close();
+  });
+
+  it("redeem rate-limits after FAIL_LIMIT wrong tries with 429 JSON", async () => {
+    const pub = await openPublish("redeem-429");
+    await installPin(pub, "654321");
+    const base = "https://example.com/api/otp/redeem?room=redeem-429";
+    for (let i = 0; i < 5; i++) {
+      const res = await SELF.fetch(base, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: "000000" }),
+      });
+      await jsonError(res, 401);
+    }
+    const limited = await SELF.fetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin: "000000" }),
+    });
+    await jsonError(limited, 429);
+    pub.close();
+  });
+
+  it("computer-use and ask reject missing session, bad JSON, and missing fields", async () => {
+    const { pub, session } = await viewerSession("api-400");
+    pub.send(JSON.stringify({ type: "flags", control: true, ai: true }));
+    await new Promise((r) => setTimeout(r, 30));
+    const cu = (path: string, body?: string) =>
+      SELF.fetch(`https://example.com${path}?session=${session}&room=api-400`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+
+    const cuNoAuth = await SELF.fetch("https://example.com/api/computer-use?room=api-400", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task: "click" }),
+    });
+    await jsonError(cuNoAuth, 401);
+
+    const askNoAuth = await SELF.fetch("https://example.com/api/ask?room=api-400", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: "what" }),
+    });
+    await jsonError(askNoAuth, 401);
+
+    await jsonError(await cu("/api/computer-use", "{"), 400);
+    await jsonError(await cu("/api/computer-use", JSON.stringify({})), 400);
+    await jsonError(await cu("/api/computer-use", JSON.stringify({ task: "" })), 400);
+    await jsonError(await cu("/api/computer-use", JSON.stringify({ task: 1 })), 400);
+
+    await jsonError(await cu("/api/ask", "{"), 400);
+    await jsonError(await cu("/api/ask", JSON.stringify({})), 400);
+    await jsonError(await cu("/api/ask", JSON.stringify({ question: 1 })), 400);
+
     pub.close();
   });
 });
