@@ -271,9 +271,9 @@ export const PLAYER_HTML = `<!doctype html>
     for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     return out;
   }
-  function triggerDownload(name, u8) {
+  function triggerDownload(name, blob) {
     var a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([u8]));
+    a.href = URL.createObjectURL(blob);
     a.download = name || "file";
     a.click();
     setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 2000);
@@ -344,19 +344,15 @@ export const PLAYER_HTML = `<!doctype html>
     }
     if (msg.action === "error" && out) { out.textContent = "error: " + (msg.error || "file"); return; }
     if (msg.action === "blob" && msg.data) {
-      triggerDownload(msg.name, b64ToBytes(msg.data));
+      triggerDownload(msg.name, new Blob([b64ToBytes(msg.data)]));
       return;
     }
     if (msg.action === "blob-begin") { incomingFiles[msg.name] = []; return; }
-    if (msg.action === "blob-chunk" && incomingFiles[msg.name]) incomingFiles[msg.name].push(msg.data);
+    if (msg.action === "blob-chunk" && incomingFiles[msg.name]) incomingFiles[msg.name].push(b64ToBytes(msg.data));
     if (msg.action === "blob-end" && incomingFiles[msg.name]) {
-      var parts = incomingFiles[msg.name].map(b64ToBytes);
-      var total = 0;
-      parts.forEach(function (p) { total += p.length; });
-      var u8 = new Uint8Array(total), off = 0;
-      parts.forEach(function (p) { u8.set(p, off); off += p.length; });
+      var parts = incomingFiles[msg.name];
       delete incomingFiles[msg.name];
-      triggerDownload(msg.name, u8);
+      triggerDownload(msg.name, new Blob(parts));
     }
   }
   function uploadFile(file) {

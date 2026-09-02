@@ -196,6 +196,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page must stream inbox drops up to 2 GB via File.slice"
     );
     assert!(
+        s.contains("blob-begin") && s.contains("new Blob(parts)"),
+        "watch page must assemble inbox Get from streamed blob parts, not one in-memory copy"
+    );
+    assert!(
         s.contains("displays") && s.contains("type: \"display\""),
         "watch page must switch host displays over the control channel"
     );

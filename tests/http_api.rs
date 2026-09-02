@@ -1048,7 +1048,7 @@ async fn files_put_list_download_and_reject_traversal() {
     use streamaid::files::encode_b64;
 
     let (_dir, app) = token_app();
-    let router = app.router();
+    let router = app.clone().router();
     let unauth = post_json(
         router.clone(),
         "/api/files",
@@ -1108,6 +1108,7 @@ async fn files_put_list_download_and_reject_traversal() {
     assert!(files.iter().any(|f| f["name"] == "hello.txt"));
 
     let dl = router
+        .clone()
         .oneshot(
             Request::get("/api/files/download?name=hello.txt")
                 .header("Authorization", "Bearer s3cret")
@@ -1119,6 +1120,26 @@ async fn files_put_list_download_and_reject_traversal() {
     assert_eq!(dl.status(), StatusCode::OK);
     let bytes = dl.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&bytes[..], b"hello-inbox");
+
+    let big = vec![9u8; streamaid::files::MAX_CHUNK + 32];
+    app.files.put_bytes("big.bin", &big).unwrap();
+    let big_dl = router
+        .oneshot(
+            Request::get("/api/files/download?name=big.bin")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(big_dl.status(), StatusCode::OK);
+    let cl = big.len().to_string();
+    assert_eq!(
+        big_dl.headers().get("content-length").and_then(|v| v.to_str().ok()),
+        Some(cl.as_str())
+    );
+    let got = big_dl.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&got[..], &big[..]);
 }
 
 #[tokio::test]

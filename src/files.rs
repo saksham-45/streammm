@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 pub const MAX_FILE: usize = 2 * 1024 * 1024 * 1024usize;
@@ -146,6 +146,65 @@ impl Inbox {
         Ok(data)
     }
 
+    pub fn readable_path(&self, name: &str) -> Result<(PathBuf, u64), String> {
+        let path = self.dest(name)?;
+        let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
+        if meta.len() > MAX_FILE as u64 {
+            return Err("file too large".into());
+        }
+        Ok((path, meta.len()))
+    }
+
+    /// Send a stored file as blob / blob-begin+chunk+end without holding it in RAM.
+    pub fn emit_blob<F: FnMut(String)>(&self, name: &str, mut emit: F) -> Result<(), String> {
+        let path = self.dest(name)?;
+        let shown = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| "invalid file name".to_string())?;
+        let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
+        if meta.len() > MAX_FILE as u64 {
+            return Err("file too large".into());
+        }
+        let size = meta.len() as usize;
+        if size <= MAX_CHUNK {
+            let bytes = fs::read(&path).map_err(|_| "file not found".to_string())?;
+            emit(json!({
+                "type": "file",
+                "action": "blob",
+                "name": shown,
+                "size": bytes.len(),
+                "data": encode_b64(&bytes)
+            })
+            .to_string());
+            return Ok(());
+        }
+        emit(json!({
+            "type": "file",
+            "action": "blob-begin",
+            "name": shown,
+            "size": size
+        })
+        .to_string());
+        let mut f = fs::File::open(&path).map_err(|_| "file not found".to_string())?;
+        let mut buf = vec![0u8; MAX_CHUNK];
+        loop {
+            let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            emit(json!({
+                "type": "file",
+                "action": "blob-chunk",
+                "name": shown,
+                "data": encode_b64(&buf[..n])
+            })
+            .to_string());
+        }
+        emit(json!({"type":"file","action":"blob-end","name":shown}).to_string());
+        Ok(())
+    }
+
     pub fn begin(&self, id: &str, name: &str, size: usize) -> Result<usize, String> {
         let id = sanitize_id(id).ok_or_else(|| "invalid transfer id".to_string())?;
         let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
@@ -271,8 +330,9 @@ impl Inbox {
             }
             "get" => {
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                match self.get_bytes(name) {
-                    Ok(bytes) => blob_replies(name, &bytes),
+                let mut out = Vec::new();
+                match self.emit_blob(name, |m| out.push(m)) {
+                    Ok(()) => out,
                     Err(e) => vec![err_json(&e)],
                 }
             }
@@ -469,6 +529,23 @@ mod tests {
         let msgs = blob_replies("n.bin", &data);
         assert!(msgs[0].contains("blob-begin"));
         assert!(msgs.iter().any(|m| m.contains("blob-chunk")));
+        assert!(msgs.last().unwrap().contains("blob-end"));
+    }
+
+    #[test]
+    fn emit_blob_streams_from_disk_matching_blob_replies() {
+        let (_dir, inbox) = tmp_inbox();
+        inbox.put_bytes("tiny.txt", b"hi").unwrap();
+        let mut one = Vec::new();
+        inbox.emit_blob("tiny.txt", |m| one.push(m)).unwrap();
+        assert_eq!(one, blob_replies("tiny.txt", b"hi"));
+
+        let data = vec![3u8; MAX_CHUNK + 50];
+        inbox.put_bytes("s.bin", &data).unwrap();
+        let mut msgs = Vec::new();
+        inbox.emit_blob("s.bin", |m| msgs.push(m)).unwrap();
+        assert_eq!(msgs, blob_replies("s.bin", &data));
+        assert!(msgs[0].contains("blob-begin"));
         assert!(msgs.last().unwrap().contains("blob-end"));
     }
 }

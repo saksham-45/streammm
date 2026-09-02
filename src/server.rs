@@ -268,6 +268,19 @@ impl App {
                 if !self.cfg.lock().control.enabled {
                     return;
                 }
+                let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
+                if action == "get" {
+                    let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    if let Err(e) = self.files.emit_blob(name, |msg| {
+                        self.publisher.push_wire(msg.clone());
+                        let _ = self.clip_tx.send(msg);
+                    }) {
+                        let err = json!({"type":"file","action":"error","error":e}).to_string();
+                        self.publisher.push_wire(err.clone());
+                        let _ = self.clip_tx.send(err);
+                    }
+                    return;
+                }
                 for msg in self.files.handle_message(&v) {
                     self.publisher.push_wire(msg.clone());
                     let _ = self.clip_tx.send(msg);
@@ -1064,16 +1077,41 @@ async fn api_files_download(State(app): State<Arc<App>>, req: Request) -> Respon
     if name.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "missing name");
     }
-    match app.files.get_bytes(&name) {
-        Ok(bytes) => {
+    match app.files.readable_path(&name) {
+        Ok((path, len)) => {
+            let mut file = match tokio::fs::File::open(&path).await {
+                Ok(f) => f,
+                Err(_) => return json_err(StatusCode::NOT_FOUND, "file not found"),
+            };
+            let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    match file.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if tx.send(Ok(Bytes::copy_from_slice(&buf[..n]))).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e)).await;
+                            break;
+                        }
+                    }
+                }
+            });
             let disp = format!("attachment; filename=\"{}\"", name.replace('"', ""));
-            let mut res = Response::new(Body::from(bytes));
+            let mut res = Response::new(Body::from_stream(ReceiverStream::new(rx)));
             res.headers_mut().insert(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/octet-stream"),
             );
             if let Ok(v) = HeaderValue::from_str(&disp) {
                 res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+            }
+            if let Ok(v) = HeaderValue::from_str(&len.to_string()) {
+                res.headers_mut().insert(header::CONTENT_LENGTH, v);
             }
             res
         }
