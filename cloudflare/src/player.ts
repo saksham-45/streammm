@@ -76,12 +76,18 @@ export const PLAYER_HTML = `<!doctype html>
   #keys-bar { display: none; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--line); background: #141414; }
   #keys-bar .keys-label { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; margin-right: 4px; }
   #keys-bar button { padding: 4px 8px; font-size: 12px; }
+  #stream-quality { font-size: 12px; border-radius: 999px; padding: 4px 8px; background: #222; color: var(--text); border: 1px solid var(--line); }
 </style>
 </head>
 <body>
 <header>
   <h1>streamaid</h1>
   <div id="pill">enter PIN</div>
+  <select id="stream-quality" title="Stream quality vs speed">
+    <option value="quality">Quality</option>
+    <option value="balanced">Balanced</option>
+    <option value="speed">Speed</option>
+  </select>
   <button id="unmute" type="button">Unmute</button>
   <div id="displays"></div>
   <div id="display-map" style="display:none"></div>
@@ -229,6 +235,19 @@ export const PLAYER_HTML = `<!doctype html>
     });
   }
   bindKeysBar(document.getElementById("keys-bar"));
+  function qualityPayload(preset) {
+    return { type: "quality", preset: String(preset || "quality") };
+  }
+  function sendQuality(preset) {
+    if (!ws || ws.readyState !== 1) return;
+    try { ws.send(JSON.stringify(qualityPayload(preset))); } catch (e) {}
+  }
+  (function bindStreamQuality() {
+    var sel = document.getElementById("stream-quality");
+    if (!sel || sel.dataset.qBound) return;
+    sel.dataset.qBound = "1";
+    sel.addEventListener("change", function () { sendQuality(sel.value); });
+  })();
   function chatPayload(text) {
     var t = String(text || "").trim();
     return { type: "chat", text: t.length > 2000 ? t.slice(0, 2000) : t };
@@ -792,6 +811,8 @@ export const PLAYER_HTML = `<!doctype html>
     if (keys) keys.style.display = controlOn ? "flex" : "none";
     var un = document.getElementById("unmute");
     if (un) un.style.display = nextAudio ? "inline-block" : "none";
+    var qsel = document.getElementById("stream-quality");
+    if (qsel && ctl && ctl.preset && document.activeElement !== qsel) qsel.value = ctl.preset;
     if (controlOn) sendFileJson({ type: "file", action: "list" });
     renderDisplays(ctl && ctl.displays, ctl && (ctl.display || ctl.input));
     if (nextAudio !== audioOn) {
@@ -946,6 +967,7 @@ export const PLAYER_HTML = `<!doctype html>
           enabled: !!msg.control,
           ai_enabled: !!msg.ai,
           audio: !!msg.audio,
+          preset: msg.preset,
           display: msg.display,
           displays: msg.displays,
         });

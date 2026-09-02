@@ -124,6 +124,37 @@ impl Default for EncoderConfig {
     }
 }
 
+/// Live encode tradeoff for the watch-page quality picker.
+pub fn quality_preset(cfg: &Config) -> &'static str {
+    if cfg.capture.scale < 0.99 || cfg.encoder.bitrate_kbps <= 5000 {
+        "speed"
+    } else if cfg.encoder.bitrate_kbps <= 12000 {
+        "balanced"
+    } else {
+        "quality"
+    }
+}
+
+pub fn apply_quality_preset(cfg: &mut Config, preset: &str) -> bool {
+    match preset.trim().to_ascii_lowercase().as_str() {
+        "quality" | "high" => {
+            cfg.encoder.bitrate_kbps = 20_000;
+            cfg.capture.scale = 1.0;
+        }
+        "balanced" | "medium" => {
+            cfg.encoder.bitrate_kbps = 8_000;
+            cfg.capture.scale = 1.0;
+        }
+        "speed" | "low" => {
+            cfg.encoder.bitrate_kbps = 4_000;
+            cfg.capture.scale = 0.5;
+        }
+        _ => return false,
+    }
+    cfg.clamp();
+    true
+}
+
 impl EncoderConfig {
     pub fn clamp(&mut self) {
         if self.mode != "mjpeg" && self.mode != "ffmpeg" && self.mode != "hevc" {
@@ -431,6 +462,23 @@ mod tests {
         assert!(cfg.access.password_hash.is_empty());
         assert!(!cfg.control.lock_on_end);
         assert!(!cfg.control.record_sessions);
+        assert_eq!(quality_preset(&cfg), "quality");
+    }
+
+    #[test]
+    fn quality_presets_set_bitrate_and_scale() {
+        let mut cfg = Config::default();
+        assert!(apply_quality_preset(&mut cfg, "speed"));
+        assert_eq!(cfg.encoder.bitrate_kbps, 4000);
+        assert_eq!(cfg.capture.scale, 0.5);
+        assert_eq!(quality_preset(&cfg), "speed");
+        assert!(apply_quality_preset(&mut cfg, "balanced"));
+        assert_eq!(cfg.encoder.bitrate_kbps, 8000);
+        assert_eq!(cfg.capture.scale, 1.0);
+        assert_eq!(quality_preset(&cfg), "balanced");
+        assert!(apply_quality_preset(&mut cfg, "quality"));
+        assert_eq!(cfg.encoder.bitrate_kbps, 20000);
+        assert!(!apply_quality_preset(&mut cfg, "nope"));
     }
 
     #[test]

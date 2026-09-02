@@ -181,6 +181,8 @@ function renderStatus(s) {
   const q = (s && s.quality) || {};
   const fps = (cap.fps_actual || 0).toFixed(1);
   const label = st.mode === "ffmpeg" ? "h264" : (st.mode === "hevc" ? "hevc" : "mjpeg");
+  const qsel = $("stream-quality");
+  if (qsel && st.preset && document.activeElement !== qsel) qsel.value = st.preset;
   const n = st.clients || 0;
   const el = $("status-pill");
   if (!el) return;
@@ -229,6 +231,24 @@ function sendControl(action, extra) {
   if (!ws || ws.readyState !== 1) return;
   const msg = Object.assign({ type: "control", action: action }, extra || {});
   try { ws.send(JSON.stringify(msg)); } catch (e) { /* ignore */ }
+}
+
+function qualityPayload(preset) {
+  return { type: "quality", preset: String(preset || "quality") };
+}
+
+function sendQuality(preset) {
+  if (!ws || ws.readyState !== 1) return;
+  const p = qualityPayload(preset);
+  try { ws.send(JSON.stringify(p)); } catch (e) { /* ignore */ }
+}
+
+function bindStreamQuality(sel) {
+  if (!sel || sel.dataset.qBound) return;
+  sel.dataset.qBound = "1";
+  sel.addEventListener("change", function () {
+    sendQuality(sel.value);
+  });
 }
 
 function comboPayload(key, modifiers) {
@@ -1573,6 +1593,7 @@ function onReady() {
   bindControl($("stream-video"));
   bindControl($("stream-canvas"));
   bindKeysBar($("keys-bar"));
+  bindStreamQuality($("stream-quality"));
   bindChatForm($("chat-form"));
   function bindFileDrop(el) {
     if (!el || el.dataset.fileBound) return;
@@ -1736,6 +1757,8 @@ if (typeof window !== "undefined") {
     sendCombo: sendCombo,
     chatPayload: chatPayload,
     sendChat: sendChat,
+    qualityPayload: qualityPayload,
+    sendQuality: sendQuality,
     layoutDisplayMap: layoutDisplayMap,
     paintMapThumbs: paintMapThumbs,
     currentToken: currentToken,

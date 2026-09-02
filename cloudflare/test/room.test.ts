@@ -656,6 +656,27 @@ describe("StreamRoom", () => {
     pub.close();
   });
 
+  it("forwards watcher quality presets without requiring remote control", async () => {
+    const { pub, session } = await viewerSession("quality-preset");
+    await new Promise((r) => setTimeout(r, 30));
+    const view = await openWatch(session, "quality-preset");
+    const got = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("quality")) resolve(ev.data);
+      });
+    });
+    view.send(JSON.stringify({ type: "quality", preset: "speed" }));
+    const raw = await Promise.race([
+      got,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no quality")), 3000)),
+    ]);
+    const msg = JSON.parse(raw) as { type: string; preset?: string };
+    expect(msg.type).toBe("quality");
+    expect(msg.preset).toBe("speed");
+    pub.close();
+    view.close();
+  });
+
   it("revokes the controller when the driving watcher disconnects", async () => {
     const { pub, session } = await viewerSession("revoke-close");
     pub.send(JSON.stringify({ type: "flags", control: true, ai: false }));

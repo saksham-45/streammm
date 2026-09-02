@@ -38,6 +38,14 @@ h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
   white-space: nowrap;
 }
 #quality-pill { margin-left: auto; }
+#stream-quality {
+  font-size: 13px;
+  background: #222;
+  color: #ddd;
+  border: 1px solid #444;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
 #display-pill {
   font-size: 13px;
   background: #222;

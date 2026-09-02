@@ -160,6 +160,14 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "record sessions must be a Settings control that reveals the recordings list"
     );
     assert!(
+        html.contains("id=\"stream-quality\"")
+            && html.contains("Speed")
+            && js.contains("function qualityPayload")
+            && js.contains("function sendQuality")
+            && js.contains("bindStreamQuality"),
+        "host must show a stream quality vs speed picker"
+    );
+    assert!(
         html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
         "origin analysis/AI/Ask chrome must not sit on the live stream"
     );
@@ -381,6 +389,13 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("maxlength=\"128\"")
             && !s.contains("maxlength=\"6\""),
         "watch page must accept an unattended password after the PIN expires"
+    );
+    assert!(
+        s.contains("id=\"stream-quality\"")
+            && s.contains("function qualityPayload")
+            && s.contains("function sendQuality")
+            && s.contains("type: \"quality\""),
+        "watch page must send quality presets over the control channel"
     );
 }
 
@@ -689,6 +704,8 @@ nodes["cfg-record-sessions"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["record-hint"].classList.contains("hidden")) throw new Error("record hint still hidden after enable");
 if (nodes["recordings-section"].classList.contains("hidden")) throw new Error("recordings list still hidden after enable");
+const qp = window.streamaidUi.qualityPayload("speed");
+if (qp.type !== "quality" || qp.preset !== "speed") throw new Error("qualityPayload");
 const combo = window.streamaidUi.comboPayload("Tab", ["Meta"]);
 if (combo.action !== "key" || combo.key !== "Tab" || combo.modifiers[0] !== "Meta") throw new Error("comboPayload Cmd+Tab");
 const cad = window.streamaidUi.comboPayload("Delete", ["Control", "Alt"]);

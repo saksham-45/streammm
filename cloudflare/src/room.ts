@@ -153,7 +153,7 @@ export class StreamRoom extends DurableObject<Env> {
   private sessions = new Map<string, number>();
   private fails = 0;
   private lockUntil = 0;
-  private flags = { control: false, ai: false, audio: false };
+  private flags = { control: false, ai: false, audio: false, preset: "quality" };
   private flagsHydrated = false;
   private controller: string | null = null;
   private display = "";
@@ -226,6 +226,7 @@ export class StreamRoom extends DurableObject<Env> {
           control: this.flags.control,
           ai: this.flags.ai,
           audio: this.flags.audio,
+          preset: this.flags.preset,
           display: this.display,
           displays: this.displays,
         }));
@@ -305,8 +306,9 @@ export class StreamRoom extends DurableObject<Env> {
         this.flags.control = !!v.control;
         this.flags.ai = !!v.ai;
         this.flags.audio = !!v.audio;
+        const rec = v as { display?: string; displays?: unknown[]; preset?: string };
+        if (typeof rec.preset === "string" && rec.preset) this.flags.preset = rec.preset;
         this.flagsHydrated = true;
-        const rec = v as { display?: string; displays?: unknown[] };
         if (typeof rec.display === "string") this.display = rec.display;
         if (Array.isArray(rec.displays)) this.displays = rec.displays;
         await this.ctx.storage.put("flags", this.flags);
@@ -315,6 +317,7 @@ export class StreamRoom extends DurableObject<Env> {
           control: this.flags.control,
           ai: this.flags.ai,
           audio: this.flags.audio,
+          preset: this.flags.preset,
           display: this.display,
           displays: this.displays,
         }));
@@ -362,6 +365,10 @@ export class StreamRoom extends DurableObject<Env> {
     if (v.type === "display") {
       if (!this.flags.control) return;
       this.sendPublisher(JSON.stringify({ ...v, session, type: "display" }));
+      return;
+    }
+    if (v.type === "quality") {
+      this.sendPublisher(JSON.stringify({ ...v, session, type: "quality" }));
       return;
     }
     if (v.type === "computer-use") {
@@ -478,8 +485,20 @@ export class StreamRoom extends DurableObject<Env> {
       }
     }
     if (!this.flagsHydrated) {
-      const flags = await this.ctx.storage.get<{ control: boolean; ai: boolean; audio?: boolean }>("flags");
-      if (flags) this.flags = { control: !!flags.control, ai: !!flags.ai, audio: !!flags.audio };
+      const flags = await this.ctx.storage.get<{
+        control: boolean;
+        ai: boolean;
+        audio?: boolean;
+        preset?: string;
+      }>("flags");
+      if (flags) {
+        this.flags = {
+          control: !!flags.control,
+          ai: !!flags.ai,
+          audio: !!flags.audio,
+          preset: flags.preset || "quality",
+        };
+      }
       this.flagsHydrated = true;
     }
   }

@@ -231,6 +231,17 @@ impl App {
         devices
     }
 
+    pub fn apply_quality(self: &Arc<Self>, preset: &str) {
+        let mut cfg = self.cfg.lock().clone();
+        if !config::apply_quality_preset(&mut cfg, preset) {
+            return;
+        }
+        *self.cfg.lock() = cfg.clone();
+        self.capture.restart(cfg);
+        self.push_otp_wire();
+        self.bump_status();
+    }
+
     pub fn apply_display(&self, input: &str) {
         let devices = self.refresh_displays();
         let infos: Vec<input::DisplayInfo> = devices.iter().map(Device::as_info).collect();
@@ -281,7 +292,10 @@ impl App {
                 "ai": cfg.control.ai_enabled,
                 "audio": audio,
                 "display": cfg.capture.input,
-                "displays": devices
+                "displays": devices,
+                "preset": config::quality_preset(&cfg),
+                "bitrate_kbps": cfg.encoder.bitrate_kbps,
+                "scale": cfg.capture.scale,
             })
             .to_string(),
         );
@@ -368,6 +382,13 @@ impl App {
             }
             "revoke" => {
                 self.end_remote_session();
+            }
+            "quality" => {
+                let preset = v
+                    .get("preset")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                self.apply_quality(preset);
             }
             "chat" => {
                 self.handle_chat(&v);
@@ -853,6 +874,7 @@ impl App {
                 "mode": cfg.encoder.mode,
                 "clients": self.hub.clients(),
                 "bitrate_kbps": cfg.encoder.bitrate_kbps,
+                "preset": config::quality_preset(&cfg),
                 "jpeg_quality": cfg.capture.jpeg_quality,
                 "scale": cfg.capture.scale,
                 "gop_frames": cfg.encoder.gop_frames,
@@ -2826,6 +2848,35 @@ mod tests {
             data.windows(9).any(|w| w == b"mdat-frag"),
             "recording must append live fragments, got {data:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn watcher_quality_preset_retunes_encode() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let cfg = crate::config::Config::default();
+        crate::config::save(&cfg, &path).unwrap();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            FakeInjector::new(),
+            Arc::new(DoneModel),
+        );
+        assert_eq!(app.status_json()["stream"]["preset"], "quality");
+        app.handle_inbound_json(r#"{"type":"quality","preset":"speed"}"#);
+        assert_eq!(app.cfg.lock().encoder.bitrate_kbps, 4000);
+        assert_eq!(app.cfg.lock().capture.scale, 0.5);
+        assert_eq!(app.status_json()["stream"]["preset"], "speed");
+        app.handle_inbound_json(r#"{"type":"quality","preset":"balanced"}"#);
+        assert_eq!(app.cfg.lock().encoder.bitrate_kbps, 8000);
+        assert_eq!(app.cfg.lock().capture.scale, 1.0);
+        app.handle_inbound_json(r#"{"type":"quality","preset":"nope"}"#);
+        assert_eq!(app.cfg.lock().encoder.bitrate_kbps, 8000);
     }
 
     #[tokio::test]

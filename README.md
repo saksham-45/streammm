@@ -35,7 +35,7 @@ Killing the process is not enough — `KeepAlive` will restart it. Logs: `logs/o
 | Default | Value |
 |---------|--------|
 | Encoder | H.264 (`ffmpeg`), High profile, no B-frames |
-| Bitrate | 20 Mbps CBR, 0.5 s VBV (up to 50 Mbps in Settings) |
+| Bitrate | 20 Mbps CBR, 0.5 s VBV (up to 50 Mbps in Settings). Watch and host headers have a **Quality / Balanced / Speed** picker that retunes bitrate and scale on the live encode (Speed is 4 Mbps at 0.5×). |
 | GOP | 15 frames (~0.5 s join / live edge) |
 | Size | cap **3840×4320**, **never upscale**, lanczos only if the display is larger |
 | Displays | Settings picker + clickable **all-monitors map**: live thumbnail of the captured screen (animation-frame paint), and ~15 fps JPEG previews of the others from a persistent ffmpeg per inactive display; `Capture screen N` maps to `CGGetActiveDisplayList()[N]` so clicks hit the captured screen |
