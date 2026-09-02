@@ -153,7 +153,7 @@ export class StreamRoom extends DurableObject<Env> {
   private sessions = new Map<string, number>();
   private fails = 0;
   private lockUntil = 0;
-  private flags = { control: false, ai: false, audio: false, preset: "quality" };
+  private flags = { control: false, ai: false, audio: false, preset: "quality", voice: false };
   private flagsHydrated = false;
   private controller: string | null = null;
   private display = "";
@@ -226,6 +226,7 @@ export class StreamRoom extends DurableObject<Env> {
           control: this.flags.control,
           ai: this.flags.ai,
           audio: this.flags.audio,
+          voice: this.flags.voice,
           preset: this.flags.preset,
           display: this.display,
           displays: this.displays,
@@ -281,7 +282,7 @@ export class StreamRoom extends DurableObject<Env> {
   }
 
   private async handleJson(ws: WebSocket, att: Attachment | null, raw: string): Promise<void> {
-    let v: { type?: string; hash?: string; exp?: number; control?: boolean; ai?: boolean; action?: string; x?: number; y?: number; text?: string; key?: string; dy?: number; task?: string };
+    let v: { type?: string; hash?: string; exp?: number; control?: boolean; ai?: boolean; audio?: boolean; voice?: boolean; action?: string; x?: number; y?: number; text?: string; key?: string; dy?: number; task?: string };
     try {
       v = JSON.parse(raw) as typeof v;
     } catch {
@@ -306,6 +307,7 @@ export class StreamRoom extends DurableObject<Env> {
         this.flags.control = !!v.control;
         this.flags.ai = !!v.ai;
         this.flags.audio = !!v.audio;
+        this.flags.voice = !!v.voice;
         const rec = v as { display?: string; displays?: unknown[]; preset?: string };
         if (typeof rec.preset === "string" && rec.preset) this.flags.preset = rec.preset;
         this.flagsHydrated = true;
@@ -317,6 +319,7 @@ export class StreamRoom extends DurableObject<Env> {
           control: this.flags.control,
           ai: this.flags.ai,
           audio: this.flags.audio,
+          voice: this.flags.voice,
           preset: this.flags.preset,
           display: this.display,
           displays: this.displays,
@@ -369,6 +372,11 @@ export class StreamRoom extends DurableObject<Env> {
     }
     if (v.type === "quality") {
       this.sendPublisher(JSON.stringify({ ...v, session, type: "quality" }));
+      return;
+    }
+    if (v.type === "voice") {
+      if (!this.flags.voice) return;
+      this.sendPublisher(JSON.stringify({ ...v, session, type: "voice" }));
       return;
     }
     if (v.type === "computer-use") {
@@ -490,6 +498,7 @@ export class StreamRoom extends DurableObject<Env> {
         ai: boolean;
         audio?: boolean;
         preset?: string;
+        voice?: boolean;
       }>("flags");
       if (flags) {
         this.flags = {
@@ -497,6 +506,7 @@ export class StreamRoom extends DurableObject<Env> {
           ai: !!flags.ai,
           audio: !!flags.audio,
           preset: flags.preset || "quality",
+          voice: !!flags.voice,
         };
       }
       this.flagsHydrated = true;

@@ -81,6 +81,7 @@ function featureFlags() {
     record: ($("cfg-record-sessions") ? !!$("cfg-record-sessions").checked : !!(cfg && cfg.control && cfg.control.record_sessions)),
     unattended: ($("cfg-unattended") ? !!$("cfg-unattended").checked : !!(cfg && cfg.access && cfg.access.unattended)),
     audio: audioEl ? !!audioEl.checked : !!(cfg && cfg.capture && cfg.capture.audio),
+    voice: ($("cfg-voice") ? !!$("cfg-voice").checked : !!(cfg && cfg.control && cfg.control.voice)),
     mjpeg: mode === "mjpeg",
   };
 }
@@ -121,6 +122,8 @@ function syncFeatureUi() {
   setHidden($("audio-hint"), !f.audio);
   setHidden($("audio-fields"), !(f.audio && !f.mjpeg));
   setHidden($("unmute"), !(f.audio && !f.mjpeg));
+  setHidden($("voice-hint"), !f.voice);
+  setHidden($("talk"), !f.voice);
   syncEncoderUi();
   if (f.ctl) refreshFiles();
   if (f.ctl && f.record) refreshRecordings();
@@ -205,6 +208,7 @@ function renderStatus(s) {
     if (ctl.recording) t += " · RECORDING";
     lab.textContent = t;
   }
+  if (typeof ctl.voice === "boolean") setHidden($("talk"), !ctl.voice);
   if (featureFlags().record) refreshRecordings();
 }
 
@@ -248,6 +252,70 @@ function bindStreamQuality(sel) {
   sel.dataset.qBound = "1";
   sel.addEventListener("change", function () {
     sendQuality(sel.value);
+  });
+}
+
+function voicePayload(pcm, rate) {
+  return { type: "voice", pcm: pcm, rate: rate || 16000 };
+}
+
+function sendVoice(u8, rate) {
+  if (!ws || ws.readyState !== 1) return;
+  if (!u8 || !u8.length) return;
+  try { ws.send(JSON.stringify(voicePayload(bytesToB64(u8), rate || 16000))); } catch (e) { /* ignore */ }
+}
+
+let talkState = null;
+function stopTalk() {
+  if (!talkState) return;
+  try { talkState.proc.disconnect(); } catch (e) {}
+  try { talkState.src.disconnect(); } catch (e) {}
+  try { talkState.ac.close(); } catch (e) {}
+  if (talkState.stream) talkState.stream.getTracks().forEach(function (t) { t.stop(); });
+  talkState = null;
+  const btn = $("talk");
+  if (btn) { btn.textContent = "Talk"; btn.classList.remove("on"); }
+}
+
+function startTalk() {
+  if (talkState || typeof navigator === "undefined" || !navigator.mediaDevices) return;
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(function (stream) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+    const ac = new AC();
+    const src = ac.createMediaStreamSource(stream);
+    const proc = ac.createScriptProcessor(4096, 1, 1);
+    const mute = ac.createGain();
+    mute.gain.value = 0;
+    proc.onaudioprocess = function (ev) {
+      if (!talkState) return;
+      const input = ev.inputBuffer.getChannelData(0);
+      const outRate = 16000;
+      const step = ac.sampleRate / outRate;
+      const n = Math.max(0, Math.floor(input.length / step));
+      if (n < 1) return;
+      const pcm = new Int16Array(n);
+      for (let i = 0; i < n; i++) {
+        const s = Math.max(-1, Math.min(1, input[Math.floor(i * step)] || 0));
+        pcm[i] = s < 0 ? s * 32768 : s * 32767;
+      }
+      sendVoice(new Uint8Array(pcm.buffer), outRate);
+    };
+    src.connect(proc);
+    proc.connect(mute);
+    mute.connect(ac.destination);
+    talkState = { stream: stream, ac: ac, src: src, proc: proc };
+    const btn = $("talk");
+    if (btn) { btn.textContent = "Talking…"; btn.classList.add("on"); }
+  }).catch(function () {});
+}
+
+function bindTalk(btn) {
+  if (!btn || btn.dataset.talkBound) return;
+  btn.dataset.talkBound = "1";
+  btn.addEventListener("click", function () {
+    if (talkState) stopTalk();
+    else startTalk();
   });
 }
 
@@ -1313,6 +1381,8 @@ function fillConfigForm(c) {
   if (en) en.checked = !!(c.llm && c.llm.enabled);
   const aud = $("cfg-audio");
   if (aud) aud.checked = !!(c.capture && c.capture.audio);
+  const voiceEl = $("cfg-voice");
+  if (voiceEl) voiceEl.checked = !!(c.control && c.control.voice);
   const audDev = $("cfg-audio-device");
   if (audDev && c.capture && c.capture.audio_input) audDev.value = c.capture.audio_input;
   set("cfg-base-url", c.llm && c.llm.base_url || "");
@@ -1338,6 +1408,7 @@ function readConfigForm() {
       block_local: !!( $("cfg-block-local") && $("cfg-block-local").checked ),
       lock_on_end: !!( $("cfg-lock-on-end") && $("cfg-lock-on-end").checked ),
       record_sessions: !!( $("cfg-record-sessions") && $("cfg-record-sessions").checked ),
+      voice: !!( $("cfg-voice") && $("cfg-voice").checked ),
     },
     capture: {
       driver: "ffmpeg",
@@ -1517,7 +1588,7 @@ function onReady() {
       if (jv) jv.textContent = jpeg.value;
     });
   }
-  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-block-local", "cfg-lock-on-end", "cfg-record-sessions", "cfg-unattended"].forEach(function (id) {
+  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-voice", "cfg-block-local", "cfg-lock-on-end", "cfg-record-sessions", "cfg-unattended"].forEach(function (id) {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", function () { syncFeatureUi(); });
@@ -1594,6 +1665,7 @@ function onReady() {
   bindControl($("stream-canvas"));
   bindKeysBar($("keys-bar"));
   bindStreamQuality($("stream-quality"));
+  bindTalk($("talk"));
   bindChatForm($("chat-form"));
   function bindFileDrop(el) {
     if (!el || el.dataset.fileBound) return;
@@ -1759,6 +1831,8 @@ if (typeof window !== "undefined") {
     sendChat: sendChat,
     qualityPayload: qualityPayload,
     sendQuality: sendQuality,
+    voicePayload: voicePayload,
+    sendVoice: sendVoice,
     layoutDisplayMap: layoutDisplayMap,
     paintMapThumbs: paintMapThumbs,
     currentToken: currentToken,

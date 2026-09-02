@@ -22,6 +22,8 @@ export const PLAYER_HTML = `<!doctype html>
   h1 { font-size: 15px; margin: 0; letter-spacing: 0.14em; font-weight: 650; text-transform: uppercase; }
   #pill { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); }
   #unmute { display: none; }
+  #talk { display: none; }
+  #talk.on { border-color: var(--accent); color: var(--accent); }
   main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr); gap: 12px; padding: 12px; }
   @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
   video, canvas { width: 100%; max-height: 80vh; background: #000; display: block; border-radius: 8px; }
@@ -89,6 +91,7 @@ export const PLAYER_HTML = `<!doctype html>
     <option value="speed">Speed</option>
   </select>
   <button id="unmute" type="button">Unmute</button>
+  <button id="talk" type="button">Talk</button>
   <div id="displays"></div>
   <div id="display-map" style="display:none"></div>
 </header>
@@ -247,6 +250,66 @@ export const PLAYER_HTML = `<!doctype html>
     if (!sel || sel.dataset.qBound) return;
     sel.dataset.qBound = "1";
     sel.addEventListener("change", function () { sendQuality(sel.value); });
+  })();
+  var talkState = null;
+  function voicePayload(pcm, rate) {
+    return { type: "voice", pcm: pcm, rate: rate || 16000 };
+  }
+  function sendVoice(u8, rate) {
+    if (!ws || ws.readyState !== 1) return;
+    if (!u8 || !u8.length) return;
+    try { ws.send(JSON.stringify(voicePayload(bytesToB64(u8), rate || 16000))); } catch (e) {}
+  }
+  function stopTalk() {
+    if (!talkState) return;
+    try { talkState.proc.disconnect(); } catch (e) {}
+    try { talkState.src.disconnect(); } catch (e) {}
+    try { talkState.ac.close(); } catch (e) {}
+    if (talkState.stream) talkState.stream.getTracks().forEach(function (t) { t.stop(); });
+    talkState = null;
+    var btn = document.getElementById("talk");
+    if (btn) { btn.textContent = "Talk"; btn.classList.remove("on"); }
+  }
+  function startTalk() {
+    if (talkState || !navigator.mediaDevices) return;
+    navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(function (stream) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+      var ac = new AC();
+      var src = ac.createMediaStreamSource(stream);
+      var proc = ac.createScriptProcessor(4096, 1, 1);
+      var mute = ac.createGain();
+      mute.gain.value = 0;
+      proc.onaudioprocess = function (ev) {
+        if (!talkState) return;
+        var input = ev.inputBuffer.getChannelData(0);
+        var outRate = 16000;
+        var step = ac.sampleRate / outRate;
+        var n = Math.max(0, Math.floor(input.length / step));
+        if (n < 1) return;
+        var pcm = new Int16Array(n);
+        for (var i = 0; i < n; i++) {
+          var s = Math.max(-1, Math.min(1, input[Math.floor(i * step)] || 0));
+          pcm[i] = s < 0 ? s * 32768 : s * 32767;
+        }
+        sendVoice(new Uint8Array(pcm.buffer), outRate);
+      };
+      src.connect(proc);
+      proc.connect(mute);
+      mute.connect(ac.destination);
+      talkState = { stream: stream, ac: ac, src: src, proc: proc };
+      var btn = document.getElementById("talk");
+      if (btn) { btn.textContent = "Talking…"; btn.classList.add("on"); }
+    }).catch(function () {});
+  }
+  (function bindTalk() {
+    var btn = document.getElementById("talk");
+    if (!btn || btn.dataset.talkBound) return;
+    btn.dataset.talkBound = "1";
+    btn.addEventListener("click", function () {
+      if (talkState) stopTalk();
+      else startTalk();
+    });
   })();
   function chatPayload(text) {
     var t = String(text || "").trim();
@@ -811,6 +874,10 @@ export const PLAYER_HTML = `<!doctype html>
     if (keys) keys.style.display = controlOn ? "flex" : "none";
     var un = document.getElementById("unmute");
     if (un) un.style.display = nextAudio ? "inline-block" : "none";
+    var talk = document.getElementById("talk");
+    var voiceOn = !!(ctl && ctl.voice);
+    if (talk) talk.style.display = voiceOn ? "inline-block" : "none";
+    if (!voiceOn) stopTalk();
     var qsel = document.getElementById("stream-quality");
     if (qsel && ctl && ctl.preset && document.activeElement !== qsel) qsel.value = ctl.preset;
     if (controlOn) sendFileJson({ type: "file", action: "list" });
@@ -967,6 +1034,7 @@ export const PLAYER_HTML = `<!doctype html>
           enabled: !!msg.control,
           ai_enabled: !!msg.ai,
           audio: !!msg.audio,
+          voice: msg.voice,
           preset: msg.preset,
           display: msg.display,
           displays: msg.displays,

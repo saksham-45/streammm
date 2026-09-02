@@ -20,6 +20,7 @@
   <div id="display-map" class="hidden" title="Click a screen to capture it"></div>
   <div id="status-pill" title="">—</div>
   <button id="unmute" type="button" class="hidden">Unmute</button>
+  <button id="talk" type="button" class="hidden">Talk</button>
   <button id="gear" type="button">Settings</button>
 </header>
 <div id="analysis-banner" class="hidden">ANALYSIS ACTIVE</div>
@@ -120,6 +121,8 @@
   <label id="audio-fields" class="hidden">Audio device
     <select id="cfg-audio-device"></select>
   </label>
+  <label><input id="cfg-voice" type="checkbox"> Allow watcher to talk</label>
+  <p id="voice-hint" class="cfg-hint hidden">Watchers get a Talk button. Their microphone plays on this Mac's speakers (afplay). Independent of Capture audio, which is the host mic in the stream.</p>
   <label>Scale
     <select id="cfg-scale">
       <option value="0.25">0.25</option>

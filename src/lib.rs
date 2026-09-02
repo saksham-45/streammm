@@ -17,6 +17,7 @@ pub mod record;
 pub mod server;
 pub mod snapshot;
 pub mod thumbs;
+pub mod voice;
 pub mod ws;
 
 pub use config::Config;

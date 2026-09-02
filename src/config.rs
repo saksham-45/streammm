@@ -240,6 +240,9 @@ pub struct ControlConfig {
     /// Write the live fMP4 to recordings/ while a watcher is driving.
     #[serde(default)]
     pub record_sessions: bool,
+    /// Watcher microphone plays on the host speakers. OFF by default.
+    #[serde(default)]
+    pub voice: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -462,6 +465,7 @@ mod tests {
         assert!(cfg.access.password_hash.is_empty());
         assert!(!cfg.control.lock_on_end);
         assert!(!cfg.control.record_sessions);
+        assert!(!cfg.control.voice);
         assert_eq!(quality_preset(&cfg), "quality");
     }
 

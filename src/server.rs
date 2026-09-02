@@ -12,6 +12,7 @@ use crate::otp::{hex_encode, Clock, OtpGate, RealClock, RedeemError, SESSION_TTL
 use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};
 use crate::publisher::Publisher;
 use crate::record::Recorder;
+use crate::voice::{self, FakeVoice, VoiceSink};
 use crate::ws::{
     accept_key, decode_frame, encode_frame, OP_BIN, OP_CLOSE, OP_PING, OP_PONG, OP_TEXT,
 };
@@ -71,6 +72,8 @@ pub struct App {
     incoming_png: Mutex<Option<(usize, Vec<u8>)>>,
     pub chat_log: Mutex<Vec<String>>,
     pub recorder: Recorder,
+    pub voice: Arc<dyn VoiceSink>,
+    pub fake_voice: FakeVoice,
 }
 
 struct DisplaySwitchInjector {
@@ -139,6 +142,8 @@ impl App {
             input::production_injector(),
             FakeInjector::new(),
             model,
+            voice::production_voice(),
+            FakeVoice::new(),
         )
     }
 
@@ -149,7 +154,17 @@ impl App {
         fake: FakeInjector,
         model: Arc<dyn ActionModel>,
     ) -> Arc<Self> {
-        Self::build(cfg, cfg_path, clock, Arc::new(fake.clone()), fake, model)
+        let fv = FakeVoice::new();
+        Self::build(
+            cfg,
+            cfg_path,
+            clock,
+            Arc::new(fake.clone()),
+            fake,
+            model,
+            Arc::new(fv.clone()),
+            fv,
+        )
     }
 
     fn build(
@@ -159,6 +174,8 @@ impl App {
         injector: Arc<dyn Injector>,
         fake: FakeInjector,
         model: Arc<dyn ActionModel>,
+        voice: Arc<dyn VoiceSink>,
+        fake_voice: FakeVoice,
     ) -> Arc<Self> {
         let hub = Hub::new();
         let capture = Capture::new(hub.clone());
@@ -200,6 +217,8 @@ impl App {
             incoming_png: Mutex::new(None),
             chat_log: Mutex::new(Vec::new()),
             recorder: Recorder::new(rec_dir),
+            voice,
+            fake_voice,
         });
         app.otp.set_unattended(unattended);
         let rec = app.recorder.clone();
@@ -291,6 +310,7 @@ impl App {
                 "control": cfg.control.enabled,
                 "ai": cfg.control.ai_enabled,
                 "audio": audio,
+                "voice": cfg.control.voice,
                 "display": cfg.capture.input,
                 "displays": devices,
                 "preset": config::quality_preset(&cfg),
@@ -389,6 +409,24 @@ impl App {
                     .and_then(|s| s.as_str())
                     .unwrap_or("");
                 self.apply_quality(preset);
+            }
+            "voice" => {
+                if !self.cfg.lock().control.voice {
+                    return;
+                }
+                let b64 = v
+                    .get("pcm")
+                    .or_else(|| v.get("data"))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
+                let Ok(raw) = crate::files::decode_b64(b64) else {
+                    return;
+                };
+                let Some(pcm) = voice::accept_pcm(raw) else {
+                    return;
+                };
+                let rate = v.get("rate").and_then(|r| r.as_u64()).unwrap_or(0) as u32;
+                self.voice.play_pcm(&pcm, voice::clamp_rate(rate));
             }
             "chat" => {
                 self.handle_chat(&v);
@@ -906,6 +944,7 @@ impl App {
                 "lock_on_end": cfg.control.lock_on_end,
                 "record_sessions": cfg.control.record_sessions,
                 "recording": self.recorder.is_active(),
+                "voice": cfg.control.voice,
                 "blocking": cfg.control.block_local && self.controller.lock().is_some(),
                 "files": self.files.list().len(),
             },
@@ -2877,6 +2916,43 @@ mod tests {
         assert_eq!(app.cfg.lock().capture.scale, 1.0);
         app.handle_inbound_json(r#"{"type":"quality","preset":"nope"}"#);
         assert_eq!(app.cfg.lock().encoder.bitrate_kbps, 8000);
+    }
+
+    #[tokio::test]
+    async fn watcher_voice_plays_when_enabled_and_ignores_when_off() {
+        use crate::computer_use::DoneModel;
+        use crate::files::encode_b64;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let cfg = crate::config::Config::default();
+        crate::config::save(&cfg, &path).unwrap();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            FakeInjector::new(),
+            Arc::new(DoneModel),
+        );
+        let pcm = vec![1u8, 2, 3, 4];
+        let msg = serde_json::json!({
+            "type": "voice",
+            "pcm": encode_b64(&pcm),
+            "rate": 16000
+        })
+        .to_string();
+        app.handle_inbound_json(&msg);
+        assert!(app.fake_voice.recorded().is_empty(), "voice off must not play");
+        app.cfg.lock().control.voice = true;
+        app.handle_inbound_json(&msg);
+        let rec = app.fake_voice.recorded();
+        assert_eq!(rec.len(), 1);
+        assert_eq!(rec[0].0, 16000);
+        assert_eq!(rec[0].1, pcm);
+        app.handle_inbound_json(r#"{"type":"voice","pcm":"@@@","rate":16000}"#);
+        assert_eq!(app.fake_voice.recorded().len(), 1, "bad pcm must not play");
     }
 
     #[tokio::test]

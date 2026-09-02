@@ -656,6 +656,25 @@ describe("StreamRoom", () => {
     pub.close();
   });
 
+  it("forwards watcher voice only when the host allows talk", async () => {
+    const { pub, session } = await viewerSession("voice-talk");
+    const view = await openWatch(session, "voice-talk");
+    const messages: string[] = [];
+    pub.addEventListener("message", (ev) => {
+      if (typeof ev.data === "string" && ev.data.includes("\"pcm\"")) messages.push(ev.data);
+    });
+    view.send(JSON.stringify({ type: "voice", pcm: "AQI=", rate: 16000 }));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(messages.length).toBe(0);
+    pub.send(JSON.stringify({ type: "flags", control: false, ai: false, voice: true }));
+    await new Promise((r) => setTimeout(r, 40));
+    view.send(JSON.stringify({ type: "voice", pcm: "AQI=", rate: 16000 }));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(messages.some((m) => m.includes("AQI="))).toBe(true);
+    pub.close();
+    view.close();
+  });
+
   it("forwards watcher quality presets without requiring remote control", async () => {
     const { pub, session } = await viewerSession("quality-preset");
     await new Promise((r) => setTimeout(r, 30));

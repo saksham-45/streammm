@@ -181,6 +181,15 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "audio must be a Settings checkbox that reveals a device picker and Unmute"
     );
     assert!(
+        html.contains("id=\"cfg-voice\"")
+            && html.contains("id=\"voice-hint\"")
+            && html.contains("id=\"talk\"")
+            && js.contains("function sendVoice")
+            && js.contains("function startTalk")
+            && js.contains("getUserMedia"),
+        "allow watcher to talk must reveal a Talk button that captures the mic"
+    );
+    assert!(
         html.contains("id=\"cfg-unattended\"")
             && html.contains("id=\"unattended-fields\"")
             && html.contains("id=\"unattended-hint\"")
@@ -396,6 +405,14 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("function sendQuality")
             && s.contains("type: \"quality\""),
         "watch page must send quality presets over the control channel"
+    );
+    assert!(
+        s.contains("id=\"talk\"")
+            && s.contains("function sendVoice")
+            && s.contains("function startTalk")
+            && s.contains("ctl.voice")
+            && s.contains("getUserMedia"),
+        "watch page must reveal Talk when the host allows watcher voice"
     );
 }
 
@@ -633,6 +650,9 @@ const nodes = {{
   "unattended-hint": el(true),
   "unattended-fields": el(true),
   "cfg-unattended-password": el(false),
+  "cfg-voice": el(false),
+  "voice-hint": el(true),
+  "talk": el(true),
   "cfg-audio": el(false),
   "audio-hint": el(true),
   "audio-fields": el(true),
@@ -721,6 +741,14 @@ nodes["cfg-unattended"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["unattended-fields"].classList.contains("hidden")) throw new Error("unattended password still hidden after enable");
 if (nodes["unattended-hint"].classList.contains("hidden")) throw new Error("unattended hint still hidden after enable");
+if (!nodes["voice-hint"].classList.contains("hidden")) throw new Error("voice hint visible while off");
+if (!nodes["talk"].classList.contains("hidden")) throw new Error("Talk visible while voice off");
+nodes["cfg-voice"].checked = true;
+window.streamaidUi.syncFeatureUi();
+if (nodes["voice-hint"].classList.contains("hidden")) throw new Error("voice hint still hidden after enable");
+if (nodes["talk"].classList.contains("hidden")) throw new Error("Talk still hidden after voice enable");
+const vp = window.streamaidUi.voicePayload("AQI=", 16000);
+if (vp.type !== "voice" || vp.pcm !== "AQI=" || vp.rate !== 16000) throw new Error("voicePayload");
 if (!nodes["audio-hint"].classList.contains("hidden")) throw new Error("audio hint visible while mic off");
 if (!nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute visible while mic off");
 nodes["cfg-audio"].checked = true;
