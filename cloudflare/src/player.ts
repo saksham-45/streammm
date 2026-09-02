@@ -253,6 +253,7 @@ export const PLAYER_HTML = `<!doctype html>
   var FILE_MAX = 64 * 1024 * 1024;
   var FILE_CHUNK = 24 * 1024;
   var incomingFiles = {};
+  var pendingUploads = {};
   function sendFileJson(msg) {
     if (!controlOn || !ws || ws.readyState !== 1) return false;
     try { ws.send(JSON.stringify(msg)); return true; } catch (e) { return false; }
@@ -294,8 +295,33 @@ export const PLAYER_HTML = `<!doctype html>
       ul.appendChild(li);
     });
   }
+  function startChunkPump(id, name, u8, off) {
+    var out = document.getElementById("file-out");
+    function pump() {
+      var n = 0;
+      while (n < 8 && off < u8.length) {
+        var end = Math.min(off + FILE_CHUNK, u8.length);
+        sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(u8.subarray(off, end)) });
+        off = end;
+        n += 1;
+      }
+      if (out) out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / u8.length)) + "%";
+      if (off >= u8.length) {
+        sendFileJson({ type: "file", action: "end", id: id });
+        return;
+      }
+      setTimeout(pump, 0);
+    }
+    pump();
+  }
   function handleFileMsg(msg) {
     var out = document.getElementById("file-out");
+    if (msg.action === "accept" && msg.id && pendingUploads[msg.id]) {
+      var job = pendingUploads[msg.id];
+      delete pendingUploads[msg.id];
+      startChunkPump(msg.id, job.name, job.u8, msg.offset || 0);
+      return;
+    }
     if (msg.action === "list") { renderFileList(msg.files || []); return; }
     if (msg.action === "ok") {
       if (out) out.textContent = "saved " + (msg.name || "");
@@ -324,24 +350,8 @@ export const PLAYER_HTML = `<!doctype html>
     if (u8.length > FILE_MAX) { if (out) out.textContent = "file too large (64 MB max)"; return; }
     if (out) out.textContent = "sending " + name + "…";
     var id = "f" + Date.now().toString(36);
-    if (!sendFileJson({ type: "file", action: "begin", id: id, name: name, size: u8.length })) return;
-    var off = 0;
-    function pump() {
-      var n = 0;
-      while (n < 8 && off < u8.length) {
-        var end = Math.min(off + FILE_CHUNK, u8.length);
-        sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(u8.subarray(off, end)) });
-        off = end;
-        n += 1;
-      }
-      if (out) out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / u8.length)) + "%";
-      if (off >= u8.length) {
-        sendFileJson({ type: "file", action: "end", id: id });
-        return;
-      }
-      setTimeout(pump, 0);
-    }
-    pump();
+    pendingUploads[id] = { name: name, u8: u8 };
+    sendFileJson({ type: "file", action: "begin", id: id, name: name, size: u8.length });
   }
   function uploadDroppedFiles(fileList) {
     if (!controlOn) return;

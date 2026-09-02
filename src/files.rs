@@ -90,6 +90,10 @@ impl Inbox {
         Ok(path)
     }
 
+    fn part_path(&self, name: &str) -> PathBuf {
+        self.dir.join(format!("{name}.part"))
+    }
+
     pub fn list(&self) -> Vec<FileEntry> {
         let mut out = Vec::new();
         let rd = match fs::read_dir(&self.dir) {
@@ -140,25 +144,36 @@ impl Inbox {
         Ok(data)
     }
 
-    pub fn begin(&self, id: &str, name: &str, size: usize) -> Result<(), String> {
+    pub fn begin(&self, id: &str, name: &str, size: usize) -> Result<usize, String> {
         let id = sanitize_id(id).ok_or_else(|| "invalid transfer id".to_string())?;
         let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
         if size == 0 || size > MAX_FILE {
             return Err("invalid file size".into());
         }
+        self.ensure_dir()?;
+        let part = self.part_path(&name);
+        let mut buf = Vec::new();
+        if let Ok(existing) = fs::read(&part) {
+            if existing.len() < size && existing.len() <= MAX_FILE {
+                buf = existing;
+            } else {
+                let _ = fs::remove_file(&part);
+            }
+        }
+        let offset = buf.len();
         let mut g = self.incoming.lock();
-        if g.len() >= 4 {
+        if g.len() >= 4 && !g.contains_key(&id) {
             return Err("too many transfers".into());
         }
         g.insert(
             id,
             Incoming {
                 name,
-                buf: Vec::with_capacity(size.min(MAX_CHUNK * 4)),
+                buf,
                 size,
             },
         );
-        Ok(())
+        Ok(offset)
     }
 
     pub fn chunk(&self, id: &str, data: &[u8]) -> Result<(), String> {
@@ -172,6 +187,8 @@ impl Inbox {
             return Err("file too large".into());
         }
         inc.buf.extend_from_slice(data);
+        let part = self.part_path(&inc.name);
+        fs::write(&part, &inc.buf).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -182,10 +199,21 @@ impl Inbox {
             .lock()
             .remove(&id)
             .ok_or_else(|| "unknown transfer".to_string())?;
+        let part = self.part_path(&inc.name);
         if inc.buf.len() != inc.size {
+            let _ = fs::write(&part, &inc.buf);
             return Err("incomplete file".into());
         }
-        self.put_bytes(&inc.name, &inc.buf)
+        let dest = self.dest(&inc.name)?;
+        if part.exists() {
+            fs::rename(&part, &dest).map_err(|e| e.to_string())?;
+        } else {
+            return self.put_bytes(&inc.name, &inc.buf);
+        }
+        Ok(FileEntry {
+            name: inc.name,
+            size: inc.size as u64,
+        })
     }
 
     pub fn handle_message(&self, v: &Value) -> Vec<String> {
@@ -210,7 +238,14 @@ impl Inbox {
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let size = v.get("size").and_then(|n| n.as_u64()).unwrap_or(0) as usize;
                 match self.begin(id, name, size) {
-                    Ok(()) => vec![json!({"type":"file","action":"accept","id":id}).to_string()],
+                    Ok(offset) => vec![json!({
+                        "type":"file",
+                        "action":"accept",
+                        "id":id,
+                        "offset":offset,
+                        "size":size
+                    })
+                    .to_string()],
                     Err(e) => vec![err_json(&e)],
                 }
             }
@@ -344,6 +379,23 @@ mod tests {
     }
 
     #[test]
+    fn resume_from_part_file_after_incomplete_end() {
+        let (_dir, inbox) = tmp_inbox();
+        assert_eq!(inbox.begin("a", "r.bin", 8).unwrap(), 0);
+        inbox.chunk("a", b"AAAA").unwrap();
+        assert!(inbox.end("a").is_err());
+        assert!(
+            inbox.list().is_empty(),
+            "incomplete transfer must not appear as a finished file"
+        );
+        assert_eq!(inbox.begin("b", "r.bin", 8).unwrap(), 4);
+        inbox.chunk("b", b"BBBB").unwrap();
+        let ent = inbox.end("b").unwrap();
+        assert_eq!(ent.size, 8);
+        assert_eq!(inbox.get_bytes("r.bin").unwrap(), b"AAAABBBB");
+    }
+
+    #[test]
     fn handle_begin_chunk_end_json_larger_than_one_chunk() {
         let (_dir, inbox) = tmp_inbox();
         let data = vec![7u8; MAX_CHUNK + 100];
@@ -354,6 +406,7 @@ mod tests {
             "size": data.len()
         }));
         assert!(begin[0].contains("accept"), "{}", begin[0]);
+        assert!(begin[0].contains("\"offset\":0"), "{}", begin[0]);
         for part in data.chunks(MAX_CHUNK) {
             let r = inbox.handle_message(&json!({
                 "action": "chunk",

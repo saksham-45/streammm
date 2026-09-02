@@ -230,6 +230,7 @@ function applyClipboardPng(b64) {
 
 const FILE_MAX = 64 * 1024 * 1024;
 const FILE_CHUNK = 24 * 1024;
+const pendingUploads = {};
 
 function bytesToB64(u8) {
   let s = "";
@@ -280,26 +281,8 @@ function uploadFileBytes(name, u8) {
   if (out) out.textContent = "sending " + name + "…";
   if (ws && ws.readyState === 1) {
     const id = "f" + Date.now().toString(36);
+    pendingUploads[id] = { name: name, u8: u8 };
     sendFileJson({ type: "file", action: "begin", id: id, name: name, size: u8.length });
-    let off = 0;
-    function pump() {
-      let n = 0;
-      while (n < 8 && off < u8.length) {
-        const end = Math.min(off + FILE_CHUNK, u8.length);
-        sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(u8.subarray(off, end)) });
-        off = end;
-        n += 1;
-      }
-      if (out) {
-        out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / u8.length)) + "%";
-      }
-      if (off >= u8.length) {
-        sendFileJson({ type: "file", action: "end", id: id });
-        return;
-      }
-      setTimeout(pump, 0);
-    }
-    pump();
     return;
   }
   if (u8.length > 8 * 1024 * 1024) {
@@ -510,8 +493,36 @@ function scheduleMseReconnect() {
   }, delay);
 }
 
+function startChunkPump(id, name, u8, off) {
+  const out = $("file-out");
+  function pump() {
+    let n = 0;
+    while (n < 8 && off < u8.length) {
+      const end = Math.min(off + FILE_CHUNK, u8.length);
+      sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(u8.subarray(off, end)) });
+      off = end;
+      n += 1;
+    }
+    if (out) {
+      out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / u8.length)) + "%";
+    }
+    if (off >= u8.length) {
+      sendFileJson({ type: "file", action: "end", id: id });
+      return;
+    }
+    setTimeout(pump, 0);
+  }
+  pump();
+}
+
 function handleFileMsg(msg) {
   const out = $("file-out");
+  if (msg.action === "accept" && msg.id && pendingUploads[msg.id]) {
+    const job = pendingUploads[msg.id];
+    delete pendingUploads[msg.id];
+    startChunkPump(msg.id, job.name, job.u8, msg.offset || 0);
+    return;
+  }
   if (msg.action === "list" && msg.files) {
     renderFileList(msg.files);
     return;

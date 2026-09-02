@@ -118,6 +118,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "origin UI must send large inbox files in chunks"
     );
     assert!(
+        js.contains("offset") && js.contains("accept"),
+        "origin UI must resume inbox uploads from accept.offset"
+    );
+    assert!(
         html.contains("id=\"cfg-display\""),
         "Display picker must be a visible Settings control, not hidden behind Detect"
     );
@@ -178,6 +182,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("action: \"begin\"") && s.contains("action: \"chunk\""),
         "watch page must send large inbox files in chunks"
+    );
+    assert!(
+        s.contains("offset") && s.contains("accept"),
+        "watch page must resume inbox uploads from accept.offset"
     );
     assert!(
         s.contains("displays") && s.contains("type: \"display\""),
