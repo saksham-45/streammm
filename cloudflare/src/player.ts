@@ -361,8 +361,13 @@ export const PLAYER_HTML = `<!doctype html>
       }).catch(function () {});
       return;
     }
-    incomingFiles[name] = { parts: [] };
-    sendGet();
+    var a = document.createElement("a");
+    a.href = "/api/files/download?name=" + encodeURIComponent(name);
+    a.download = name || "file";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    if (out) out.textContent = "saving " + name + "…";
   }
   function renderFileList(files) {
     var ul = document.getElementById("file-list");

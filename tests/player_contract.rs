@@ -220,6 +220,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page Get must stream to disk via the file picker when the browser allows it"
     );
     assert!(
+        s.contains("/api/files/download"),
+        "watch page Get must use HTTP download on browsers without a file picker (Safari)"
+    );
+    assert!(
         s.contains("displays") && s.contains("type: \"display\""),
         "watch page must switch host displays over the control channel"
     );

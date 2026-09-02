@@ -66,6 +66,20 @@ function asBuf(u: Uint8Array): ArrayBuffer {
   return u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) as ArrayBuffer;
 }
 
+function b64ToU8(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function safeDownloadName(name: string): string | null {
+  const n = name.trim();
+  if (!n || n.length > 128 || n.startsWith(".") || n.includes("..")) return null;
+  if (/[\\/\0]/.test(n) || [...n].some((c) => c.charCodeAt(0) < 32)) return null;
+  return n;
+}
+
 function corsHeaders(): Record<string, string> {
   return {
     "content-type": "application/json",
@@ -126,6 +140,11 @@ export class StreamRoom extends DurableObject<Env> {
   private controller: string | null = null;
   private display = "";
   private displays: unknown[] = [];
+  private fileDl: {
+    name: string;
+    writer: WritableStreamDefaultWriter<Uint8Array>;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -271,6 +290,17 @@ export class StreamRoom extends DurableObject<Env> {
         this.broadcastViewers(raw);
       }
       if (v.type === "file") {
+        const rec = v as { action?: string; data?: string; error?: string; name?: string };
+        const blob =
+          rec.action === "blob" ||
+          rec.action === "blob-begin" ||
+          rec.action === "blob-chunk" ||
+          rec.action === "blob-end" ||
+          rec.action === "error";
+        if (this.fileDl && blob) {
+          void this.feedFileDownload(rec);
+          return;
+        }
         this.broadcastViewers(raw);
       }
       return;
@@ -298,6 +328,42 @@ export class StreamRoom extends DurableObject<Env> {
     if (v.type === "computer-use") {
       if (!this.flags.ai) return;
       this.sendPublisher(JSON.stringify({ type: "computer-use", task: v.task || "", session }));
+    }
+  }
+
+  private async feedFileDownload(v: {
+    action?: string;
+    data?: string;
+    error?: string;
+  }): Promise<void> {
+    const dl = this.fileDl;
+    if (!dl) return;
+    try {
+      if (v.action === "error") {
+        clearTimeout(dl.timer);
+        this.fileDl = null;
+        await dl.writer.abort(v.error || "file");
+        return;
+      }
+      if (v.action === "blob" && typeof v.data === "string") {
+        await dl.writer.write(b64ToU8(v.data));
+        clearTimeout(dl.timer);
+        this.fileDl = null;
+        await dl.writer.close();
+        return;
+      }
+      if (v.action === "blob-chunk" && typeof v.data === "string") {
+        await dl.writer.write(b64ToU8(v.data));
+        return;
+      }
+      if (v.action === "blob-end") {
+        clearTimeout(dl.timer);
+        this.fileDl = null;
+        await dl.writer.close();
+      }
+    } catch {
+      clearTimeout(dl.timer);
+      this.fileDl = null;
     }
   }
 
@@ -475,6 +541,36 @@ export class StreamRoom extends DurableObject<Env> {
     }
     if (url.pathname === "/api/llm-status" && request.method === "GET") {
       return Response.json(this.llmStatus(), { headers });
+    }
+    if (url.pathname === "/api/files/download" && request.method === "GET") {
+      if (!this.flags.control) {
+        return Response.json({ error: "remote control disabled" }, { status: 403, headers });
+      }
+      const name = safeDownloadName(url.searchParams.get("name") ?? "");
+      if (!name) {
+        return Response.json({ error: "missing name" }, { status: 400, headers });
+      }
+      if (this.fileDl) {
+        return Response.json({ error: "download busy" }, { status: 409, headers });
+      }
+      const { readable, writable } = new TransformStream<Uint8Array>();
+      const writer = writable.getWriter();
+      const timer = setTimeout(() => {
+        if (this.fileDl && this.fileDl.writer === writer) {
+          void writer.abort("timeout");
+          this.fileDl = null;
+        }
+      }, 20_000);
+      this.fileDl = { name, writer, timer };
+      this.sendPublisher(JSON.stringify({ type: "file", action: "get", name, session: sess }));
+      const disp = `attachment; filename="${name.replace(/"/g, "")}"`;
+      return new Response(readable, {
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-disposition": disp,
+          "cache-control": "no-store",
+        },
+      });
     }
     if (url.pathname === "/api/computer-use" && request.method === "POST") {
       if (!this.flags.ai) {

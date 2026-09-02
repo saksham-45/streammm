@@ -366,6 +366,62 @@ describe("StreamRoom", () => {
     view.close();
   });
 
+  it("streams inbox Get over HTTP for browsers without a file picker", async () => {
+    const { pub, session } = await viewerSession("dl-http");
+    pub.send(JSON.stringify({ type: "flags", control: true, ai: false }));
+    await new Promise((r) => setTimeout(r, 30));
+    const got = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes('"get"')) resolve(ev.data);
+      });
+    });
+    const dlP = SELF.fetch(
+      "https://example.com/api/files/download?name=note.txt&session=" +
+        encodeURIComponent(session) +
+        "&room=dl-http",
+    );
+    const getRaw = await Promise.race([
+      got,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no http get")), 3000)),
+    ]);
+    const getMsg = JSON.parse(getRaw) as { type: string; action: string; name?: string };
+    expect(getMsg.action).toBe("get");
+    expect(getMsg.name).toBe("note.txt");
+    pub.send(
+      JSON.stringify({
+        type: "file",
+        action: "blob",
+        name: "note.txt",
+        size: 4,
+        data: btoa("abcd"),
+      }),
+    );
+    const res = await dlP;
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("abcd");
+    expect(res.headers.get("content-disposition")).toContain("note.txt");
+    pub.close();
+  });
+
+  it("rejects HTTP inbox Get when remote control is off or the name is unsafe", async () => {
+    const { pub, session } = await viewerSession("dl-off");
+    const off = await SELF.fetch(
+      "https://example.com/api/files/download?name=note.txt&session=" +
+        encodeURIComponent(session) +
+        "&room=dl-off",
+    );
+    expect(off.status).toBe(403);
+    pub.send(JSON.stringify({ type: "flags", control: true, ai: false }));
+    await new Promise((r) => setTimeout(r, 30));
+    const bad = await SELF.fetch(
+      "https://example.com/api/files/download?name=../evil.txt&session=" +
+        encodeURIComponent(session) +
+        "&room=dl-off",
+    );
+    expect(bad.status).toBe(400);
+    pub.close();
+  });
+
   it("forwards display switch and fans display list on flags", async () => {
     const { pub, session } = await viewerSession("disp");
     const view = await openWatch(session, "disp");
