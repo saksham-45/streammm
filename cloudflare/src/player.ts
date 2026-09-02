@@ -23,6 +23,7 @@ export const PLAYER_HTML = `<!doctype html>
   #pill { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); }
   #unmute { display: none; }
   #talk { display: none; }
+  #wol-copy { display: none; }
   #talk.on { border-color: var(--accent); color: var(--accent); }
   #rec.on { border-color: #f88; color: #f88; }
   #fs.on { border-color: var(--accent); color: var(--accent); }
@@ -101,6 +102,7 @@ export const PLAYER_HTML = `<!doctype html>
   </select>
   <button id="unmute" type="button">Unmute</button>
   <button id="talk" type="button">Talk</button>
+  <button id="wol-copy" type="button" title="Copy the host MAC for Wake-on-LAN">Copy MAC</button>
   <button id="rec" type="button" title="Record this view to a local file">Record</button>
   <button id="fs" type="button" title="Fullscreen this view (F11)">Full</button>
   <div id="displays"></div>
@@ -268,6 +270,26 @@ export const PLAYER_HTML = `<!doctype html>
     if (!sel || sel.dataset.qBound) return;
     sel.dataset.qBound = "1";
     sel.addEventListener("change", function () { sendQuality(sel.value); });
+  })();
+  var lastWolMacs = [];
+  function fillWolMacs(macs) {
+    if (!Array.isArray(macs)) return;
+    if (!macs.length && lastWolMacs.length) return;
+    lastWolMacs = macs.filter(Boolean);
+    var btn = document.getElementById("wol-copy");
+    if (btn) btn.style.display = lastWolMacs.length ? "inline-block" : "none";
+  }
+  function copyWolMac() {
+    var t = lastWolMacs.join(", ");
+    if (!t) return "";
+    try { navigator.clipboard.writeText(t); } catch (e) {}
+    return t;
+  }
+  (function bindWolCopy() {
+    var btn = document.getElementById("wol-copy");
+    if (!btn || btn.dataset.wolBound) return;
+    btn.dataset.wolBound = "1";
+    btn.addEventListener("click", function () { copyWolMac(); });
   })();
   function voicePayload(pcm, rate) {
     return { type: "voice", pcm: pcm, rate: rate || 16000 };
@@ -1040,6 +1062,7 @@ export const PLAYER_HTML = `<!doctype html>
     if (qsel && ctl && ctl.preset && document.activeElement !== qsel) qsel.value = ctl.preset;
     if (controlOn) sendFileJson({ type: "file", action: "list" });
     renderDisplays(ctl && ctl.displays, ctl && (ctl.display || ctl.input));
+    fillWolMacs(ctl && ctl.macs);
     if (nextAudio !== audioOn) {
       audioOn = nextAudio;
       if (ms) startMse();
@@ -1196,6 +1219,7 @@ export const PLAYER_HTML = `<!doctype html>
           preset: msg.preset,
           display: msg.display,
           displays: msg.displays,
+          macs: msg.macs,
         });
         return;
       }

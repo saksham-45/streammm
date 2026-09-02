@@ -541,6 +541,40 @@ describe("StreamRoom", () => {
     view.close();
   });
 
+  it("persists host MACs on flags for a later watcher", async () => {
+    const { pub, session } = await viewerSession("wol-mac");
+    pub.send(
+      JSON.stringify({
+        type: "flags",
+        control: true,
+        macs: ["aa:bb:cc:dd:ee:ff", "not-a-mac", 3],
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 80));
+    pub.close();
+    const view = await openWatch(session, "wol-mac");
+    const got = new Promise<string>((resolve) => {
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data !== "string") return;
+        try {
+          const m = JSON.parse(ev.data) as { type?: string; macs?: string[] };
+          if (m.type === "flags" && Array.isArray(m.macs) && m.macs[0] === "aa:bb:cc:dd:ee:ff") {
+            resolve(ev.data);
+          }
+        } catch {
+          /* ignore */
+        }
+      });
+    });
+    const raw = await Promise.race([
+      got,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no wol macs on join")), 3000)),
+    ]);
+    const msg = JSON.parse(raw) as { macs: string[] };
+    expect(msg.macs).toEqual(["aa:bb:cc:dd:ee:ff"]);
+    view.close();
+  });
+
   it("computer-use is 403 when AI disabled and forwards when enabled", async () => {
     const { pub, session } = await viewerSession("ai");
     const off = await SELF.fetch(`https://example.com/api/computer-use?session=${session}&room=ai`, {

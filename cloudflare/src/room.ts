@@ -37,6 +37,20 @@ export async function sha256hex(s: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function cleanMacs(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const m of raw) {
+    if (typeof m !== "string") continue;
+    const s = m.trim().toLowerCase();
+    if (s.length < 11 || s.length > 17) continue;
+    if (!/^[0-9a-f:.-]+$/.test(s)) continue;
+    if (!out.includes(s)) out.push(s);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
 function hexRandom(n: number): string {
   const b = new Uint8Array(n);
   crypto.getRandomValues(b);
@@ -153,7 +167,14 @@ export class StreamRoom extends DurableObject<Env> {
   private sessions = new Map<string, number>();
   private fails = 0;
   private lockUntil = 0;
-  private flags = { control: false, ai: false, audio: false, preset: "quality", voice: false };
+  private flags = {
+    control: false,
+    ai: false,
+    audio: false,
+    preset: "quality",
+    voice: false,
+    macs: [] as string[],
+  };
   private flagsHydrated = false;
   private controller: string | null = null;
   private display = "";
@@ -221,16 +242,7 @@ export class StreamRoom extends DurableObject<Env> {
         }
       }
       try {
-        server.send(JSON.stringify({
-          type: "flags",
-          control: this.flags.control,
-          ai: this.flags.ai,
-          audio: this.flags.audio,
-          voice: this.flags.voice,
-          preset: this.flags.preset,
-          display: this.display,
-          displays: this.displays,
-        }));
+        server.send(this.flagsJson());
       } catch {
         /* ignore */
       }
@@ -308,22 +320,15 @@ export class StreamRoom extends DurableObject<Env> {
         this.flags.ai = !!v.ai;
         this.flags.audio = !!v.audio;
         this.flags.voice = !!v.voice;
-        const rec = v as { display?: string; displays?: unknown[]; preset?: string };
+        const rec = v as { display?: string; displays?: unknown[]; preset?: string; macs?: unknown };
         if (typeof rec.preset === "string" && rec.preset) this.flags.preset = rec.preset;
         this.flagsHydrated = true;
         if (typeof rec.display === "string") this.display = rec.display;
         if (Array.isArray(rec.displays)) this.displays = rec.displays;
+        const macs = cleanMacs(rec.macs);
+        if (macs.length) this.flags.macs = macs;
         await this.ctx.storage.put("flags", this.flags);
-        this.broadcastViewers(JSON.stringify({
-          type: "flags",
-          control: this.flags.control,
-          ai: this.flags.ai,
-          audio: this.flags.audio,
-          voice: this.flags.voice,
-          preset: this.flags.preset,
-          display: this.display,
-          displays: this.displays,
-        }));
+        this.broadcastViewers(this.flagsJson());
       }
       if (v.type === "clipboard") {
         this.broadcastViewers(raw);
@@ -499,6 +504,7 @@ export class StreamRoom extends DurableObject<Env> {
         audio?: boolean;
         preset?: string;
         voice?: boolean;
+        macs?: string[];
       }>("flags");
       if (flags) {
         this.flags = {
@@ -507,10 +513,25 @@ export class StreamRoom extends DurableObject<Env> {
           audio: !!flags.audio,
           preset: flags.preset || "quality",
           voice: !!flags.voice,
+          macs: cleanMacs(flags.macs),
         };
       }
       this.flagsHydrated = true;
     }
+  }
+
+  private flagsJson(): string {
+    return JSON.stringify({
+      type: "flags",
+      control: this.flags.control,
+      ai: this.flags.ai,
+      audio: this.flags.audio,
+      voice: this.flags.voice,
+      preset: this.flags.preset,
+      display: this.display,
+      displays: this.displays,
+      macs: this.flags.macs,
+    });
   }
 
   private async persistSessions(): Promise<void> {

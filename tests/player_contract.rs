@@ -472,6 +472,13 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page must Talk with AEC and mute the stream while speaking"
     );
     assert!(
+        s.contains("id=\"wol-copy\"")
+            && s.contains("function fillWolMacs")
+            && s.contains("function copyWolMac")
+            && s.contains("macs"),
+        "watch page must reveal Copy MAC from host flags for Wake-on-LAN"
+    );
+    assert!(
         s.contains("id=\"rec\"")
             && s.contains("function startWatchRecord")
             && s.contains("function watchRecordMime")

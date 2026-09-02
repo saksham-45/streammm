@@ -345,6 +345,7 @@ impl App {
                 "preset": config::quality_preset(&cfg),
                 "bitrate_kbps": cfg.encoder.bitrate_kbps,
                 "scale": cfg.capture.scale,
+                "macs": crate::wol::list_macs(),
             })
             .to_string(),
         );
