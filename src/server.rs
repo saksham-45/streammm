@@ -966,6 +966,7 @@ impl App {
             .route("/api/recordings", get(api_recordings_list))
             .route("/api/recordings/download", get(api_recordings_download))
             .route("/api/permissions/open", post(api_permissions_open))
+            .route("/api/wol", post(api_wol))
             .with_state(self)
     }
 
@@ -1046,6 +1047,9 @@ impl App {
                 "screen": crate::perm::screen_ok(),
                 "accessibility": crate::perm::accessibility_ok(),
                 "input": crate::perm::input_ok(),
+            },
+            "wol": {
+                "macs": crate::wol::list_macs(),
             }
         })
     }
@@ -1539,6 +1543,28 @@ async fn api_control_release(State(app): State<Arc<App>>, req: Request) -> Respo
     }
     app.end_remote_session();
     Json(json!({"ok": true, "released": true})).into_response()
+}
+
+async fn api_wol(State(app): State<Arc<App>>, req: Request) -> Response {
+    if !host_ok(&app, req.headers(), req.uri()) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    let body = axum::body::to_bytes(req.into_body(), 8_000)
+        .await
+        .unwrap_or_default();
+    let v: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid JSON body"),
+    };
+    let raw = v.get("mac").and_then(|m| m.as_str()).unwrap_or("");
+    let mac = match crate::wol::parse_mac(raw) {
+        Ok(m) => m,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, e),
+    };
+    match crate::wol::send_wol(mac) {
+        Ok(()) => Json(json!({ "ok": true, "mac": crate::wol::format_mac(&mac) })).into_response(),
+        Err(_) => json_err(StatusCode::INTERNAL_SERVER_ERROR, "wake packet failed"),
+    }
 }
 
 async fn api_permissions_open(State(app): State<Arc<App>>, req: Request) -> Response {
@@ -2130,6 +2156,7 @@ mod tests {
         assert!(v["permissions"]["screen"].is_boolean());
         assert!(v["permissions"]["accessibility"].is_boolean());
         assert!(v["permissions"]["input"].is_boolean());
+        assert!(v["wol"]["macs"].is_array());
 
         let res = router
             .oneshot(

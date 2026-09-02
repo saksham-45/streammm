@@ -161,6 +161,16 @@
   </label>
   <label id="keep-awake-fields" class="hidden"><input id="cfg-keep-awake" type="checkbox"> Keep this Mac awake for remote access</label>
   <p id="keep-awake-hint" class="cfg-hint hidden">Prevents idle sleep and display sleep so capture and the publisher stay up (lid close still sleeps). A live remote session always holds this. After wake, capture and the watch link restart immediately. Uncheck to let this Mac sleep when idle.</p>
+  <div id="wol-fields" class="hidden">
+    <p id="wol-host-mac" class="cfg-hint">This Mac: —</p>
+    <label>Wake-on-LAN target
+      <div class="row">
+        <input id="cfg-wol-mac" type="text" maxlength="17" placeholder="aa:bb:cc:dd:ee:ff" autocomplete="off">
+        <button id="wol-send" type="button">Send wake packet</button>
+      </div>
+    </label>
+    <p id="wol-hint" class="cfg-hint">Sends a magic packet on this LAN (UDP broadcast port 9). Copy this Mac's address and send it from another device on the network after sleep. Firmware Wake-on-LAN must be on; a closed MacBook lid often will not wake.</p>
+  </div>
   <label><input id="cfg-control-enabled" type="checkbox"> Allow remote computer use (kill switch off = blocked)</label>
   <p id="ctl-hint" class="cfg-hint hidden">Watchers can click (left/right/middle), drag, scroll, type, paste clipboard text or files, and drop files into the host inbox. Incoming files appear on the Desktop and on this Mac's pasteboard as Finder files (Cmd-V). Copy on this Mac (text, PNG, and Finder files) is pushed to the watcher automatically. Uncheck to kill remote input immediately after Save.</p>
   <p id="keys-hint" class="cfg-hint hidden">A Send-keys bar appears while remote control is on. Use it for shortcuts the browser would steal (⌘Tab, ⌘W, ⌘Q, Ctrl+Alt+Del, Lock). Same injector the AI uses.</p>

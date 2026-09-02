@@ -169,6 +169,14 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "keep-awake must be a Settings control revealed when remote control or unattended is on"
     );
     assert!(
+        html.contains("id=\"wol-fields\"")
+            && html.contains("id=\"cfg-wol-mac\"")
+            && html.contains("id=\"wol-send\"")
+            && js.contains("function wolPayload")
+            && js.contains("/api/wol"),
+        "unattended/remote control must reveal Wake-on-LAN MAC and Send wake packet"
+    );
+    assert!(
         html.contains("id=\"cfg-lock-on-end\"")
             && html.contains("id=\"lock-on-end-fields\"")
             && html.contains("id=\"lock-on-end-hint\""),
@@ -724,6 +732,11 @@ const nodes = {{
   "keep-awake-fields": el(true),
   "cfg-keep-awake": el(false),
   "keep-awake-hint": el(true),
+  "wol-fields": el(true),
+  "wol-host-mac": el(false),
+  "cfg-wol-mac": el(false),
+  "wol-send": el(false),
+  "wol-hint": el(false),
   "cfg-voice": el(false),
   "voice-hint": el(true),
   "voice-aec-hint": el(true),
@@ -759,6 +772,7 @@ if (!nodes["analysis-pane"].classList.contains("hidden")) throw new Error("analy
 if (!nodes["cu-section"].classList.contains("hidden")) throw new Error("AI form visible while off");
 if (!nodes["unattended-fields"].classList.contains("hidden")) throw new Error("unattended password visible while off");
 if (!nodes["keep-awake-fields"].classList.contains("hidden")) throw new Error("keep-awake visible while off");
+if (!nodes["wol-fields"].classList.contains("hidden")) throw new Error("WoL visible while off");
 if (!nodes["lock-on-end-fields"].classList.contains("hidden")) throw new Error("lock-on-end visible while off");
 if (!nodes["blank-screen-fields"].classList.contains("hidden")) throw new Error("blank-screen visible while off");
 if (!nodes["record-fields"].classList.contains("hidden")) throw new Error("record-sessions visible while off");
@@ -791,6 +805,9 @@ const chat = window.streamaidUi.chatPayload("  hello  ");
 if (chat.type !== "chat" || chat.text !== "hello") throw new Error("chatPayload");
 if (nodes["block-local-fields"].classList.contains("hidden")) throw new Error("block-local still hidden after control enable");
 if (nodes["keep-awake-fields"].classList.contains("hidden")) throw new Error("keep-awake still hidden after control enable");
+if (nodes["wol-fields"].classList.contains("hidden")) throw new Error("WoL still hidden after control enable");
+const wol = window.streamaidUi.wolPayload("  AA:BB:CC:DD:EE:FF  ");
+if (wol.mac !== "AA:BB:CC:DD:EE:FF") throw new Error("wolPayload");
 if (!nodes["keep-awake-hint"].classList.contains("hidden")) throw new Error("keep-awake hint visible while off");
 nodes["cfg-keep-awake"].checked = true;
 window.streamaidUi.syncFeatureUi();

@@ -125,6 +125,7 @@ function syncFeatureUi() {
   setHidden($("unattended-fields"), !f.unattended);
   setHidden($("keep-awake-fields"), !(f.ctl || f.unattended));
   setHidden($("keep-awake-hint"), !((f.ctl || f.unattended) && f.keepAwake));
+  setHidden($("wol-fields"), !(f.ctl || f.unattended || f.keepAwake));
   setHidden($("audio-hint"), !f.audio);
   setHidden($("audio-fields"), !(f.audio && !f.mjpeg));
   setHidden($("unmute"), !(f.audio && !f.mjpeg));
@@ -219,7 +220,34 @@ function renderStatus(s) {
   }
   if (typeof ctl.voice === "boolean") setHidden($("talk"), !ctl.voice);
   if (s && s.permissions) syncPermissionUi(s.permissions);
+  if (s && s.wol) fillWolMacs(s.wol.macs);
   if (featureFlags().record) refreshRecordings();
+}
+
+function fillWolMacs(macs) {
+  const el = $("wol-host-mac");
+  if (!el) return;
+  const list = (macs || []).filter(Boolean);
+  el.textContent = list.length ? ("This Mac: " + list.join(", ")) : "This Mac: —";
+}
+
+function wolPayload(mac) {
+  return { mac: String(mac || "").trim() };
+}
+
+function sendWol() {
+  const mac = $("cfg-wol-mac") && $("cfg-wol-mac").value;
+  const note = $("wol-hint");
+  fetch(url("/api/wol"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(wolPayload(mac))
+  }).then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); }).then(function (res) {
+    if (!note) return;
+    note.textContent = res.ok
+      ? ("Sent wake packet to " + ((res.body && res.body.mac) || mac))
+      : ("Wake failed: " + ((res.body && res.body.error) || "bad MAC"));
+  }).catch(function () {});
 }
 
 let lastPerm = { screen: true, accessibility: true, input: true };
@@ -1980,6 +2008,10 @@ function onReady() {
   if (permInput) {
     permInput.addEventListener("click", function () { openPrivacyPane("input"); });
   }
+  const wolSend = $("wol-send");
+  if (wolSend) {
+    wolSend.addEventListener("click", function () { sendWol(); });
+  }
   const cancelAi = $("cu-cancel");
   if (cancelAi) {
     cancelAi.addEventListener("click", async function () {
@@ -2083,6 +2115,8 @@ if (typeof window !== "undefined") {
     url: url,
     syncPermissionUi: syncPermissionUi,
     openPrivacyPane: openPrivacyPane,
+    wolPayload: wolPayload,
+    fillWolMacs: fillWolMacs,
   };
 }
 

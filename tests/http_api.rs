@@ -27,6 +27,22 @@ async fn body_json(res: axum::response::Response) -> Value {
 }
 
 #[tokio::test]
+async fn wol_rejects_bad_mac() {
+    let (_dir, app) = temp_app();
+    let router = app.router();
+    let res = router
+        .oneshot(
+            Request::post("/api/wol")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"mac": "nope"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn permissions_open_rejects_unknown_pane() {
     let (_dir, app) = temp_app();
     let router = app.router();
