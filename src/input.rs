@@ -633,6 +633,7 @@ pub trait Injector: Send + Sync {
     fn clipboard_get_files(&self) -> Vec<PathBuf> {
         Vec::new()
     }
+    fn clipboard_set_files(&self, _paths: &[PathBuf]) {}
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -846,6 +847,9 @@ impl Injector for FakeInjector {
     }
     fn clipboard_get_files(&self) -> Vec<PathBuf> {
         self.files.lock().clone()
+    }
+    fn clipboard_set_files(&self, paths: &[PathBuf]) {
+        *self.files.lock() = paths.to_vec();
     }
 }
 
@@ -1166,6 +1170,37 @@ else {
             .collect()
     }
 
+    pub fn clipboard_set_files_os(paths: &[PathBuf]) -> bool {
+        let files: Vec<&PathBuf> = paths
+            .iter()
+            .filter(|p| p.is_file())
+            .take(super::CLIP_FILES_MAX)
+            .collect();
+        if files.is_empty() {
+            return false;
+        }
+        let tmp = std::env::temp_dir();
+        if files.iter().all(|p| p.starts_with(&tmp)) {
+            return true;
+        }
+        let list = files
+            .iter()
+            .map(|p| format!("POSIX file \"{}\"", applescript_posix(p)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let script = if files.len() == 1 {
+            format!("set the clipboard to {list}")
+        } else {
+            format!("set the clipboard to {{{list}}}")
+        };
+        Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
     unsafe fn post_mouse(
         ty: CGEventType,
         pos: CGPoint,
@@ -1380,6 +1415,9 @@ else {
         }
         fn clipboard_get_files(&self) -> Vec<PathBuf> {
             clipboard_get_files_os()
+        }
+        fn clipboard_set_files(&self, paths: &[PathBuf]) {
+            let _ = clipboard_set_files_os(paths);
         }
         fn apply(&self, action: &Action) {
             let held = self.flags.load(Ordering::SeqCst);

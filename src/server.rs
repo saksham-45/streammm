@@ -73,7 +73,9 @@ impl Injector for DisplaySwitchInjector {
             self.app.select_display(id);
         }
         if let input::Action::File { name, data } = action {
-            let _ = self.app.files.put_bytes(name, data);
+            if let Ok(ent) = self.app.files.put_bytes(name, data) {
+                self.app.offer_incoming_file(&ent.name);
+            }
             return;
         }
         self.inner.apply(action);
@@ -104,6 +106,9 @@ impl Injector for DisplaySwitchInjector {
     }
     fn clipboard_get_files(&self) -> Vec<std::path::PathBuf> {
         self.inner.clipboard_get_files()
+    }
+    fn clipboard_set_files(&self, paths: &[std::path::PathBuf]) {
+        self.inner.clipboard_set_files(paths);
     }
 }
 
@@ -299,6 +304,7 @@ impl App {
                     return;
                 }
                 for msg in self.files.handle_message(&v) {
+                    self.fanout_file_ok(&msg);
                     self.publisher.push_wire(msg.clone());
                     let _ = self.clip_tx.send(msg);
                 }
@@ -516,6 +522,29 @@ impl App {
             let _ = self.clip_tx.send(list);
         }
         any
+    }
+
+    /// Put a just-received inbox file on the host pasteboard as a Finder file
+    /// so Cmd-V pastes it (TeamViewer-style), without echoing through poll.
+    pub fn offer_incoming_file(&self, name: &str) {
+        let Ok((path, _)) = self.files.readable_path(name) else {
+            return;
+        };
+        let paths = vec![path];
+        *self.last_clip.lock() = input::file_clip_key(&paths);
+        self.injector.clipboard_set_files(&paths);
+    }
+
+    fn fanout_file_ok(&self, msg: &str) {
+        if let Ok(v) = serde_json::from_str::<Value>(msg) {
+            if v.get("type").and_then(|t| t.as_str()) == Some("file")
+                && v.get("action").and_then(|a| a.as_str()) == Some("ok")
+            {
+                if let Some(name) = v.get("name").and_then(|n| n.as_str()) {
+                    self.offer_incoming_file(name);
+                }
+            }
+        }
     }
 
     fn spawn_clipboard_push(self: &Arc<Self>) {
@@ -1215,7 +1244,10 @@ async fn api_files_put(State(app): State<Arc<App>>, req: Request) -> Response {
         );
     }
     match app.files.put_bytes(name, &data) {
-        Ok(ent) => Json(json!({"ok": true, "name": ent.name, "size": ent.size})).into_response(),
+        Ok(ent) => {
+            app.offer_incoming_file(&ent.name);
+            Json(json!({"ok": true, "name": ent.name, "size": ent.size})).into_response()
+        }
         Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
     }
 }
@@ -1889,11 +1921,12 @@ mod tests {
         cfg.token = "s3cret".into();
         cfg.control.enabled = true;
         crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
         let app = App::new_for_test(
             cfg,
             path,
             FakeClock::new(),
-            FakeInjector::new(),
+            fake.clone(),
             Arc::new(DoneModel),
         );
         app.hub
@@ -1932,6 +1965,12 @@ mod tests {
             }
         }
         assert!(saw_ok, "put must ack over the watch socket");
+        assert!(
+            fake.clipboard_get_files()
+                .iter()
+                .any(|p| p.ends_with("note.txt")),
+            "incoming file must land on the host pasteboard as a Finder file"
+        );
         ws.send(Message::Text(r#"{"type":"file","action":"list"}"#.into()))
             .await
             .unwrap();
@@ -2343,6 +2382,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn incoming_file_offer_does_not_echo_to_watcher() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        app.files.put_bytes("pasted.txt", b"hello").unwrap();
+        app.offer_incoming_file("pasted.txt");
+        assert!(
+            fake.clipboard_get_files()
+                .iter()
+                .any(|p| p.ends_with("pasted.txt"))
+        );
+        assert!(
+            !app.poll_clipboard(),
+            "offering a Finder paste must not echo the same file back to the watcher"
+        );
+    }
+
+    #[tokio::test]
     async fn ingest_rejects_clipboard_png_over_cap() {
         use crate::computer_use::DoneModel;
         use crate::files::encode_b64;
@@ -2460,7 +2531,7 @@ mod tests {
             cfg,
             path,
             FakeClock::new(),
-            fake,
+            fake.clone(),
             Arc::new(DropThenDone),
         );
         let applied = app.run_computer_use("save a note").await;
@@ -2471,5 +2542,11 @@ mod tests {
             "{applied:?}"
         );
         assert_eq!(app.files.get_bytes("from-ai.txt").unwrap(), b"dropped");
+        assert!(
+            fake.clipboard_get_files()
+                .iter()
+                .any(|p| p.ends_with("from-ai.txt")),
+            "AI file drop must be a Finder paste on the host pasteboard"
+        );
     }
 }
