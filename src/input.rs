@@ -144,6 +144,16 @@ pub enum Action {
         name: String,
         data: Vec<u8>,
     },
+    FileManage {
+        op: String,
+        name: String,
+        names: Vec<String>,
+        root: String,
+        path: String,
+        to: String,
+        to_root: String,
+        to_path: String,
+    },
     Wait {
         #[serde(default)]
         ms: u64,
@@ -397,23 +407,58 @@ pub fn parse_control_json(v: &serde_json::Value) -> Option<Action> {
             text: v.get("text").and_then(|x| x.as_str()).unwrap_or("").into(),
         },
         "file" => {
-            let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let data = if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
-                t.as_bytes().to_vec()
-            } else if let Some(b64) = v.get("data").and_then(|d| d.as_str()) {
-                match crate::files::decode_b64(b64) {
-                    Ok(b) => b,
-                    Err(_) => return None,
+            let op = v
+                .get("op")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+            let names = crate::files::names_from_value(v);
+            let root = v
+                .get("root")
+                .and_then(|n| n.as_str())
+                .unwrap_or("inbox")
+                .to_string();
+            let path = v.get("path").and_then(|n| n.as_str()).unwrap_or("").to_string();
+            let to = v.get("to").and_then(|n| n.as_str()).unwrap_or("").to_string();
+            let to_root = v
+                .get("toRoot")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            let to_path = v.get("toPath").and_then(|n| n.as_str()).unwrap_or("").to_string();
+            if op.is_empty() || op == "put" {
+                let data = if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                    t.as_bytes().to_vec()
+                } else if let Some(b64) = v.get("data").and_then(|d| d.as_str()) {
+                    match crate::files::decode_b64(b64) {
+                        Ok(b) => b,
+                        Err(_) => return None,
+                    }
+                } else {
+                    return None;
+                };
+                if name.is_empty() || data.is_empty() || data.len() > crate::files::HTTP_PUT_MAX {
+                    return None;
+                }
+                Action::File { name, data }
+            } else if matches!(
+                op.as_str(),
+                "list" | "mkdir" | "rename" | "copy" | "move" | "delete"
+            ) {
+                Action::FileManage {
+                    op,
+                    name,
+                    names,
+                    root,
+                    path,
+                    to,
+                    to_root,
+                    to_path,
                 }
             } else {
                 return None;
-            };
-            if name.is_empty() || data.is_empty() || data.len() > crate::files::HTTP_PUT_MAX {
-                return None;
-            }
-            Action::File {
-                name: name.to_string(),
-                data,
             }
         }
         "wait" => Action::Wait {
@@ -698,6 +743,11 @@ pub enum Injected {
         name: String,
         data: Vec<u8>,
     },
+    FileManage {
+        op: String,
+        name: String,
+        root: String,
+    },
 }
 
 impl Injected {
@@ -825,6 +875,11 @@ impl Injector for FakeInjector {
             Action::File { name, data } => Injected::File {
                 name: name.clone(),
                 data: data.clone(),
+            },
+            Action::FileManage { op, name, root, .. } => Injected::FileManage {
+                op: op.clone(),
+                name: name.clone(),
+                root: root.clone(),
             },
             Action::Wait { .. } | Action::Done => return,
         };
@@ -1979,6 +2034,7 @@ else {
                         self.apply_key("v", None, &["Meta".into()]);
                     }
                     Action::File { .. } => {}
+                    Action::FileManage { .. } => {}
                     Action::Wait { .. } | Action::Done => {}
                 }
             }
@@ -2160,6 +2216,25 @@ mod tests {
             Some(Action::File { name, data }) => {
                 assert_eq!(name, "n.txt");
                 assert_eq!(data, b"abc");
+            }
+            other => panic!("{other:?}"),
+        }
+        let listing = serde_json::json!({"action":"file","op":"list","root":"desktop"});
+        match parse_control_json(&listing) {
+            Some(Action::FileManage { op, root, .. }) => {
+                assert_eq!(op, "list");
+                assert_eq!(root, "desktop");
+            }
+            other => panic!("{other:?}"),
+        }
+        let copy = serde_json::json!({
+            "action":"file","op":"copy","name":"a.txt","root":"inbox","toRoot":"documents"
+        });
+        match parse_control_json(&copy) {
+            Some(Action::FileManage { op, name, to_root, .. }) => {
+                assert_eq!(op, "copy");
+                assert_eq!(name, "a.txt");
+                assert_eq!(to_root, "documents");
             }
             other => panic!("{other:?}"),
         }

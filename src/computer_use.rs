@@ -94,6 +94,7 @@ impl LlmActionModel {
              Use right-click, drag (down/move/up), modifier keys, paste, clipboard images, inbox files (including files the person pasted or copied in Finder; incoming files land on the Desktop and on the pasteboard as Finder files so Cmd-V pastes them), and switch displays when a person would.\n\
              Send Cmd+Tab, Cmd+Space, Cmd+W, Alt+Tab, Alt+F4, Ctrl+Alt+Del, and Control+Command+Q (lock) with action key — browsers steal those, the injector does not.\n\
              If the task lists [displays]=JSON, pick another screen with action display and that id, then wait.\n\
+             Host files (same as the Files panel): {{\"action\":\"file\",\"op\":\"list\",\"root\":\"desktop\",\"path\":\"\"}}, mkdir/rename/copy/move/delete with name or names, to, toRoot, toPath. List results arrive next step as [files]=JSON. Create a new file with {{\"action\":\"file\",\"name\":\"notes.txt\",\"text\":\"file body\"}}.\n\
              Respond ONLY with JSON: {{\"actions\":[{{\"action\":\"click\",\"x\":0.5,\"y\":0.5}},\
 {{\"action\":\"click\",\"x\":0.5,\"y\":0.5,\"button\":\"right\"}},\
 {{\"action\":\"dblclick\",\"x\":0.5,\"y\":0.5}},\
@@ -107,6 +108,8 @@ impl LlmActionModel {
 {{\"action\":\"paste\",\"text\":\"clipboard text\"}},\
 {{\"action\":\"clipboard\",\"mime\":\"image/png\",\"data\":\"base64-png\"}},\
 {{\"action\":\"file\",\"name\":\"notes.txt\",\"text\":\"file body\"}},\
+{{\"action\":\"file\",\"op\":\"list\",\"root\":\"desktop\"}},\
+{{\"action\":\"file\",\"op\":\"copy\",\"name\":\"a.txt\",\"root\":\"inbox\",\"toRoot\":\"documents\"}},\
 {{\"action\":\"display\",\"id\":\"2:\"}},\
 {{\"action\":\"scroll\",\"x\":0.5,\"y\":0.5,\"dy\":-1}},{{\"action\":\"wait\",\"ms\":200}},\
 {{\"action\":\"done\"}}]}}."
@@ -413,6 +416,9 @@ mod tests {
         assert!(p.contains("[displays]"));
         assert!(p.contains("image/png"));
         assert!(p.contains("\"file\"") || p.contains("notes.txt"));
+        assert!(p.contains("\"op\":\"list\"") || p.contains("op\":\"list\""));
+        assert!(p.contains("[files]"));
+        assert!(p.contains("toRoot") || p.contains("toRoot"));
     }
 
     #[test]

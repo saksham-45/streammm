@@ -32,8 +32,10 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::convert::Infallible;
+use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -161,6 +163,42 @@ pub struct App {
 struct DisplaySwitchInjector {
     inner: Arc<dyn Injector>,
     app: Arc<App>,
+    listing: Arc<Mutex<String>>,
+}
+
+struct FilesAwareModel {
+    inner: Arc<dyn ActionModel>,
+    listing: Arc<Mutex<String>>,
+}
+
+impl FilesAwareModel {
+    fn with_files(&self, task: &str) -> String {
+        let listing = self.listing.lock().clone();
+        if listing.is_empty() {
+            task.to_string()
+        } else {
+            format!("{task}\n[files]={listing}")
+        }
+    }
+}
+
+impl ActionModel for FilesAwareModel {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+    fn plan(&self, task: &str, step: u32, jpeg: &[u8]) -> Vec<input::Action> {
+        self.inner.plan(&self.with_files(task), step, jpeg)
+    }
+    fn plan_async<'a>(
+        &'a self,
+        task: &'a str,
+        step: u32,
+        jpeg: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Vec<input::Action>> + Send + 'a>> {
+        let task = self.with_files(task);
+        let inner = self.inner.clone();
+        Box::pin(async move { inner.plan_async(&task, step, jpeg).await })
+    }
 }
 
 impl Injector for DisplaySwitchInjector {
@@ -172,6 +210,11 @@ impl Injector for DisplaySwitchInjector {
             if let Ok(ent) = self.app.files.put_bytes(name, data) {
                 self.app.offer_incoming_file(&ent.name);
             }
+            return;
+        }
+        if let input::Action::FileManage { .. } = action {
+            self.app.apply_ai_files(action, &self.listing);
+            self.inner.apply(action);
             return;
         }
         self.inner.apply(action);
@@ -793,6 +836,48 @@ impl App {
         self.injector.clipboard_set_files(&paths);
     }
 
+    fn apply_ai_files(&self, action: &input::Action, listing: &Mutex<String>) {
+        let input::Action::FileManage {
+            op,
+            name,
+            names,
+            root,
+            path,
+            to,
+            to_root,
+            to_path,
+        } = action
+        else {
+            return;
+        };
+        let mut v = json!({
+            "action": op,
+            "name": name,
+            "root": root,
+            "path": path,
+        });
+        if !names.is_empty() {
+            v["names"] = json!(names);
+        }
+        if !to.is_empty() {
+            v["to"] = json!(to);
+        }
+        if !to_root.is_empty() {
+            v["toRoot"] = json!(to_root);
+        }
+        if !to_path.is_empty() {
+            v["toPath"] = json!(to_path);
+        }
+        for msg in self.files.handle_message(&v) {
+            if op == "list" || msg.contains("\"files\"") {
+                *listing.lock() = msg.clone();
+            }
+            self.fanout_file_ok(&msg);
+            self.publisher.push_wire(msg.clone());
+            let _ = self.clip_tx.send(msg);
+        }
+    }
+
     fn fanout_file_ok(&self, msg: &str) {
         if let Ok(v) = serde_json::from_str::<Value>(msg) {
             if v.get("type").and_then(|t| t.as_str()) == Some("file")
@@ -933,10 +1018,16 @@ impl App {
         let injector = self.injector.clone();
         let catalog = serde_json::to_string(&*self.displays.lock()).unwrap_or_else(|_| "[]".into());
         let task = format!("{task}\n[displays]={catalog}");
+        let listing = Arc::new(Mutex::new(String::new()));
         let hook = DisplaySwitchInjector {
             inner: injector,
             app: self.clone(),
+            listing: listing.clone(),
         };
+        let model = Arc::new(FilesAwareModel {
+            inner: model,
+            listing,
+        });
         computer_use::run_task_async(
             &task,
             model.as_ref(),
@@ -3683,6 +3774,90 @@ mod tests {
                 .iter()
                 .any(|p| p.ends_with("from-ai.txt")),
             "AI file drop must be a Finder paste on the host pasteboard"
+        );
+    }
+
+    #[tokio::test]
+    async fn ai_file_list_then_copy_uses_files_panel() {
+        use crate::computer_use::ActionModel;
+        use crate::input::{Action, FakeInjector};
+        use crate::otp::FakeClock;
+
+        fn manage(op: &str, name: &str, root: &str, to_root: &str, to_path: &str) -> Action {
+            Action::FileManage {
+                op: op.into(),
+                name: name.into(),
+                names: if name.is_empty() {
+                    vec![]
+                } else {
+                    vec![name.into()]
+                },
+                root: root.into(),
+                path: String::new(),
+                to: String::new(),
+                to_root: to_root.into(),
+                to_path: to_path.into(),
+            }
+        }
+
+        struct ListThenCopy;
+        impl ActionModel for ListThenCopy {
+            fn plan(&self, task: &str, step: u32, _jpeg: &[u8]) -> Vec<Action> {
+                match step {
+                    0 => vec![manage("list", "", "inbox", "", "")],
+                    1 => {
+                        assert!(
+                            task.contains("[files]") && task.contains("note.txt"),
+                            "list result must feed the next AI step: {task}"
+                        );
+                        vec![
+                            manage("copy", "note.txt", "inbox", "inbox", "Work"),
+                            Action::Done,
+                        ]
+                    }
+                    _ => vec![Action::Done],
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.ai_enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(ListThenCopy),
+        );
+        app.files.mkdir_at("inbox", "", "Work").unwrap();
+        app.files.put_bytes("note.txt", b"hello-ai").unwrap();
+        let applied = app.run_computer_use("copy the note into Work").await;
+        assert!(
+            applied.iter().any(|a| matches!(
+                a,
+                Action::FileManage { op, name, .. } if op == "list" && name.is_empty()
+            )),
+            "{applied:?}"
+        );
+        assert!(
+            applied.iter().any(|a| matches!(
+                a,
+                Action::FileManage { op, name, .. } if op == "copy" && name == "note.txt"
+            )),
+            "{applied:?}"
+        );
+        assert_eq!(
+            std::fs::read(app.files.join_under("inbox", "Work", "note.txt").unwrap()).unwrap(),
+            b"hello-ai"
+        );
+        assert!(
+            fake.recorded()
+                .iter()
+                .any(|e| matches!(e, crate::input::Injected::FileManage { op, .. } if op == "copy"))
         );
     }
 }
