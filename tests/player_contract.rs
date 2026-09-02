@@ -176,6 +176,13 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "host live view must record locally via MediaRecorder"
     );
     assert!(
+        html.contains("id=\"fs\"")
+            && js.contains("function toggleWatchFullscreen")
+            && js.contains("function isWatchFullscreen")
+            && js.contains("requestFullscreen"),
+        "host live view must fullscreen the stream pane"
+    );
+    assert!(
         html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
         "origin analysis/AI/Ask chrome must not sit on the live stream"
     );
@@ -429,6 +436,14 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("MediaRecorder")
             && s.contains("captureStream"),
         "watch page must record the live view locally via MediaRecorder"
+    );
+    assert!(
+        s.contains("id=\"fs\"")
+            && s.contains("id=\"stage\"")
+            && s.contains("function toggleWatchFullscreen")
+            && s.contains("requestFullscreen")
+            && s.contains("F11"),
+        "watch page must fullscreen the live stage (F11 / Full)"
     );
 }
 
@@ -744,6 +759,8 @@ const qp = window.streamaidUi.qualityPayload("speed");
 if (qp.type !== "quality" || qp.preset !== "speed") throw new Error("qualityPayload");
 if (typeof window.streamaidUi.watchRecordMime !== "function") throw new Error("watchRecordMime missing");
 if (typeof window.streamaidUi.watchRecordMime() !== "string") throw new Error("watchRecordMime");
+if (typeof window.streamaidUi.toggleWatchFullscreen !== "function") throw new Error("toggleWatchFullscreen missing");
+if (window.streamaidUi.isWatchFullscreen()) throw new Error("fullscreen must start off");
 const combo = window.streamaidUi.comboPayload("Tab", ["Meta"]);
 if (combo.action !== "key" || combo.key !== "Tab" || combo.modifiers[0] !== "Meta") throw new Error("comboPayload Cmd+Tab");
 const cad = window.streamaidUi.comboPayload("Delete", ["Control", "Alt"]);

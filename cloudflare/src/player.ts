@@ -25,6 +25,14 @@ export const PLAYER_HTML = `<!doctype html>
   #talk { display: none; }
   #talk.on { border-color: var(--accent); color: var(--accent); }
   #rec.on { border-color: #f88; color: #f88; }
+  #fs.on { border-color: var(--accent); color: var(--accent); }
+  #stage:fullscreen, #stage:-webkit-full-screen {
+    width: 100%; height: 100%; background: #000; display: flex; align-items: center; justify-content: center; padding: 0;
+  }
+  #stage:fullscreen video, #stage:fullscreen canvas,
+  #stage:-webkit-full-screen video, #stage:-webkit-full-screen canvas {
+    width: 100%; height: 100%; max-height: none; object-fit: contain; border-radius: 0;
+  }
   main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr); gap: 12px; padding: 12px; }
   @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
   video, canvas { width: 100%; max-height: 80vh; background: #000; display: block; border-radius: 8px; }
@@ -94,6 +102,7 @@ export const PLAYER_HTML = `<!doctype html>
   <button id="unmute" type="button">Unmute</button>
   <button id="talk" type="button">Talk</button>
   <button id="rec" type="button" title="Record this view to a local file">Record</button>
+  <button id="fs" type="button" title="Fullscreen this view (F11)">Full</button>
   <div id="displays"></div>
   <div id="display-map" style="display:none"></div>
 </header>
@@ -124,7 +133,7 @@ export const PLAYER_HTML = `<!doctype html>
   </form>
 </div>
 <main>
-  <section>
+  <section id="stage">
     <video id="v" autoplay muted playsinline webkit-playsinline></video>
     <canvas id="c"></canvas>
     <div id="err"></div>
@@ -394,6 +403,34 @@ export const PLAYER_HTML = `<!doctype html>
       else startWatchRecord();
     });
   })();
+  function isWatchFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+  function toggleWatchFullscreen() {
+    if (isWatchFullscreen()) {
+      var exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) exit.call(document);
+      return;
+    }
+    var el = document.getElementById("stage") || document.documentElement;
+    var req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (req) req.call(el);
+  }
+  function syncFsBtn() {
+    var btn = document.getElementById("fs");
+    if (!btn) return;
+    btn.textContent = isWatchFullscreen() ? "Exit" : "Full";
+    btn.classList.toggle("on", isWatchFullscreen());
+  }
+  (function bindFs() {
+    var btn = document.getElementById("fs");
+    if (btn && !btn.dataset.fsBound) {
+      btn.dataset.fsBound = "1";
+      btn.addEventListener("click", function () { toggleWatchFullscreen(); });
+    }
+    document.addEventListener("fullscreenchange", syncFsBtn);
+    document.addEventListener("webkitfullscreenchange", syncFsBtn);
+  })();
   function chatPayload(text) {
     var t = String(text || "").trim();
     return { type: "chat", text: t.length > 2000 ? t.slice(0, 2000) : t };
@@ -585,6 +622,11 @@ export const PLAYER_HTML = `<!doctype html>
     }, { passive: false });
   }
   function sendKeyEvent(ev, down) {
+    if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && ev.key === "F11") {
+      if (down) { ev.preventDefault(); toggleWatchFullscreen(); }
+      return;
+    }
+    if (isWatchFullscreen() && ev.key === "Escape") return;
     if (!controlOn) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
     var mods = eventMods(ev);

@@ -40,6 +40,29 @@ h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
 #quality-pill { margin-left: auto; }
 #talk.on { border-color: #7eb8ff; color: #7eb8ff; }
 #rec.on { border-color: #f88; color: #f88; }
+#stream-pane:fullscreen,
+#stream-pane:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+#stream-pane:fullscreen video,
+#stream-pane:fullscreen canvas,
+#stream-pane:fullscreen img,
+#stream-pane:-webkit-full-screen video,
+#stream-pane:-webkit-full-screen canvas,
+#stream-pane:-webkit-full-screen img {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+  border-radius: 0;
+}
+#fs.on { border-color: #7eb8ff; color: #7eb8ff; }
 #stream-quality {
   font-size: 13px;
   background: #222;

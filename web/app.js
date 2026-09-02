@@ -412,6 +412,43 @@ function bindRec(btn) {
   });
 }
 
+function isWatchFullscreen() {
+  const el = document.fullscreenElement || document.webkitFullscreenElement;
+  return !!el;
+}
+
+function fullscreenTarget() {
+  return $("stream-pane") || $("stage") || document.documentElement;
+}
+
+function syncFsBtn() {
+  const btn = $("fs");
+  if (!btn) return;
+  btn.textContent = isWatchFullscreen() ? "Exit" : "Full";
+  btn.classList.toggle("on", isWatchFullscreen());
+}
+
+function toggleWatchFullscreen() {
+  const doc = document;
+  if (isWatchFullscreen()) {
+    const exit = doc.exitFullscreen || doc.webkitExitFullscreen;
+    if (exit) exit.call(doc);
+    return;
+  }
+  const el = fullscreenTarget();
+  if (!el) return;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (req) req.call(el);
+}
+
+function bindFs(btn) {
+  if (!btn || btn.dataset.fsBound) return;
+  btn.dataset.fsBound = "1";
+  btn.addEventListener("click", function () { toggleWatchFullscreen(); });
+  document.addEventListener("fullscreenchange", syncFsBtn);
+  document.addEventListener("webkitfullscreenchange", syncFsBtn);
+}
+
 function comboPayload(key, modifiers) {
   return {
     type: "control",
@@ -1760,6 +1797,7 @@ function onReady() {
   bindStreamQuality($("stream-quality"));
   bindTalk($("talk"));
   bindRec($("rec"));
+  bindFs($("fs"));
   bindChatForm($("chat-form"));
   function bindFileDrop(el) {
     if (!el || el.dataset.fileBound) return;
@@ -1789,6 +1827,11 @@ function onReady() {
   function sendKeyEvent(ev, down) {
     if (isDrawerOpen()) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
+    if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && ev.key === "F11") {
+      if (down) { ev.preventDefault(); toggleWatchFullscreen(); }
+      return;
+    }
+    if (isWatchFullscreen() && ev.key === "Escape") return;
     if (!featureFlags().ctl) return;
     const mods = eventMods(ev);
     const accel = ev.metaKey || ev.ctrlKey || ev.altKey;
@@ -1930,6 +1973,8 @@ if (typeof window !== "undefined") {
     watchRecordMime: watchRecordMime,
     startWatchRecord: startWatchRecord,
     stopWatchRecord: stopWatchRecord,
+    isWatchFullscreen: isWatchFullscreen,
+    toggleWatchFullscreen: toggleWatchFullscreen,
     layoutDisplayMap: layoutDisplayMap,
     paintMapThumbs: paintMapThumbs,
     currentToken: currentToken,
