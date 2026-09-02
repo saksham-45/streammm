@@ -5,15 +5,20 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub const CLIP_MAX: usize = 512 * 1024;
-pub const CLIP_PNG_MAX: usize = 32 * 1024 * 1024;
+/// 5K / dual-display screenshots as PNG; never truncate, never a 2 GB RAM blob.
+pub const CLIP_PNG_MAX: usize = 128 * 1024 * 1024;
 pub const PNG_SIG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 pub fn is_png(data: &[u8]) -> bool {
     data.len() >= 8 && data.starts_with(PNG_SIG)
 }
 
+pub fn png_fits(len: usize) -> bool {
+    len > 0 && len <= CLIP_PNG_MAX
+}
+
 pub fn accept_png(png: Vec<u8>) -> Option<Vec<u8>> {
-    if is_png(&png) && png.len() <= CLIP_PNG_MAX {
+    if is_png(&png) && png_fits(png.len()) {
         Some(png)
     } else {
         None
@@ -804,8 +809,8 @@ impl Injector for NullInjector {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{
-        accept_png, flags_from_mods, is_png, mac_keycode, modifier_flag, Action, Injector,
-        MouseButton, CLIP_MAX, CLIP_PNG_MAX,
+        accept_png, flags_from_mods, is_png, mac_keycode, modifier_flag, png_fits, Action, Injector,
+        MouseButton, CLIP_MAX,
     };
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -1030,7 +1035,7 @@ mod macos {
     }
 
     pub fn clipboard_set_png_os(png: &[u8]) -> bool {
-        if !is_png(png) || png.len() > CLIP_PNG_MAX {
+        if !is_png(png) || !png_fits(png.len()) {
             return false;
         }
         let path = std::env::temp_dir().join(format!("streamaid-clip-in-{}.png", std::process::id()));
@@ -1550,13 +1555,21 @@ mod tests {
         inj.clipboard_set_png(&padded);
         assert_eq!(inj.clipboard_get_png().as_deref(), Some(padded.as_slice()));
 
-        let mut huge = TINY_PNG.to_vec();
-        huge.resize(CLIP_PNG_MAX + 1, 0);
-        match (Action::ClipboardPng { png: huge.clone() }).clamp_coords() {
-            Action::ClipboardPng { png } => assert!(png.is_empty(), "must not truncate a PNG"),
+        assert!(
+            CLIP_PNG_MAX >= 128 * 1024 * 1024,
+            "clipboard PNG must fit a 5K screenshot"
+        );
+        assert!(png_fits(CLIP_PNG_MAX));
+        assert!(!png_fits(CLIP_PNG_MAX + 1), "must not allocate-and-truncate");
+        assert!(!png_fits(0));
+        match (Action::ClipboardPng {
+            png: TINY_PNG.to_vec(),
+        })
+        .clamp_coords()
+        {
+            Action::ClipboardPng { png } => assert_eq!(png, TINY_PNG),
             other => panic!("{other:?}"),
         }
-        assert!(accept_png(huge).is_none());
     }
 
     #[test]

@@ -193,7 +193,7 @@ export const PLAYER_HTML = `<!doctype html>
       applyClipboardPngBlob(new Blob([u8], { type: "image/png" }));
     } catch (e) {}
   }
-  var CLIP_PNG_MAX = 32 * 1024 * 1024;
+  var CLIP_PNG_MAX = 128 * 1024 * 1024;
   var CLIP_PNG_CHUNK = 24 * 1024;
   var incomingPng = null;
   function sendClipboardPng(u8) {
@@ -219,12 +219,26 @@ export const PLAYER_HTML = `<!doctype html>
   }
   function handleClipboardMsg(msg) {
     if (msg.mime === "image/png") {
-      if (msg.action === "begin") { incomingPng = []; return; }
-      if (msg.action === "chunk" && incomingPng) { incomingPng.push(b64ToBytes(msg.data)); return; }
+      if (msg.action === "begin") {
+        var size = Number(msg.size) || 0;
+        incomingPng = (size > 0 && size <= CLIP_PNG_MAX) ? { size: size, parts: [], got: 0 } : null;
+        return;
+      }
+      if (msg.action === "chunk" && incomingPng) {
+        var u8 = b64ToBytes(msg.data);
+        if (!u8 || incomingPng.got + u8.length > incomingPng.size || incomingPng.got + u8.length > CLIP_PNG_MAX) {
+          incomingPng = null;
+          return;
+        }
+        incomingPng.parts.push(u8);
+        incomingPng.got += u8.length;
+        return;
+      }
       if (msg.action === "end" && incomingPng) {
-        var parts = incomingPng;
+        var done = incomingPng;
         incomingPng = null;
-        applyClipboardPngBlob(new Blob(parts, { type: "image/png" }));
+        if (done.got !== done.size) return;
+        applyClipboardPngBlob(new Blob(done.parts, { type: "image/png" }));
         return;
       }
       if (msg.data) applyClipboardPng(msg.data);
@@ -233,7 +247,7 @@ export const PLAYER_HTML = `<!doctype html>
     if (typeof msg.text === "string") applyClipboardText(msg.text);
   }
   function pasteImageFile(file) {
-    if (!file) return;
+    if (!file || file.size > CLIP_PNG_MAX) return;
     function fromBuf(buf) { sendClipboardPng(new Uint8Array(buf)); }
     if (file.type === "image/png") {
       file.arrayBuffer().then(fromBuf).catch(function () {});

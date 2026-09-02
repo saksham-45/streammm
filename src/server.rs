@@ -335,7 +335,7 @@ impl App {
         match phase {
             "begin" => {
                 let size = v.get("size").and_then(|n| n.as_u64()).unwrap_or(0) as usize;
-                if size == 0 || size > input::CLIP_PNG_MAX {
+                if !input::png_fits(size) {
                     *self.incoming_png.lock() = None;
                 } else {
                     *self.incoming_png.lock() = Some((size, Vec::with_capacity(size.min(1024 * 1024))));
@@ -349,7 +349,7 @@ impl App {
                 match (bytes, g.as_mut()) {
                     (Some(b), Some((size, buf))) => {
                         if buf.len().saturating_add(b.len()) > *size
-                            || buf.len().saturating_add(b.len()) > input::CLIP_PNG_MAX
+                            || !input::png_fits(buf.len().saturating_add(b.len()))
                         {
                             *g = None;
                         } else {
@@ -404,7 +404,7 @@ impl App {
     }
 
     fn push_clipboard_png(&self, png: &[u8]) -> bool {
-        if !input::is_png(png) || png.len() > input::CLIP_PNG_MAX {
+        if !input::is_png(png) || !input::png_fits(png.len()) {
             return false;
         }
         let key = format!("png:{}", hex_encode(&Sha256::digest(png)));
@@ -2249,6 +2249,51 @@ mod tests {
             r#"{"type":"control","action":"clipboard","mime":"image/png","phase":"end"}"#,
         );
         assert_eq!(fake.clipboard_get_png().as_deref(), Some(TINY_PNG));
+    }
+
+    #[tokio::test]
+    async fn ingest_rejects_clipboard_png_over_cap() {
+        use crate::computer_use::DoneModel;
+        use crate::files::encode_b64;
+        use crate::input::{FakeInjector, CLIP_PNG_MAX};
+        use crate::otp::FakeClock;
+
+        const TINY_PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x05, 0xFE,
+            0xD4, 0xEF, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        let b64 = encode_b64(TINY_PNG);
+        app.handle_inbound_json(&format!(
+            r#"{{"type":"control","action":"clipboard","mime":"image/png","phase":"begin","size":{}}}"#,
+            CLIP_PNG_MAX + 1
+        ));
+        app.handle_inbound_json(&format!(
+            r#"{{"type":"control","action":"clipboard","mime":"image/png","phase":"chunk","data":"{b64}"}}"#
+        ));
+        app.handle_inbound_json(
+            r#"{"type":"control","action":"clipboard","mime":"image/png","phase":"end"}"#,
+        );
+        assert!(
+            fake.clipboard_get_png().is_none(),
+            "oversize begin must drop the PNG instead of truncating it"
+        );
     }
 
     #[tokio::test]
