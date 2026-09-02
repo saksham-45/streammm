@@ -21,6 +21,7 @@ export const PLAYER_HTML = `<!doctype html>
   #display-map .mon.on { border-color: var(--accent); color: var(--accent); }
   h1 { font-size: 15px; margin: 0; letter-spacing: 0.14em; font-weight: 650; text-transform: uppercase; }
   #pill { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); }
+  #unmute { display: none; }
   main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr); gap: 12px; padding: 12px; }
   @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
   video, canvas { width: 100%; max-height: 80vh; background: #000; display: block; border-radius: 8px; }
@@ -71,6 +72,7 @@ export const PLAYER_HTML = `<!doctype html>
 <header>
   <h1>streamaid</h1>
   <div id="pill">enter PIN</div>
+  <button id="unmute" type="button">Unmute</button>
   <div id="displays"></div>
   <div id="display-map" style="display:none"></div>
 </header>
@@ -122,6 +124,7 @@ export const PLAYER_HTML = `<!doctype html>
   var LIVE = 0.45, CAP = 24;
   var session = "";
   var controlOn = false;
+  var audioOn = false;
   var aiOn = false;
   var pill = document.getElementById("pill");
   var err = document.getElementById("err");
@@ -133,6 +136,15 @@ export const PLAYER_HTML = `<!doctype html>
   video.playsInline = true;
   video.muted = true;
   video.disableRemotePlayback = true;
+  var unmuteBtn = document.getElementById("unmute");
+  if (unmuteBtn) {
+    unmuteBtn.addEventListener("click", function () {
+      video.muted = false;
+      video.volume = 1;
+      video.play().catch(function () { showTap(); });
+      unmuteBtn.textContent = "Mute";
+    });
+  }
 
   function mediaSourceCtor() {
     return window.ManagedMediaSource || window.MediaSource || window.WebKitMediaSource || null;
@@ -661,12 +673,21 @@ export const PLAYER_HTML = `<!doctype html>
   function applyFlags(ctl) {
     controlOn = !!(ctl && (ctl.enabled || ctl.control));
     aiOn = !!(ctl && (ctl.ai_enabled || ctl.ai));
+    var nextAudio = !!(ctl && ctl.audio);
     var cu = document.getElementById("cu-section");
     if (cu) cu.style.display = aiOn ? "block" : "none";
     var files = document.getElementById("files-section");
     if (files) files.style.display = controlOn ? "block" : "none";
+    var un = document.getElementById("unmute");
+    if (un) un.style.display = nextAudio ? "inline-block" : "none";
     if (controlOn) sendFileJson({ type: "file", action: "list" });
     renderDisplays(ctl && ctl.displays, ctl && (ctl.display || ctl.input));
+    if (nextAudio !== audioOn) {
+      audioOn = nextAudio;
+      if (ms) startMse();
+    } else {
+      audioOn = nextAudio;
+    }
   }
   function layoutDisplayMap(devices, boxW, boxH) {
     var list = devices || [];
@@ -812,6 +833,7 @@ export const PLAYER_HTML = `<!doctype html>
         applyFlags({
           enabled: !!msg.control,
           ai_enabled: !!msg.ai,
+          audio: !!msg.audio,
           display: msg.display,
           displays: msg.displays,
         });
@@ -894,13 +916,21 @@ export const PLAYER_HTML = `<!doctype html>
     video.src = URL.createObjectURL(ms);
     video.play().catch(function () { showTap(); });
     function onOpen() {
-      var types = [
-        'video/mp4; codecs="avc1.64001F"',
-        'video/mp4; codecs="avc1.640028"',
-        'video/mp4; codecs="avc1.4D401F"',
-        'video/mp4; codecs="avc1.42E01E"',
-        "video/mp4"
-      ];
+      var types = audioOn
+        ? [
+            'video/mp4; codecs="avc1.64001F,mp4a.40.2"',
+            'video/mp4; codecs="avc1.640028,mp4a.40.2"',
+            'video/mp4; codecs="avc1.64001F"',
+            'video/mp4; codecs="avc1.640028"',
+            "video/mp4"
+          ]
+        : [
+            'video/mp4; codecs="avc1.64001F"',
+            'video/mp4; codecs="avc1.640028"',
+            'video/mp4; codecs="avc1.4D401F"',
+            'video/mp4; codecs="avc1.42E01E"',
+            "video/mp4"
+          ];
       var type = types.find(function (t) { return isTypeSupported(MS, t); }) || (isTypeSupported(MS, "video/mp4") ? "video/mp4" : null);
       if (!type) {
         err.textContent = "H.264 not playable here. Try Safari 17.1+ or Chrome on Android.";

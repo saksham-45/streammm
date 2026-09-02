@@ -226,15 +226,16 @@ impl App {
             self.publisher
                 .push_wire(json!({"type": "otp", "hash": hash, "exp": exp}).to_string());
         }
-        let c = self.cfg.lock().control.clone();
-        let input = self.cfg.lock().capture.input.clone();
+        let cfg = self.cfg.lock().clone();
+        let audio = crate::encoder::capture_wants_audio(&cfg, crate::encoder::sysname());
         let devices = self.displays.lock().clone();
         self.publisher.push_wire(
             json!({
                 "type": "flags",
-                "control": c.enabled,
-                "ai": c.ai_enabled,
-                "display": input,
+                "control": cfg.control.enabled,
+                "ai": cfg.control.ai_enabled,
+                "audio": audio,
+                "display": cfg.capture.input,
                 "displays": devices
             })
             .to_string(),
@@ -689,6 +690,7 @@ impl App {
                 "displays": self.displays.lock().clone(),
                 "width": width,
                 "height": height,
+                "audio": crate::encoder::capture_wants_audio(&cfg, crate::encoder::sysname()),
                 "fps_target": cfg.capture.fps,
                 "fps_actual": self.hub.fps() * cap.frames_per_fragment as f64,
                 "running": cap.running,

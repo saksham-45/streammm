@@ -14,6 +14,7 @@
   <select id="display-pill" class="hidden" title="Switch captured display"></select>
   <div id="display-map" class="hidden" title="Click a screen to capture it"></div>
   <div id="status-pill" title="">—</div>
+  <button id="unmute" type="button" class="hidden">Unmute</button>
   <button id="gear" type="button">Settings</button>
 </header>
 <div id="analysis-banner" class="hidden">ANALYSIS ACTIVE</div>
@@ -75,6 +76,8 @@
   </label>
   <select id="device-select" class="hidden"></select>
   <label>FPS <input id="cfg-fps" type="number" min="1" max="60"></label>
+  <label><input id="cfg-audio" type="checkbox"> Capture microphone audio</label>
+  <p id="audio-hint" class="cfg-hint hidden">Adds AAC from the default mic to the live H.264/HEVC stream (not MJPEG). Watchers see Unmute — browsers start muted for autoplay. macOS: allow Microphone for Streamaid. Save restarts capture.</p>
   <label>Scale
     <select id="cfg-scale">
       <option value="0.25">0.25</option>

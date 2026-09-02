@@ -2,7 +2,7 @@
 
 Low-latency **native-res 30 fps screen streaming** (capped at 4K, never upscaled): capture on your machine, play in any browser, fan out through **Cloudflare Workers + Durable Objects**.
 
-The origin is a **Rust** binary (`cargo run`). It encodes with ffmpeg (VideoToolbox on macOS, libx264 elsewhere) and delivers **WebSocket** fMP4 — not HTTP progressive download. That is the difference between localhost looking fine and Cloudflare looking like a stalled VOD.
+The origin is a **Rust** binary (`cargo run`). It encodes with ffmpeg (VideoToolbox on macOS, libx264 elsewhere) and delivers **WebSocket** fMP4 — not HTTP progressive download. That is the difference between localhost looking fine and Cloudflare looking like a stalled VOD. Optional **microphone AAC** muxes into the same fragments when enabled in Settings.
 
 ## Why WebSocket (not `/stream.mp4` through a tunnel)
 
@@ -40,6 +40,7 @@ Killing the process is not enough — `KeepAlive` will restart it. Logs: `logs/o
 | Size | cap **3840×4320**, **never upscale**, lanczos only if the display is larger |
 | Displays | Settings picker + clickable **all-monitors map**: live thumbnail of the captured screen (animation-frame paint), and ~15 fps JPEG previews of the others from a persistent ffmpeg per inactive display; `Capture screen N` maps to `CGGetActiveDisplayList()[N]` so clicks hit the captured screen |
 | fps | 30 |
+| Audio | Off by default. Settings **Capture microphone audio** muxes AAC from the default mic into the live fMP4 (H.264/HEVC, macOS). Watchers get an **Unmute** control (autoplay starts muted). |
 
 ## Global watch link (OTP PIN)
 

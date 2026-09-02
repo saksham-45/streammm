@@ -26,6 +26,9 @@ pub struct CaptureConfig {
     pub scale: f64,
     #[serde(default = "default_jpeg")]
     pub jpeg_quality: u32,
+    /// macOS avfoundation microphone into the live fMP4 (H.264/HEVC only).
+    #[serde(default)]
+    pub audio: bool,
 }
 
 fn default_driver() -> String {
@@ -49,6 +52,7 @@ impl Default for CaptureConfig {
             fps: default_fps(),
             scale: default_scale(),
             jpeg_quality: default_jpeg(),
+            audio: false,
         }
     }
 }
@@ -316,6 +320,7 @@ mod tests {
         assert_eq!(cfg.capture.fps, 30);
         assert_eq!(cfg.capture.scale, 1.0);
         assert_eq!(cfg.capture.jpeg_quality, 95);
+        assert!(!cfg.capture.audio, "mic audio is off until the host enables it");
         assert_eq!(cfg.encoder.mode, "ffmpeg");
         assert_eq!(cfg.encoder.bitrate_kbps, 20000);
         assert_eq!(cfg.encoder.gop_frames, 15);

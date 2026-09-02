@@ -135,7 +135,7 @@ export class StreamRoom extends DurableObject<Env> {
   private sessions = new Map<string, number>();
   private fails = 0;
   private lockUntil = 0;
-  private flags = { control: false, ai: false };
+  private flags = { control: false, ai: false, audio: false };
   private flagsHydrated = false;
   private controller: string | null = null;
   private display = "";
@@ -206,6 +206,7 @@ export class StreamRoom extends DurableObject<Env> {
           type: "flags",
           control: this.flags.control,
           ai: this.flags.ai,
+          audio: this.flags.audio,
           display: this.display,
           displays: this.displays,
         }));
@@ -270,6 +271,7 @@ export class StreamRoom extends DurableObject<Env> {
       if (v.type === "flags") {
         this.flags.control = !!v.control;
         this.flags.ai = !!v.ai;
+        this.flags.audio = !!v.audio;
         this.flagsHydrated = true;
         const rec = v as { display?: string; displays?: unknown[] };
         if (typeof rec.display === "string") this.display = rec.display;
@@ -279,6 +281,7 @@ export class StreamRoom extends DurableObject<Env> {
           type: "flags",
           control: this.flags.control,
           ai: this.flags.ai,
+          audio: this.flags.audio,
           display: this.display,
           displays: this.displays,
         }));
@@ -419,8 +422,8 @@ export class StreamRoom extends DurableObject<Env> {
       }
     }
     if (!this.flagsHydrated) {
-      const flags = await this.ctx.storage.get<{ control: boolean; ai: boolean }>("flags");
-      if (flags) this.flags = { control: !!flags.control, ai: !!flags.ai };
+      const flags = await this.ctx.storage.get<{ control: boolean; ai: boolean; audio?: boolean }>("flags");
+      if (flags) this.flags = { control: !!flags.control, ai: !!flags.ai, audio: !!flags.audio };
       this.flagsHydrated = true;
     }
   }
@@ -532,6 +535,7 @@ export class StreamRoom extends DurableObject<Env> {
           control: {
             enabled: this.flags.control,
             ai_enabled: this.flags.ai,
+            audio: this.flags.audio,
             display: this.display,
             displays: this.displays,
           },

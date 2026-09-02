@@ -31,7 +31,26 @@ pub fn capture_filter(cfg: &Config, fps: u32, sysname: &str) -> String {
     }
 }
 
-fn input_part(sysname: &str, input_id: &str, fps: u32) -> Vec<String> {
+/// `2:` / `2` → `2:0` so avfoundation opens the default mic with the screen.
+pub fn avfoundation_spec(input_id: &str, audio: bool) -> String {
+    let id = input_id.trim();
+    if !audio {
+        return id.to_string();
+    }
+    match id.split_once(':') {
+        Some((v, a)) if a.trim().is_empty() => format!("{v}:0"),
+        Some((_, a)) if !a.trim().is_empty() => id.to_string(),
+        None if id.is_empty() => "0:0".into(),
+        None => format!("{id}:0"),
+        _ => id.to_string(),
+    }
+}
+
+pub fn capture_wants_audio(cfg: &Config, sysname: &str) -> bool {
+    cfg.capture.audio && cfg.encoder.mode != "mjpeg" && sysname == "Darwin"
+}
+
+fn input_part(sysname: &str, input_id: &str, fps: u32, audio: bool) -> Vec<String> {
     match sysname {
         "Darwin" => vec![
             "-f".into(),
@@ -39,7 +58,7 @@ fn input_part(sysname: &str, input_id: &str, fps: u32) -> Vec<String> {
             "-framerate".into(),
             fps.to_string(),
             "-i".into(),
-            input_id.into(),
+            avfoundation_spec(input_id, audio),
         ],
         "Windows" => vec![
             "-f".into(),
@@ -83,8 +102,11 @@ pub fn build_ffmpeg_argv(
             "info".into()
         },
     ];
-    argv.extend(input_part(sysname, input_id, fps));
-    argv.push("-an".into());
+    let audio = capture_wants_audio(cfg, sysname);
+    argv.extend(input_part(sysname, input_id, fps, audio));
+    if !audio {
+        argv.push("-an".into());
+    }
     argv.push("-vf".into());
     argv.push(capture_filter(cfg, fps, sysname));
 
@@ -176,6 +198,20 @@ pub fn build_ffmpeg_argv(
         "0".into(),
         "-pix_fmt".into(),
         "yuv420p".into(),
+    ]);
+    if audio {
+        argv.extend([
+            "-c:a".into(),
+            "aac".into(),
+            "-b:a".into(),
+            "128k".into(),
+            "-ac".into(),
+            "2".into(),
+            "-ar".into(),
+            "48000".into(),
+        ]);
+    }
+    argv.extend([
         "-f".into(),
         "mp4".into(),
         "-movflags".into(),
@@ -303,6 +339,33 @@ mod tests {
         assert_eq!(flag_after(&argv, "-g"), Some("15"));
         assert_eq!(flag_after(&argv, "-bf"), Some("0"));
         assert_eq!(flag_after(&argv, "-realtime"), Some("1"));
+    }
+
+    #[test]
+    fn avfoundation_spec_adds_default_mic() {
+        assert_eq!(avfoundation_spec("2:", false), "2:");
+        assert_eq!(avfoundation_spec("2:", true), "2:0");
+        assert_eq!(avfoundation_spec("2", true), "2:0");
+        assert_eq!(avfoundation_spec("2:1", true), "2:1");
+    }
+
+    #[test]
+    fn darwin_audio_uses_aac_not_silent() {
+        let mut c = cfg();
+        c.capture.audio = true;
+        let argv = build_ffmpeg_argv(&c, "3:", "Darwin", true);
+        let joined = argv.join(" ");
+        assert!(joined.contains("-i 3:0"), "{joined}");
+        assert!(!joined.split_whitespace().any(|a| a == "-an"), "{joined}");
+        assert_eq!(flag_after(&argv, "-c:a"), Some("aac"));
+        assert_eq!(flag_after(&argv, "-b:a"), Some("128k"));
+        let mjpeg = {
+            let mut m = c.clone();
+            m.encoder.mode = "mjpeg".into();
+            build_ffmpeg_argv(&m, "3:", "Darwin", true).join(" ")
+        };
+        assert!(mjpeg.contains("-an"), "{mjpeg}");
+        assert!(!capture_wants_audio(&c, "Linux"));
     }
 
     #[test]

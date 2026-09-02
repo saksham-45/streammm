@@ -122,6 +122,14 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "LLM and AI controls must exist so enabling a setting can reveal them"
     );
     assert!(
+        html.contains("id=\"cfg-audio\"") && html.contains("id=\"audio-hint\"") && html.contains("id=\"unmute\""),
+        "mic audio must be a Settings checkbox that can reveal Unmute"
+    );
+    assert!(
+        js.contains("mp4a.40.2") && js.contains("cfg-audio"),
+        "host player must request an AAC SourceBuffer when mic audio is on"
+    );
+    assert!(
         html.contains("id=\"files-section\"") && html.contains("id=\"file-drop\""),
         "enabling remote control must have a files drop target to reveal"
     );
@@ -230,6 +238,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("file-offer") && s.contains("msg.offer") && s.contains("showFileOffer"),
         "watch page must reveal a Save control when the host offers a Finder file"
+    );
+    assert!(
+        s.contains("id=\"unmute\"") && s.contains("mp4a.40.2") && s.contains("ctl.audio"),
+        "watch page must reveal Unmute and use AAC codecs when the host enables mic audio"
     );
     assert!(
         s.contains("action: \"begin\"") && s.contains("action: \"chunk\""),
@@ -506,6 +518,9 @@ const nodes = {{
   "jpeg-fields": el(true),
   "bitrate-fields": el(false),
   "gop-fields": el(false),
+  "cfg-audio": el(false),
+  "audio-hint": el(true),
+  "unmute": el(true),
   "cfg-mode": {{ classList: tokenList(false), hidden: false, checked: false, value: "ffmpeg" }}
 }};
 globalThis.window = globalThis;
@@ -548,8 +563,15 @@ if (nodes["files-section"].classList.contains("hidden")) throw new Error("files 
 if (nodes["analysis-pane"].classList.contains("hidden")) throw new Error("side pane still hidden after control enable");
 if (!nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality visible in H.264 mode");
 if (nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate hidden in H.264 mode");
+if (!nodes["audio-hint"].classList.contains("hidden")) throw new Error("audio hint visible while mic off");
+if (!nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute visible while mic off");
+nodes["cfg-audio"].checked = true;
+window.streamaidUi.syncFeatureUi();
+if (nodes["audio-hint"].classList.contains("hidden")) throw new Error("audio hint still hidden after mic enable");
+if (nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute still hidden after mic enable");
 nodes["cfg-mode"].value = "mjpeg";
-window.streamaidUi.syncEncoderUi();
+window.streamaidUi.syncFeatureUi();
+if (!nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute still visible in MJPEG mode");
 if (nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality still hidden after MJPEG enable");
 if (!nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate still visible in MJPEG mode");
 if (!nodes["gop-fields"].classList.contains("hidden")) throw new Error("GOP still visible in MJPEG mode");

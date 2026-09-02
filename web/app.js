@@ -69,10 +69,15 @@ function featureFlags() {
   const llmEl = $("cfg-llm-enabled");
   const aiEl = $("cfg-ai-enabled");
   const ctlEl = $("cfg-control-enabled");
+  const audioEl = $("cfg-audio");
+  const modeEl = $("cfg-mode");
+  const mode = (modeEl && modeEl.value) || (cfg && cfg.encoder && cfg.encoder.mode) || "ffmpeg";
   return {
     llm: llmEl ? !!llmEl.checked : !!(cfg && cfg.llm && cfg.llm.enabled),
     ai: aiEl ? !!aiEl.checked : !!(cfg && cfg.control && cfg.control.ai_enabled),
     ctl: ctlEl ? !!ctlEl.checked : !!(cfg && cfg.control && cfg.control.enabled),
+    audio: audioEl ? !!audioEl.checked : !!(cfg && cfg.capture && cfg.capture.audio),
+    mjpeg: mode === "mjpeg",
   };
 }
 
@@ -96,6 +101,8 @@ function syncFeatureUi() {
   setHidden($("analysis-section"), !f.llm);
   setHidden($("analysis-banner"), !f.llm);
   setHidden($("analysis-pane"), !(f.llm || f.ai || f.ctl));
+  setHidden($("audio-hint"), !f.audio);
+  setHidden($("unmute"), !(f.audio && !f.mjpeg));
   syncEncoderUi();
   if (f.ctl) refreshFiles();
 }
@@ -780,15 +787,26 @@ function mediaSourceCtor() {
 function onSourceOpen() {
   const MS = mediaSourceCtor();
   const hevc = mode === "hevc";
+  const audio = featureFlags().audio && !featureFlags().mjpeg;
   const candidates = hevc
-    ? ['video/mp4; codecs="hvc1.1.6.L93.B0"', 'video/mp4; codecs="hev1.1.6.L93.B0"', "video/mp4"]
-    : [
-        'video/mp4; codecs="avc1.64001F"',
-        'video/mp4; codecs="avc1.640028"',
-        'video/mp4; codecs="avc1.4D401F"',
-        'video/mp4; codecs="avc1.42E01E"',
-        "video/mp4",
-      ];
+    ? (audio
+        ? ['video/mp4; codecs="hvc1.1.6.L93.B0,mp4a.40.2"', 'video/mp4; codecs="hev1.1.6.L93.B0,mp4a.40.2"', 'video/mp4; codecs="hvc1.1.6.L93.B0"', "video/mp4"]
+        : ['video/mp4; codecs="hvc1.1.6.L93.B0"', 'video/mp4; codecs="hev1.1.6.L93.B0"', "video/mp4"])
+    : (audio
+        ? [
+            'video/mp4; codecs="avc1.64001F,mp4a.40.2"',
+            'video/mp4; codecs="avc1.640028,mp4a.40.2"',
+            'video/mp4; codecs="avc1.64001F"',
+            'video/mp4; codecs="avc1.640028"',
+            "video/mp4",
+          ]
+        : [
+            'video/mp4; codecs="avc1.64001F"',
+            'video/mp4; codecs="avc1.640028"',
+            'video/mp4; codecs="avc1.4D401F"',
+            'video/mp4; codecs="avc1.42E01E"',
+            "video/mp4",
+          ]);
   const type = candidates.find(function (t) {
     try { return !!(MS && MS.isTypeSupported && MS.isTypeSupported(t)); } catch (e) { return false; }
   });
@@ -1102,6 +1120,8 @@ function fillConfigForm(c) {
   if (ai) ai.checked = !!(c.control && c.control.ai_enabled);
   const en = $("cfg-llm-enabled");
   if (en) en.checked = !!(c.llm && c.llm.enabled);
+  const aud = $("cfg-audio");
+  if (aud) aud.checked = !!(c.capture && c.capture.audio);
   set("cfg-base-url", c.llm && c.llm.base_url || "");
   set("cfg-api-key", c.llm && c.llm.api_key || "");
   set("cfg-model", c.llm && c.llm.model || "");
@@ -1129,6 +1149,7 @@ function readConfigForm() {
       fps: parseInt(val("cfg-fps"), 10) || 30,
       scale: parseFloat(val("cfg-scale")) || 1.0,
       jpeg_quality: parseInt(val("cfg-jpeg"), 10) || 95,
+      audio: !!( $("cfg-audio") && $("cfg-audio").checked ),
     },
     encoder: {
       mode: val("cfg-mode") || "ffmpeg",
@@ -1295,13 +1316,24 @@ function onReady() {
       if (jv) jv.textContent = jpeg.value;
     });
   }
-  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled"].forEach(function (id) {
+  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio"].forEach(function (id) {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", function () { syncFeatureUi(); });
   });
   const modeEl = $("cfg-mode");
-  if (modeEl) modeEl.addEventListener("change", function () { syncEncoderUi(); });
+  if (modeEl) modeEl.addEventListener("change", function () { syncFeatureUi(); });
+  const unmute = $("unmute");
+  if (unmute) {
+    unmute.addEventListener("click", function () {
+      const video = $("stream-video");
+      if (!video) return;
+      video.muted = false;
+      video.volume = 1;
+      video.play().catch(function () {});
+      unmute.textContent = "Mute";
+    });
+  }
   const save = $("save");
   if (save) {
     save.addEventListener("click", async function () {
@@ -1320,7 +1352,7 @@ function onReady() {
         if (rn) rn.classList.toggle("hidden", !r.restart_required);
         if (form.token) setCookie("streamaid_token", form.token);
         if (r.applied) closeDrawer();
-        if (r.applied && form.encoder.mode !== mode) {
+        if (r.applied && (form.encoder.mode !== mode || !!(form.capture && form.capture.audio) !== !!(cfg && cfg.capture && cfg.capture.audio))) {
           setTimeout(function () { location.reload(); }, 400);
           return;
         }
