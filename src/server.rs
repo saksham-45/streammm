@@ -1241,7 +1241,7 @@ impl App {
                 "password_set": cfg.access.password_hash.len() == 64,
             },
             "permissions": {
-                "screen": crate::perm::screen_ok(),
+                "screen": crate::perm::screen_ok() || cap.width > 0,
                 "accessibility": crate::perm::accessibility_ok(),
                 "input": crate::perm::input_ok(),
             },

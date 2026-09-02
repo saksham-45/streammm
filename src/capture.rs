@@ -18,13 +18,20 @@ pub fn capture_backoff(prev: Duration) -> Duration {
     prev.saturating_mul(2).clamp(Duration::from_secs(1), Duration::from_secs(8))
 }
 
+/// Cold start with no frames (TCC denial): do not respawn ffmpeg every few
+/// seconds — each spawn re-prompts Screen Recording.
+pub fn cold_capture_backoff(prev: Duration) -> Duration {
+    prev.saturating_mul(2)
+        .clamp(Duration::from_secs(8), Duration::from_secs(120))
+}
+
 /// After a capture that already produced frames (app switch / brief stall),
 /// restart immediately. Cold failures still back off.
 pub fn next_capture_backoff(prev: Duration, had_media: bool) -> Duration {
     if had_media {
         Duration::from_secs(1)
     } else {
-        capture_backoff(prev)
+        cold_capture_backoff(prev)
     }
 }
 
@@ -461,8 +468,13 @@ mod tests {
     fn restart_backoff_resets_after_successful_capture() {
         let after_stall = next_capture_backoff(Duration::from_secs(8), true);
         assert_eq!(after_stall, Duration::from_secs(1));
-        let cold = next_capture_backoff(Duration::from_secs(2), false);
-        assert_eq!(cold, Duration::from_secs(4));
+        let cold = next_capture_backoff(Duration::from_secs(8), false);
+        assert_eq!(cold, Duration::from_secs(16));
+        let mut d = Duration::from_secs(8);
+        for _ in 0..10 {
+            d = next_capture_backoff(d, false);
+        }
+        assert_eq!(d, Duration::from_secs(120));
     }
 
     #[test]

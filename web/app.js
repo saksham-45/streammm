@@ -265,10 +265,12 @@ function syncPermissionUi(p) {
   const screenOk = p.screen !== false;
   const axOk = p.accessibility !== false;
   const inputOk = p.input !== false;
+  const needScreen = !screenOk;
+  const needAx = !axOk && !!featureFlags().ctl;
   const needInput = !inputOk && !!featureFlags().block;
-  setHidden($("perm-banner"), screenOk && axOk && !needInput);
-  setHidden($("perm-screen"), screenOk);
-  setHidden($("perm-ax"), axOk);
+  setHidden($("perm-banner"), !needScreen && !needAx && !needInput);
+  setHidden($("perm-screen"), !needScreen);
+  setHidden($("perm-ax"), !needAx);
   setHidden($("perm-input"), !needInput);
   const lab = $("perm-banner-label");
   if (!lab) return;

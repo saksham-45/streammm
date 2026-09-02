@@ -1090,8 +1090,13 @@ window.streamaidUi.syncPermissionUi({{screen: false, accessibility: true, input:
 if (nodes["perm-banner"].classList.contains("hidden")) throw new Error("perm banner hidden when screen denied");
 if (nodes["perm-screen"].classList.contains("hidden")) throw new Error("Screen Recording button hidden when denied");
 if (!nodes["perm-ax"].classList.contains("hidden")) throw new Error("Accessibility button visible when granted");
+nodes["cfg-control-enabled"].checked = false;
 window.streamaidUi.syncPermissionUi({{screen: true, accessibility: false, input: true}});
-if (nodes["perm-ax"].classList.contains("hidden")) throw new Error("Accessibility button hidden when denied");
+if (!nodes["perm-ax"].classList.contains("hidden")) throw new Error("Accessibility nag without remote control");
+if (!nodes["perm-banner"].classList.contains("hidden")) throw new Error("perm banner visible for unused Accessibility");
+nodes["cfg-control-enabled"].checked = true;
+window.streamaidUi.syncPermissionUi({{screen: true, accessibility: false, input: true}});
+if (nodes["perm-ax"].classList.contains("hidden")) throw new Error("Accessibility button hidden when remote control needs it");
 nodes["cfg-block-local"].checked = false;
 window.streamaidUi.syncPermissionUi({{screen: true, accessibility: true, input: false}});
 if (!nodes["perm-input"].classList.contains("hidden")) throw new Error("Input Monitoring visible without block-local");
