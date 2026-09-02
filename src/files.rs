@@ -358,6 +358,24 @@ impl Inbox {
         }
     }
 
+    pub fn mkdir_at(&self, root: &str, rel: &str, name: &str) -> Result<FileEntry, String> {
+        let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
+        self.ensure_root(root)?;
+        let path = self.join_under(root, rel, &name)?;
+        if path.exists() {
+            return Err("already exists".into());
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::create_dir(&path).map_err(|e| e.to_string())?;
+        Ok(FileEntry {
+            name,
+            size: 0,
+            dir: true,
+        })
+    }
+
     pub fn remove(&self, name: &str) -> Result<FileEntry, String> {
         self.remove_at("inbox", "", name)
     }
@@ -616,6 +634,24 @@ impl Inbox {
                 let mut out = Vec::new();
                 match self.emit_blob_at(root, rel, name, |m| out.push(m)) {
                     Ok(()) => out,
+                    Err(e) => vec![err_json(&e)],
+                }
+            }
+            "mkdir" => {
+                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                match self.mkdir_at(root, rel, name) {
+                    Ok(ent) => vec![
+                        json!({
+                            "type": "file",
+                            "action": "mkdir",
+                            "name": ent.name,
+                            "dir": true,
+                            "root": normalize_root(root).unwrap_or("inbox"),
+                            "path": sanitize_rel(rel).unwrap_or_default()
+                        })
+                        .to_string(),
+                        self.list_at_json(root, rel),
+                    ],
                     Err(e) => vec![err_json(&e)],
                 }
             }
@@ -884,6 +920,19 @@ mod tests {
         }));
         assert!(put[0].contains("\"root\":\"desktop\""));
         assert!(put[0].contains("via.json"));
+        let dir = inbox.mkdir_at("desktop", "Work", "Sub").unwrap();
+        assert!(dir.dir);
+        assert!(desk.join("Work").join("Sub").is_dir());
+        assert!(inbox.mkdir_at("desktop", "Work", "Sub").is_err());
+        assert!(inbox.mkdir_at("desktop", "Work", "../nope").is_err());
+        let mk = inbox.handle_message(&json!({
+            "action": "mkdir",
+            "root": "home",
+            "path": "",
+            "name": "NewFolder"
+        }));
+        assert!(mk.iter().any(|m| m.contains("\"mkdir\"") && m.contains("NewFolder")));
+        assert!(home.path().join("NewFolder").is_dir());
     }
 
     #[test]

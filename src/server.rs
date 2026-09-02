@@ -978,6 +978,7 @@ impl App {
             .route("/api/computer-use", post(api_computer_use))
             .route("/api/computer-use/cancel", post(api_computer_use_cancel))
             .route("/api/control/release", post(api_control_release))
+            .route("/api/files/mkdir", post(api_files_mkdir))
             .route(
                 "/api/files",
                 get(api_files_list).post(api_files_put).delete(api_files_delete),
@@ -1697,6 +1698,41 @@ async fn api_files_put(State(app): State<Arc<App>>, req: Request) -> Response {
             }))
             .into_response()
         }
+        Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+async fn api_files_mkdir(State(app): State<Arc<App>>, req: Request) -> Response {
+    if let Err(e) = files_ok(&app, req.headers(), req.uri()) {
+        return e;
+    }
+    let body = axum::body::to_bytes(req.into_body(), 4096)
+        .await
+        .unwrap_or_default();
+    let v: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid JSON body"),
+    };
+    if !v.is_object() {
+        return json_err(StatusCode::BAD_REQUEST, "expected JSON object");
+    }
+    let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("").trim();
+    if name.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "missing name");
+    }
+    let root = v.get("root").and_then(|n| n.as_str()).unwrap_or("inbox");
+    let path = v.get("path").and_then(|n| n.as_str()).unwrap_or("");
+    match app.files.mkdir_at(root, path, name) {
+        Ok(ent) => Json(json!({
+            "ok": true,
+            "mkdir": true,
+            "name": ent.name,
+            "dir": true,
+            "root": crate::files::normalize_root(root).unwrap_or("inbox"),
+            "path": crate::files::sanitize_rel(path).unwrap_or_default()
+        }))
+        .into_response(),
+        Err(e) if e == "already exists" => json_err(StatusCode::CONFLICT, "already exists"),
         Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
     }
 }

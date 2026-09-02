@@ -883,6 +883,38 @@ function renderFileList(files, root, path) {
   });
 }
 
+function mkdirInboxFolder(name) {
+  const out = $("file-out");
+  const n = String(name || "").trim();
+  if (!n) return "";
+  if (sendFileJson({ type: "file", action: "mkdir", name: n, root: fileRoot, path: filePath })) {
+    if (out) out.textContent = "creating " + n + "…";
+    return n;
+  }
+  if (typeof fetch !== "function") return n;
+  fetch(url("/api/files/mkdir"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: n, root: fileRoot, path: filePath })
+  }).then(function (r) { return r.json(); }).then(function (body) {
+    if (!body) return;
+    if (out) out.textContent = body.error ? ("error: " + body.error) : ("created " + n);
+    refreshFiles();
+  }).catch(function (err) {
+    if (out) out.textContent = "error: " + err.message;
+  });
+  return n;
+}
+
+function bindFileMkdir(el) {
+  if (!el || el.dataset.mkdirBound) return;
+  el.dataset.mkdirBound = "1";
+  el.addEventListener("click", function () {
+    const name = typeof window.prompt === "function" ? window.prompt("Folder name") : "";
+    mkdirInboxFolder(name);
+  });
+}
+
 function deleteInboxFile(name) {
   const out = $("file-out");
   if (!name) return;
@@ -1225,6 +1257,11 @@ function handleFileMsg(msg) {
   }
   if (msg.action === "deleted") {
     if (out) out.textContent = "deleted " + (msg.name || "");
+    refreshFiles();
+    return;
+  }
+  if (msg.action === "mkdir") {
+    if (out) out.textContent = "created " + (msg.name || "");
     refreshFiles();
     return;
   }
@@ -2043,6 +2080,7 @@ function onReady() {
   bindFileDrop($("file-drop"));
   bindFileDrop($("stream-pane"));
   bindFileRoots($("file-roots"));
+  bindFileMkdir($("file-mkdir"));
   const fileInput = $("file-input");
   if (fileInput) {
     fileInput.addEventListener("change", function () {
@@ -2233,6 +2271,7 @@ if (typeof window !== "undefined") {
     fillWolMacs: fillWolMacs,
     copyWolMac: copyWolMac,
     browseFiles: browseFiles,
+    mkdirInboxFolder: mkdirInboxFolder,
   };
 }
 

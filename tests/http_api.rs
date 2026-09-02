@@ -1252,6 +1252,36 @@ async fn files_put_list_download_and_reject_traversal() {
     let got = big_dl.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&got[..], &big[..]);
 
+    let mkdir = router
+        .clone()
+        .oneshot(
+            Request::post("/api/files/mkdir")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"name": "SubDir"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mkdir.status(), StatusCode::OK);
+    let made = body_json(mkdir).await;
+    assert_eq!(made["mkdir"], true);
+    assert_eq!(made["name"], "SubDir");
+    assert_eq!(made["dir"], true);
+
+    let mkdir_again = router
+        .clone()
+        .oneshot(
+            Request::post("/api/files/mkdir")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"name": "SubDir"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mkdir_again.status(), StatusCode::CONFLICT);
+
     let del = router
         .clone()
         .oneshot(

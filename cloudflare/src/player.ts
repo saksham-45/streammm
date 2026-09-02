@@ -166,6 +166,7 @@ export const PLAYER_HTML = `<!doctype html>
       <button type="button" data-root="downloads">Downloads</button>
     </div>
     <div id="file-path"></div>
+    <button id="file-mkdir" type="button">New folder</button>
     <div id="file-drop">Drop files into this folder or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
     <div id="file-out"></div>
     <ul id="file-list"></ul>
@@ -817,6 +818,24 @@ export const PLAYER_HTML = `<!doctype html>
     });
   }
   bindFileRoots(document.getElementById("file-roots"));
+  function mkdirInboxFolder(name) {
+    var out = document.getElementById("file-out");
+    var n = String(name || "").trim();
+    if (!n) return "";
+    if (sendFileJson({ type: "file", action: "mkdir", name: n, root: fileRoot, path: filePath })) {
+      if (out) out.textContent = "creating " + n + "…";
+    }
+    return n;
+  }
+  function bindFileMkdir(el) {
+    if (!el || el.dataset.mkdirBound) return;
+    el.dataset.mkdirBound = "1";
+    el.addEventListener("click", function () {
+      var name = typeof window.prompt === "function" ? window.prompt("Folder name") : "";
+      mkdirInboxFolder(name);
+    });
+  }
+  bindFileMkdir(document.getElementById("file-mkdir"));
   function deleteInboxFile(name) {
     var out = document.getElementById("file-out");
     if (!name) return;
@@ -941,13 +960,18 @@ export const PLAYER_HTML = `<!doctype html>
     if (msg.action === "list") { renderFileList(msg.files || [], msg.root, msg.path); return; }
     if (msg.action === "ok") {
       if (out) out.textContent = "saved " + (msg.name || "");
-      sendFileJson({ type: "file", action: "list" });
+      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
       if (msg.offer && msg.name) showFileOffer(msg.name, msg.size);
       return;
     }
     if (msg.action === "deleted") {
       if (out) out.textContent = "deleted " + (msg.name || "");
-      sendFileJson({ type: "file", action: "list" });
+      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
+      return;
+    }
+    if (msg.action === "mkdir") {
+      if (out) out.textContent = "created " + (msg.name || "");
+      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
       return;
     }
     if (msg.action === "error" && out) { out.textContent = "error: " + (msg.error || "file"); return; }

@@ -299,6 +299,12 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must reveal Delete on inbox files"
     );
     assert!(
+        html.contains("id=\"file-mkdir\"")
+            && js.contains("function mkdirInboxFolder")
+            && js.contains("action: \"mkdir\""),
+        "enabling remote control must reveal New folder in the files panel"
+    );
+    assert!(
         html.contains("id=\"cfg-display\""),
         "Display picker must be a visible Settings control, not hidden behind Detect"
     );
@@ -443,6 +449,12 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("action: \"delete\"")
             && s.contains("textContent = \"Delete\""),
         "watch page must reveal Delete on inbox files when remote control is on"
+    );
+    assert!(
+        s.contains("id=\"file-mkdir\"")
+            && s.contains("function mkdirInboxFolder")
+            && s.contains("action: \"mkdir\""),
+        "watch page must reveal New folder when remote control is on"
     );
     assert!(
         s.contains("blob-begin") && s.contains("new Blob(done.parts)"),
