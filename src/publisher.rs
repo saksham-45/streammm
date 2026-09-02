@@ -108,8 +108,11 @@ impl Publisher {
                     || msg.contains("\"action\":\"end\""));
             if msg.contains("\"thumbs\"") && crate::thumbs::merge_thumbs_latest(&mut latest, &msg) {
                 // Per-display live JPEGs union into one snapshot for joiners.
-            } else if msg.contains("\"type\":\"file\"") || chunked_clip {
-                // File blobs and chunked clipboard PNGs are transient.
+            } else if msg.contains("\"type\":\"file\"")
+                || msg.contains("\"type\":\"chat\"")
+                || chunked_clip
+            {
+                // File blobs, session chat, and chunked clipboard PNGs are transient.
             } else {
                 latest.push(msg.clone());
             }

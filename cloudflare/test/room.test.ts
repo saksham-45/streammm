@@ -303,6 +303,37 @@ describe("StreamRoom", () => {
     expect(clipMsg.type).toBe("clipboard");
     expect(clipMsg.text).toBe("host-copy");
 
+    const chatFromView = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("from-watcher")) resolve(ev.data);
+      });
+    });
+    const chatToView = new Promise<string>((resolve) => {
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("from-host")) resolve(ev.data);
+      });
+    });
+    view.send(JSON.stringify({ type: "chat", text: "  from-watcher  " }));
+    pub.send(JSON.stringify({ type: "chat", text: "from-host" }));
+    const viewChat = JSON.parse(
+      await Promise.race([
+        chatFromView,
+        new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no watcher chat")), 3000)),
+      ]),
+    ) as { type: string; text: string; from: string };
+    expect(viewChat.type).toBe("chat");
+    expect(viewChat.from).toBe("viewer");
+    expect(viewChat.text).toBe("from-watcher");
+    const hostChat = JSON.parse(
+      await Promise.race([
+        chatToView,
+        new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no host chat")), 3000)),
+      ]),
+    ) as { type: string; text: string; from: string };
+    expect(hostChat.type).toBe("chat");
+    expect(hostChat.from).toBe("host");
+    expect(hostChat.text).toBe("from-host");
+
     const thumbs = new Promise<string>((resolve) => {
       view.addEventListener("message", (ev) => {
         if (typeof ev.data === "string" && ev.data.includes("thumbs")) resolve(ev.data);

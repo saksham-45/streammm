@@ -131,6 +131,16 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must reveal a Send-keys bar for browser-stolen shortcuts"
     );
     assert!(
+        html.contains("id=\"chat-section\"")
+            && html.contains("id=\"chat-log\"")
+            && html.contains("id=\"chat-form\"")
+            && html.contains("id=\"chat-hint\"")
+            && js.contains("function sendChat")
+            && js.contains("function chatPayload")
+            && js.contains("chat-history"),
+        "enabling remote control must reveal a session chat panel"
+    );
+    assert!(
         html.contains("id=\"cfg-block-local\"") && html.contains("id=\"block-hint\"") && html.contains("id=\"block-local-fields\""),
         "block-local must be a Settings control revealed when remote control is on"
     );
@@ -264,6 +274,14 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("Ctrl+Alt+Del")
             && s.contains("keys.style.display = controlOn"),
         "watch page must reveal a Send-keys bar when remote control is on"
+    );
+    assert!(
+        s.contains("chat-section")
+            && s.contains("function sendChat")
+            && s.contains("function chatPayload")
+            && s.contains("chat-history")
+            && s.contains("chat.style.display = controlOn"),
+        "watch page must reveal session chat when remote control is on"
     );
     assert!(
         s.contains("file-offer") && s.contains("msg.offer") && s.contains("showFileOffer"),
@@ -547,6 +565,8 @@ const nodes = {{
   "files-section": el(true),
   "keys-bar": el(true),
   "keys-hint": el(true),
+  "chat-section": el(true),
+  "chat-hint": el(true),
   "analysis-section": el(true),
   "analysis-banner": el(true),
   "analysis-pane": el(true),
@@ -583,6 +603,8 @@ if (!nodes["analysis-pane"].classList.contains("hidden")) throw new Error("analy
 if (!nodes["cu-section"].classList.contains("hidden")) throw new Error("AI form visible while off");
 if (!nodes["keys-bar"].classList.contains("hidden")) throw new Error("keys-bar visible while off");
 if (!nodes["keys-hint"].classList.contains("hidden")) throw new Error("keys-hint visible while off");
+if (!nodes["chat-section"].classList.contains("hidden")) throw new Error("chat visible while off");
+if (!nodes["chat-hint"].classList.contains("hidden")) throw new Error("chat hint visible while off");
 nodes["cfg-llm-enabled"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["llm-fields"].classList.contains("hidden")) throw new Error("LLM fields still hidden after enable");
@@ -601,6 +623,10 @@ if (nodes["ctl-hint"].classList.contains("hidden")) throw new Error("control hin
 if (nodes["files-section"].classList.contains("hidden")) throw new Error("files panel still hidden after control enable");
 if (nodes["keys-bar"].classList.contains("hidden")) throw new Error("keys-bar still hidden after control enable");
 if (nodes["keys-hint"].classList.contains("hidden")) throw new Error("keys-hint still hidden after control enable");
+if (nodes["chat-section"].classList.contains("hidden")) throw new Error("chat still hidden after control enable");
+if (nodes["chat-hint"].classList.contains("hidden")) throw new Error("chat hint still hidden after control enable");
+const chat = window.streamaidUi.chatPayload("  hello  ");
+if (chat.type !== "chat" || chat.text !== "hello") throw new Error("chatPayload");
 if (nodes["block-local-fields"].classList.contains("hidden")) throw new Error("block-local still hidden after control enable");
 const combo = window.streamaidUi.comboPayload("Tab", ["Meta"]);
 if (combo.action !== "key" || combo.key !== "Tab" || combo.modifiers[0] !== "Meta") throw new Error("comboPayload Cmd+Tab");

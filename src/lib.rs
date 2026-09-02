@@ -1,6 +1,7 @@
 //! streamaid origin: low-latency 1080p30 capture, typed WebSocket media, chunked HTTP fallback.
 
 pub mod capture;
+pub mod chat;
 pub mod computer_use;
 pub mod config;
 pub mod encoder;

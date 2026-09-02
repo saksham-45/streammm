@@ -245,6 +245,22 @@ summary { cursor: pointer; }
 }
 #file-drop.drop-hover,
 #stream-pane.drop-hover { border-color: #7eb8ff; background: #182030; }
+#chat-section { margin-bottom: 16px; }
+#chat-log {
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-height: 72px;
+  max-height: 28vh;
+  overflow: auto;
+  font-size: 13px;
+}
+#chat-log .chat-line { margin: 4px 0; line-height: 1.35; }
+#chat-log .chat-from { color: #9a9a9a; font-weight: 650; margin-right: 6px; }
+#chat-log .chat-line.host .chat-from { color: #7eb8ff; }
+#chat-form { display: flex; gap: 8px; margin: 8px 0 0; }
+#chat-form input { flex: 1; }
 .file-pick { color: #7eb8ff; cursor: pointer; }
 .file-pick input { display: none; }
 #file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }

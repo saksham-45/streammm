@@ -113,6 +113,23 @@ async function readJsonObject(
   return { ok: true, value: raw as Record<string, unknown> };
 }
 
+const CHAT_MAX = 2000;
+const CHAT_HISTORY = 40;
+
+function clampChat(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const t = raw.trim();
+  if (!t) return "";
+  let out = "";
+  let n = 0;
+  for (const ch of t) {
+    if (n >= CHAT_MAX) break;
+    out += ch;
+    n += 1;
+  }
+  return out;
+}
+
 function requiredString(obj: Record<string, unknown>, field: string): string | { error: string } {
   if (!(field in obj)) return { error: `missing ${field}` };
   if (typeof obj[field] !== "string") return { error: `${field} must be a string` };
@@ -145,6 +162,7 @@ export class StreamRoom extends DurableObject<Env> {
     writer: WritableStreamDefaultWriter<Uint8Array>;
     timer: ReturnType<typeof setTimeout>;
   } | null = null;
+  private chatLog: { type: "chat"; text: string; from: string; ts: number }[] = [];
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -212,6 +230,13 @@ export class StreamRoom extends DurableObject<Env> {
         }));
       } catch {
         /* ignore */
+      }
+      if (this.chatLog.length) {
+        try {
+          server.send(JSON.stringify({ type: "chat-history", messages: this.chatLog }));
+        } catch {
+          /* ignore */
+        }
       }
     }
 
@@ -306,6 +331,9 @@ export class StreamRoom extends DurableObject<Env> {
         }
         this.broadcastViewers(raw);
       }
+      if (v.type === "chat") {
+        this.fanChat(raw, "host");
+      }
       return;
     }
     if (att?.role !== "viewer") return;
@@ -332,6 +360,25 @@ export class StreamRoom extends DurableObject<Env> {
       if (!this.flags.ai) return;
       this.sendPublisher(JSON.stringify({ type: "computer-use", task: v.task || "", session }));
     }
+    if (v.type === "chat") {
+      this.fanChat(raw, "viewer");
+    }
+  }
+
+  private fanChat(raw: string, from: "host" | "viewer"): void {
+    let text = "";
+    try {
+      const rec = JSON.parse(raw) as { text?: unknown };
+      text = clampChat(rec.text);
+    } catch {
+      return;
+    }
+    if (!text) return;
+    const msg = JSON.stringify({ type: "chat", text, from, ts: Date.now() });
+    this.chatLog.push(JSON.parse(msg) as (typeof this.chatLog)[number]);
+    if (this.chatLog.length > CHAT_HISTORY) this.chatLog.splice(0, this.chatLog.length - CHAT_HISTORY);
+    this.broadcastViewers(msg);
+    if (from === "viewer") this.sendPublisher(msg);
   }
 
   private async feedFileDownload(v: {

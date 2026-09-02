@@ -66,6 +66,13 @@ export const PLAYER_HTML = `<!doctype html>
   #file-out { font-size: 12px; color: var(--muted); min-height: 1.2em; }
   #file-offer { display: none; border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 13px; }
   #file-offer-save { margin-left: 8px; }
+  #chat-section { display: none; margin-bottom: 14px; }
+  #chat-log { background: #111; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-height: 72px; max-height: 28vh; overflow: auto; font-size: 13px; }
+  #chat-log .chat-line { margin: 4px 0; line-height: 1.35; }
+  #chat-log .chat-from { color: var(--muted); font-weight: 650; margin-right: 6px; }
+  #chat-log .chat-line.host .chat-from { color: var(--accent); }
+  #chat-form { display: flex; gap: 6px; margin: 8px 0 0; }
+  #chat-form input { flex: 1; background: #111; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
   #keys-bar { display: none; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--line); background: #141414; }
   #keys-bar .keys-label { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; margin-right: 4px; }
   #keys-bar button { padding: 4px 8px; font-size: 12px; }
@@ -126,6 +133,14 @@ export const PLAYER_HTML = `<!doctype html>
     <div id="file-drop">Drop files here or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
     <div id="file-out"></div>
     <ul id="file-list"></ul>
+    </div>
+    <div id="chat-section">
+    <h2>Chat</h2>
+    <div id="chat-log" aria-live="polite"></div>
+    <form id="chat-form">
+      <input id="chat-input" maxlength="2000" placeholder="Message the host…" autocomplete="off">
+      <button type="submit">Send</button>
+    </form>
     </div>
     <h2>Screen analysis</h2>
     <div id="llm-note">Waiting for DeepSeek key and a screenshot…</div>
@@ -214,6 +229,53 @@ export const PLAYER_HTML = `<!doctype html>
     });
   }
   bindKeysBar(document.getElementById("keys-bar"));
+  function chatPayload(text) {
+    var t = String(text || "").trim();
+    return { type: "chat", text: t.length > 2000 ? t.slice(0, 2000) : t };
+  }
+  function sendChat(text) {
+    if (!ws || ws.readyState !== 1) return;
+    var p = chatPayload(text);
+    if (!p.text) return;
+    try { ws.send(JSON.stringify(p)); } catch (e) {}
+  }
+  function appendChat(msg) {
+    var log = document.getElementById("chat-log");
+    if (!log || !msg || !msg.text) return;
+    var line = document.createElement("div");
+    line.className = "chat-line " + (msg.from === "host" ? "host" : "viewer");
+    var who = document.createElement("span");
+    who.className = "chat-from";
+    who.textContent = msg.from === "host" ? "Host" : "You";
+    var body = document.createElement("span");
+    body.textContent = msg.text;
+    line.appendChild(who);
+    line.appendChild(body);
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+  function handleChatMsg(msg) {
+    if (!msg) return;
+    if (msg.type === "chat-history" && Array.isArray(msg.messages)) {
+      var log = document.getElementById("chat-log");
+      if (log) log.textContent = "";
+      msg.messages.forEach(appendChat);
+      return;
+    }
+    if (msg.type === "chat") appendChat(msg);
+  }
+  (function bindChatForm() {
+    var form = document.getElementById("chat-form");
+    if (!form || form.dataset.chatBound) return;
+    form.dataset.chatBound = "1";
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var input = document.getElementById("chat-input");
+      if (!input) return;
+      sendChat(input.value);
+      input.value = "";
+    });
+  })();
   function normEvent(el, ev) {
     var r = el.getBoundingClientRect();
     var x = r.width ? (ev.clientX - r.left) / r.width : 0;
@@ -724,6 +786,8 @@ export const PLAYER_HTML = `<!doctype html>
     if (cu) cu.style.display = aiOn ? "block" : "none";
     var files = document.getElementById("files-section");
     if (files) files.style.display = controlOn ? "block" : "none";
+    var chat = document.getElementById("chat-section");
+    if (chat) chat.style.display = controlOn ? "block" : "none";
     var keys = document.getElementById("keys-bar");
     if (keys) keys.style.display = controlOn ? "flex" : "none";
     var un = document.getElementById("unmute");
@@ -893,6 +957,7 @@ export const PLAYER_HTML = `<!doctype html>
       }
       if (msg && msg.type === "clipboard") handleClipboardMsg(msg);
       if (msg && msg.type === "thumbs") applyDisplayThumbs(msg.items);
+      if (msg && (msg.type === "chat" || msg.type === "chat-history")) handleChatMsg(msg);
       if (msg && msg.type === "file") handleFileMsg(msg);
     } catch (e) {}
   }

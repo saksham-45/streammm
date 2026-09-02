@@ -1,6 +1,7 @@
 //! HTTP + WebSocket origin.
 
 use crate::capture::{enumerate_devices, Capture, Device};
+use crate::chat;
 use crate::computer_use::{self, ActionModel};
 use crate::config::{self, Config};
 use crate::files::Inbox;
@@ -31,7 +32,14 @@ use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+fn chat_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -60,6 +68,7 @@ pub struct App {
     pub displays: Mutex<Vec<Device>>,
     pub last_clip: Mutex<String>,
     incoming_png: Mutex<Option<(usize, Vec<u8>)>>,
+    pub chat_log: Mutex<Vec<String>>,
 }
 
 struct DisplaySwitchInjector {
@@ -178,6 +187,7 @@ impl App {
             displays: Mutex::new(enumerate_devices()),
             last_clip: Mutex::new(String::new()),
             incoming_png: Mutex::new(None),
+            chat_log: Mutex::new(Vec::new()),
         });
         let app2 = app.clone();
         tokio::spawn(async move {
@@ -330,7 +340,34 @@ impl App {
             "revoke" => {
                 self.release_controller();
             }
+            "chat" => {
+                self.handle_chat(&v);
+            }
             _ => {}
+        }
+    }
+
+    fn handle_chat(&self, v: &Value) {
+        let text = chat::clamp_chat(v.get("text").and_then(|t| t.as_str()).unwrap_or(""));
+        if text.is_empty() {
+            return;
+        }
+        let claimed = v.get("from").and_then(|s| s.as_str());
+        let sess = v.get("session").and_then(|s| s.as_str()).unwrap_or("");
+        let from = chat::chat_from(claimed, sess);
+        let relay = !chat::already_attributed(claimed);
+        let ts = v
+            .get("ts")
+            .and_then(|t| t.as_u64())
+            .unwrap_or_else(chat_now_ms);
+        let msg = chat::chat_json(&text, from, ts);
+        {
+            let mut log = self.chat_log.lock();
+            chat::push_history(&mut log, msg.clone());
+        }
+        let _ = self.clip_tx.send(msg.clone());
+        if relay {
+            self.publisher.push_wire(msg);
         }
     }
 
@@ -1546,6 +1583,10 @@ where
     }
     let sub = app.hub.subscribe(8);
     let mut clip_rx = app.clip_tx.subscribe();
+    let history = app.chat_log.lock().clone();
+    if !history.is_empty() {
+        send_txt(&mut stream, &chat::history_json(&history)).await?;
+    }
     loop {
         tokio::select! {
             media = sub.recv() => {
@@ -2500,6 +2541,44 @@ mod tests {
         app.release_controller();
         assert_eq!(app.status_json()["control"]["controller"], false);
         assert!(!fake.block_local.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn session_chat_fans_and_ignores_empty() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let cfg = crate::config::Config::default();
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake,
+            Arc::new(DoneModel),
+        );
+        let mut rx = app.clip_tx.subscribe();
+        app.handle_inbound_json(r#"{"type":"chat","text":"  hello host  "}"#);
+        let msg = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("chat fan-out")
+            .expect("chat channel");
+        assert!(msg.contains("hello host"), "{msg}");
+        assert!(msg.contains("\"from\":\"host\""), "{msg}");
+        app.handle_inbound_json(r#"{"type":"chat","text":"hi","from":"viewer","session":"abc"}"#);
+        let msg2 = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("viewer chat")
+            .expect("chat channel");
+        assert!(msg2.contains("\"from\":\"viewer\""), "{msg2}");
+        assert!(msg2.contains("hi"), "{msg2}");
+        app.handle_inbound_json(r#"{"type":"chat","text":"   "}"#);
+        app.handle_inbound_json(r#"{"type":"chat"}"#);
+        assert_eq!(app.chat_log.lock().len(), 2, "empty chat must not land in history");
     }
 
     #[tokio::test]

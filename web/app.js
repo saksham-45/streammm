@@ -103,6 +103,8 @@ function syncFeatureUi() {
   setHidden($("cu-cancel"), !f.ai);
   setHidden($("cu-section"), !f.ai);
   setHidden($("files-section"), !f.ctl);
+  setHidden($("chat-section"), !f.ctl);
+  setHidden($("chat-hint"), !f.ctl);
   setHidden($("analysis-section"), !f.llm);
   setHidden($("analysis-banner"), !f.llm);
   setHidden($("analysis-pane"), !(f.llm || f.ai || f.ctl));
@@ -240,6 +242,57 @@ function bindKeysBar(el) {
     const raw = btn.getAttribute("data-mods") || "";
     const mods = raw ? raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean) : [];
     sendCombo(key, mods);
+  });
+}
+
+function chatPayload(text) {
+  const t = String(text || "").trim();
+  return { type: "chat", text: t.length > 2000 ? t.slice(0, 2000) : t };
+}
+
+function sendChat(text) {
+  if (!ws || ws.readyState !== 1) return;
+  const p = chatPayload(text);
+  if (!p.text) return;
+  try { ws.send(JSON.stringify(p)); } catch (e) { /* ignore */ }
+}
+
+function appendChat(msg) {
+  const log = $("chat-log");
+  if (!log || !msg || !msg.text) return;
+  const line = document.createElement("div");
+  line.className = "chat-line " + (msg.from === "host" ? "host" : "viewer");
+  const who = document.createElement("span");
+  who.className = "chat-from";
+  who.textContent = msg.from === "host" ? "Host" : "Remote";
+  const body = document.createElement("span");
+  body.textContent = msg.text;
+  line.appendChild(who);
+  line.appendChild(body);
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function handleChatMsg(msg) {
+  if (!msg) return;
+  if (msg.type === "chat-history" && Array.isArray(msg.messages)) {
+    const log = $("chat-log");
+    if (log) log.textContent = "";
+    msg.messages.forEach(appendChat);
+    return;
+  }
+  if (msg.type === "chat") appendChat(msg);
+}
+
+function bindChatForm(form) {
+  if (!form || form.dataset.chatBound) return;
+  form.dataset.chatBound = "1";
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    const input = $("chat-input");
+    if (!input) return;
+    sendChat(input.value);
+    input.value = "";
   });
 }
 
@@ -710,6 +763,7 @@ function onWsMessage(ev) {
       const msg = JSON.parse(ev.data);
       if (msg && msg.type === "clipboard") handleClipboardMsg(msg);
       if (msg && msg.type === "thumbs") applyDisplayThumbs(msg.items);
+      if (msg && (msg.type === "chat" || msg.type === "chat-history")) handleChatMsg(msg);
       if (msg && msg.type === "file") {
         handleFileMsg(msg);
       }
@@ -1460,6 +1514,7 @@ function onReady() {
   bindControl($("stream-video"));
   bindControl($("stream-canvas"));
   bindKeysBar($("keys-bar"));
+  bindChatForm($("chat-form"));
   function bindFileDrop(el) {
     if (!el || el.dataset.fileBound) return;
     el.dataset.fileBound = "1";
@@ -1620,6 +1675,8 @@ if (typeof window !== "undefined") {
     featureFlags: featureFlags,
     comboPayload: comboPayload,
     sendCombo: sendCombo,
+    chatPayload: chatPayload,
+    sendChat: sendChat,
     layoutDisplayMap: layoutDisplayMap,
     paintMapThumbs: paintMapThumbs,
     currentToken: currentToken,

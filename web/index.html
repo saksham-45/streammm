@@ -61,6 +61,14 @@
       <div id="file-out"></div>
       <ul id="file-list"></ul>
     </div>
+    <div id="chat-section" class="hidden">
+      <h2>Chat</h2>
+      <div id="chat-log" aria-live="polite"></div>
+      <form id="chat-form">
+        <input id="chat-input" maxlength="2000" placeholder="Message the remote session…" autocomplete="off">
+        <button type="submit">Send</button>
+      </form>
+    </div>
     <div id="analysis-section" class="hidden">
       <h2>Screen analysis</h2>
       <div id="llm-note">Analysis is delivered on the Cloudflare watch page. Attach DEEPSEEK_API_KEY there with wrangler.</div>
@@ -132,6 +140,7 @@
   <label><input id="cfg-control-enabled" type="checkbox"> Allow remote computer use (kill switch off = blocked)</label>
   <p id="ctl-hint" class="cfg-hint hidden">Watchers can click (left/right/middle), drag, scroll, type, paste clipboard text or files, and drop files into the host inbox. Incoming files appear on the Desktop and on this Mac's pasteboard as Finder files (Cmd-V). Copy on this Mac (text, PNG, and Finder files) is pushed to the watcher automatically. Uncheck to kill remote input immediately after Save.</p>
   <p id="keys-hint" class="cfg-hint hidden">A Send-keys bar appears while remote control is on. Use it for shortcuts the browser would steal (⌘Tab, ⌘W, ⌘Q, Ctrl+Alt+Del, Lock). Same injector the AI uses.</p>
+  <p id="chat-hint" class="cfg-hint hidden">A session chat panel appears while remote control is on. Host and watchers can message each other without the browser stealing keystrokes into the remote machine.</p>
   <label id="block-local-fields" class="hidden"><input id="cfg-block-local" type="checkbox"> Block local input during remote session</label>
   <p id="block-hint" class="cfg-hint hidden">While a watcher is driving, this Mac's keyboard and mouse are locked (remote inject still works). Press ⌘⇧Esc to reclaim — the End button will not receive clicks. Requires Accessibility.</p>
   <label><input id="cfg-ai-enabled" type="checkbox"> Allow AI computer use</label>
