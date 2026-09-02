@@ -122,8 +122,9 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "LLM and AI controls must exist so enabling a setting can reveal them"
     );
     assert!(
-        html.contains("id=\"cfg-audio\"") && html.contains("id=\"audio-hint\"") && html.contains("id=\"unmute\""),
-        "mic audio must be a Settings checkbox that can reveal Unmute"
+        html.contains("id=\"cfg-audio\"") && html.contains("id=\"audio-hint\"") && html.contains("id=\"unmute\"")
+            && html.contains("id=\"audio-fields\"") && html.contains("id=\"cfg-audio-device\""),
+        "audio must be a Settings checkbox that reveals a device picker and Unmute"
     );
     assert!(
         js.contains("mp4a.40.2") && js.contains("cfg-audio"),
@@ -520,6 +521,8 @@ const nodes = {{
   "gop-fields": el(false),
   "cfg-audio": el(false),
   "audio-hint": el(true),
+  "audio-fields": el(true),
+  "cfg-audio-device": el(false),
   "unmute": el(true),
   "cfg-mode": {{ classList: tokenList(false), hidden: false, checked: false, value: "ffmpeg" }}
 }};
@@ -568,10 +571,12 @@ if (!nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute visib
 nodes["cfg-audio"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["audio-hint"].classList.contains("hidden")) throw new Error("audio hint still hidden after mic enable");
+if (nodes["audio-fields"].classList.contains("hidden")) throw new Error("audio device picker still hidden after mic enable");
 if (nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute still hidden after mic enable");
 nodes["cfg-mode"].value = "mjpeg";
 window.streamaidUi.syncFeatureUi();
 if (!nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute still visible in MJPEG mode");
+if (!nodes["audio-fields"].classList.contains("hidden")) throw new Error("audio picker still visible in MJPEG mode");
 if (nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality still hidden after MJPEG enable");
 if (!nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate still visible in MJPEG mode");
 if (!nodes["gop-fields"].classList.contains("hidden")) throw new Error("GOP still visible in MJPEG mode");

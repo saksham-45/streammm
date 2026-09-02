@@ -29,6 +29,9 @@ pub struct CaptureConfig {
     /// macOS avfoundation microphone into the live fMP4 (H.264/HEVC only).
     #[serde(default)]
     pub audio: bool,
+    /// avfoundation audio device index (`0` = default mic; BlackHole/Loopback for system audio).
+    #[serde(default = "default_audio_input")]
+    pub audio_input: String,
 }
 
 fn default_driver() -> String {
@@ -43,6 +46,9 @@ fn default_scale() -> f64 {
 fn default_jpeg() -> u32 {
     95
 }
+fn default_audio_input() -> String {
+    "0".into()
+}
 
 impl Default for CaptureConfig {
     fn default() -> Self {
@@ -53,6 +59,7 @@ impl Default for CaptureConfig {
             scale: default_scale(),
             jpeg_quality: default_jpeg(),
             audio: false,
+            audio_input: default_audio_input(),
         }
     }
 }
@@ -62,6 +69,16 @@ impl CaptureConfig {
         self.fps = clamp(self.fps, 1, 60);
         self.scale = clamp(self.scale, 0.25, 1.0);
         self.jpeg_quality = clamp(self.jpeg_quality, 30, 95);
+        self.audio_input = clamp_audio_input(&self.audio_input);
+    }
+}
+
+pub fn clamp_audio_input(raw: &str) -> String {
+    let s = raw.trim().trim_end_matches(':');
+    if !s.is_empty() && s.len() <= 4 && s.chars().all(|c| c.is_ascii_digit()) {
+        s.to_string()
+    } else {
+        default_audio_input()
     }
 }
 
@@ -321,6 +338,7 @@ mod tests {
         assert_eq!(cfg.capture.scale, 1.0);
         assert_eq!(cfg.capture.jpeg_quality, 95);
         assert!(!cfg.capture.audio, "mic audio is off until the host enables it");
+        assert_eq!(cfg.capture.audio_input, "0");
         assert_eq!(cfg.encoder.mode, "ffmpeg");
         assert_eq!(cfg.encoder.bitrate_kbps, 20000);
         assert_eq!(cfg.encoder.gop_frames, 15);
@@ -343,10 +361,11 @@ mod tests {
     #[test]
     fn clamps_low_and_high_bounds() {
         let low = Config::from_value(serde_json::json!({
-            "capture": {"fps": 0, "scale": 0.1, "jpeg_quality": 10},
+            "capture": {"fps": 0, "scale": 0.1, "jpeg_quality": 10, "audio_input": "../mic"},
             "encoder": {"bitrate_kbps": 100, "gop_frames": 1},
             "llm": {"interval_sec": 1}
         }));
+        assert_eq!(low.capture.audio_input, "0");
         assert_eq!(low.capture.fps, 1);
         assert_eq!(low.capture.scale, 0.25);
         assert_eq!(low.capture.jpeg_quality, 30);

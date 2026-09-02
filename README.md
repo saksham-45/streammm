@@ -40,7 +40,7 @@ Killing the process is not enough — `KeepAlive` will restart it. Logs: `logs/o
 | Size | cap **3840×4320**, **never upscale**, lanczos only if the display is larger |
 | Displays | Settings picker + clickable **all-monitors map**: live thumbnail of the captured screen (animation-frame paint), and ~15 fps JPEG previews of the others from a persistent ffmpeg per inactive display; `Capture screen N` maps to `CGGetActiveDisplayList()[N]` so clicks hit the captured screen |
 | fps | 30 |
-| Audio | Off by default. Settings **Capture microphone audio** muxes AAC from the default mic into the live fMP4 (H.264/HEVC, macOS). Watchers get an **Unmute** control (autoplay starts muted). |
+| Audio | Off by default. Settings **Capture audio** muxes AAC into the live fMP4 (H.264/HEVC, macOS) and **reveals an audio device picker** (default mic, or BlackHole/Loopback for system audio). Watchers get an **Unmute** control (autoplay starts muted). |
 
 ## Global watch link (OTP PIN)
 

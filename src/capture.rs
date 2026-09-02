@@ -246,7 +246,7 @@ pub fn device_from_ffmpeg_screen(
     }
 }
 
-fn ffmpeg_avfoundation_screens() -> Vec<(String, usize, String)> {
+fn ffmpeg_avfoundation_list_stderr() -> String {
     let out = std::process::Command::new("ffmpeg")
         .args([
             "-hide_banner",
@@ -258,10 +258,14 @@ fn ffmpeg_avfoundation_screens() -> Vec<(String, usize, String)> {
             "",
         ])
         .output();
-    let Ok(out) = out else {
-        return vec![];
-    };
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    match out {
+        Ok(o) => String::from_utf8_lossy(&o.stderr).into_owned(),
+        Err(_) => String::new(),
+    }
+}
+
+fn ffmpeg_avfoundation_screens() -> Vec<(String, usize, String)> {
+    let stderr = ffmpeg_avfoundation_list_stderr();
     let re = Regex::new(r"\[(\d+)\] (Capture screen (\d+))").unwrap();
     re.captures_iter(&stderr)
         .filter_map(|c| {
@@ -271,6 +275,40 @@ fn ffmpeg_avfoundation_screens() -> Vec<(String, usize, String)> {
             Some((dev, idx, label))
         })
         .collect()
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct AudioDevice {
+    pub id: String,
+    pub name: String,
+}
+
+/// Parse ffmpeg `-list_devices` audio section (mics, BlackHole, Loopback).
+pub fn parse_avfoundation_audio(stderr: &str) -> Vec<AudioDevice> {
+    let lower = stderr.to_ascii_lowercase();
+    let Some(idx) = lower.find("audio devices:") else {
+        return Vec::new();
+    };
+    let rest = &stderr[idx..];
+    let re = Regex::new(r"\[(\d+)\] (.+)").unwrap();
+    rest.lines()
+        .filter_map(|line| {
+            let c = re.captures(line)?;
+            let id = c.get(1)?.as_str().to_string();
+            let name = c.get(2)?.as_str().trim().to_string();
+            if name.is_empty() || name.to_ascii_lowercase().contains("audio devices:") {
+                return None;
+            }
+            Some(AudioDevice { id, name })
+        })
+        .collect()
+}
+
+pub fn enumerate_audio_devices() -> Vec<AudioDevice> {
+    if sysname() != "Darwin" {
+        return Vec::new();
+    }
+    parse_avfoundation_audio(&ffmpeg_avfoundation_list_stderr())
 }
 
 async fn run_ffmpeg(
@@ -469,6 +507,25 @@ mod tests {
             .map(|c| (c[1].to_string(), c[3].parse().unwrap()))
             .collect();
         assert_eq!(got, vec![("3".into(), 0usize), ("4".into(), 1usize)]);
+    }
+
+    #[test]
+    fn parse_avfoundation_audio_lists_mic_and_loopback() {
+        let sample = "\
+AVFoundation video devices:\n\
+[0] FaceTime HD Camera\n\
+[1] Capture screen 0\n\
+AVFoundation audio devices:\n\
+[0] MacBook Pro Microphone\n\
+[1] BlackHole 2ch\n\
+[2] ZoomAudioDevice\n";
+        let got = parse_avfoundation_audio(sample);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].id, "0");
+        assert_eq!(got[0].name, "MacBook Pro Microphone");
+        assert_eq!(got[1].id, "1");
+        assert!(got[1].name.contains("BlackHole"));
+        assert!(parse_avfoundation_audio("video only").is_empty());
     }
 
     #[test]

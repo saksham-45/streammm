@@ -1000,7 +1000,11 @@ async fn api_devices(State(app): State<Arc<App>>, req: Request) -> Response {
     if !authorize(&app, req.headers(), req.uri()) {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    Json(app.refresh_displays()).into_response()
+    Json(json!({
+        "displays": app.refresh_displays(),
+        "audio": crate::capture::enumerate_audio_devices(),
+    }))
+    .into_response()
 }
 
 async fn api_analysis(State(app): State<Arc<App>>, req: Request) -> Response {

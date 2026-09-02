@@ -102,6 +102,7 @@ function syncFeatureUi() {
   setHidden($("analysis-banner"), !f.llm);
   setHidden($("analysis-pane"), !(f.llm || f.ai || f.ctl));
   setHidden($("audio-hint"), !f.audio);
+  setHidden($("audio-fields"), !(f.audio && !f.mjpeg));
   setHidden($("unmute"), !(f.audio && !f.mjpeg));
   syncEncoderUi();
   if (f.ctl) refreshFiles();
@@ -1045,6 +1046,25 @@ function renderDisplayMap(el, devices, current, onPick) {
   });
 }
 
+function fillAudioSelect(sel, devices, current) {
+  if (!sel) return;
+  const list = devices || [];
+  sel.innerHTML = "";
+  if (!list.length) {
+    const opt = document.createElement("option");
+    opt.value = "0";
+    opt.textContent = "default mic (0)";
+    sel.appendChild(opt);
+  }
+  list.forEach(function (d) {
+    const opt = document.createElement("option");
+    opt.value = d.id;
+    opt.textContent = (d.name || d.id) + " [" + d.id + "]";
+    sel.appendChild(opt);
+  });
+  if (current) sel.value = current;
+}
+
 function fillDisplaySelect(sel, devices, current) {
   if (!sel) return;
   const list = devices || [];
@@ -1067,7 +1087,10 @@ function fillDisplaySelect(sel, devices, current) {
 
 function loadDisplays() {
   const current = (cfg && cfg.capture && cfg.capture.input) || ($("cfg-input") && $("cfg-input").value) || "";
-  const apply = function (devices) {
+  const apply = function (body) {
+    const devices = Array.isArray(body) ? body : (body && body.displays) || [];
+    const audioDevs = (!Array.isArray(body) && body && body.audio) || [];
+    fillAudioSelect($("cfg-audio-device"), audioDevs, (cfg && cfg.capture && cfg.capture.audio_input) || "0");
     fillDisplaySelect($("cfg-display"), devices, current);
     fillDisplaySelect($("display-pill"), devices, current);
     renderDisplayMap($("display-map"), devices, current, function (id) {
@@ -1122,6 +1145,8 @@ function fillConfigForm(c) {
   if (en) en.checked = !!(c.llm && c.llm.enabled);
   const aud = $("cfg-audio");
   if (aud) aud.checked = !!(c.capture && c.capture.audio);
+  const audDev = $("cfg-audio-device");
+  if (audDev && c.capture && c.capture.audio_input) audDev.value = c.capture.audio_input;
   set("cfg-base-url", c.llm && c.llm.base_url || "");
   set("cfg-api-key", c.llm && c.llm.api_key || "");
   set("cfg-model", c.llm && c.llm.model || "");
@@ -1150,6 +1175,7 @@ function readConfigForm() {
       scale: parseFloat(val("cfg-scale")) || 1.0,
       jpeg_quality: parseInt(val("cfg-jpeg"), 10) || 95,
       audio: !!( $("cfg-audio") && $("cfg-audio").checked ),
+      audio_input: val("cfg-audio-device") || "0",
     },
     encoder: {
       mode: val("cfg-mode") || "ffmpeg",

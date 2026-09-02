@@ -76,8 +76,11 @@
   </label>
   <select id="device-select" class="hidden"></select>
   <label>FPS <input id="cfg-fps" type="number" min="1" max="60"></label>
-  <label><input id="cfg-audio" type="checkbox"> Capture microphone audio</label>
-  <p id="audio-hint" class="cfg-hint hidden">Adds AAC from the default mic to the live H.264/HEVC stream (not MJPEG). Watchers see Unmute — browsers start muted for autoplay. macOS: allow Microphone for Streamaid. Save restarts capture.</p>
+  <label><input id="cfg-audio" type="checkbox"> Capture audio</label>
+  <p id="audio-hint" class="cfg-hint hidden">Adds AAC to the live H.264/HEVC stream (not MJPEG). Pick the default mic, or a loopback device (BlackHole / Loopback) for system audio. Watchers see Unmute — browsers start muted for autoplay. macOS: allow Microphone for Streamaid. Save restarts capture.</p>
+  <label id="audio-fields" class="hidden">Audio device
+    <select id="cfg-audio-device"></select>
+  </label>
   <label>Scale
     <select id="cfg-scale">
       <option value="0.25">0.25</option>
