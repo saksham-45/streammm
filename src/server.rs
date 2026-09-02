@@ -437,6 +437,20 @@ impl App {
         let app = self.clone();
         tokio::spawn(async move {
             loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                let current = crate::capture::resolve_input(&app.cfg.lock().capture.input);
+                let items = crate::thumbs::grab_inactive(&current).await;
+                if items.is_empty() {
+                    continue;
+                }
+                let msg = crate::thumbs::thumbs_json(&items);
+                app.publisher.push_wire(msg.clone());
+                let _ = app.clip_tx.send(msg);
+            }
+        });
+        let app = self.clone();
+        tokio::spawn(async move {
+            loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 let _ = app.events.send(sse_pack("status", &app.status_json()));
             }

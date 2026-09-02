@@ -267,6 +267,9 @@ export class StreamRoom extends DurableObject<Env> {
       if (v.type === "clipboard") {
         this.broadcastViewers(raw);
       }
+      if (v.type === "thumbs") {
+        this.broadcastViewers(raw);
+      }
       if (v.type === "file") {
         this.broadcastViewers(raw);
       }

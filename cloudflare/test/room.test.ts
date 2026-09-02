@@ -302,6 +302,20 @@ describe("StreamRoom", () => {
     const clipMsg = JSON.parse(clipRaw) as { type: string; text: string };
     expect(clipMsg.type).toBe("clipboard");
     expect(clipMsg.text).toBe("host-copy");
+
+    const thumbs = new Promise<string>((resolve) => {
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("thumbs")) resolve(ev.data);
+      });
+    });
+    pub.send(JSON.stringify({ type: "thumbs", items: [{ id: "3:", data: "qq" }] }));
+    const thumbsRaw = await Promise.race([
+      thumbs,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no thumbs fan-out")), 3000)),
+    ]);
+    const thumbsMsg = JSON.parse(thumbsRaw) as { type: string; items: { id: string }[] };
+    expect(thumbsMsg.type).toBe("thumbs");
+    expect(thumbsMsg.items[0].id).toBe("3:");
     pub.close();
     view.close();
   });

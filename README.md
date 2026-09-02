@@ -38,7 +38,7 @@ Killing the process is not enough — `KeepAlive` will restart it. Logs: `logs/o
 | Bitrate | 20 Mbps CBR, 0.5 s VBV (up to 50 Mbps in Settings) |
 | GOP | 15 frames (~0.5 s join / live edge) |
 | Size | cap **3840×4320**, **never upscale**, lanczos only if the display is larger |
-| Displays | Settings picker + clickable **all-monitors map** with a live thumbnail of the captured screen (last frame stays on the others); `Capture screen N` maps to `CGGetActiveDisplayList()[N]` so clicks hit the captured screen |
+| Displays | Settings picker + clickable **all-monitors map**: live thumbnail of the captured screen, and ~3s JPEG previews of the others; `Capture screen N` maps to `CGGetActiveDisplayList()[N]` so clicks hit the captured screen |
 | fps | 30 |
 
 ## Global watch link (OTP PIN)

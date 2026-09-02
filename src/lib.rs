@@ -14,6 +14,7 @@ pub mod protocol;
 pub mod publisher;
 pub mod server;
 pub mod snapshot;
+pub mod thumbs;
 pub mod ws;
 
 pub use config::Config;

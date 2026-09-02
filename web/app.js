@@ -593,6 +593,7 @@ function onWsMessage(ev) {
         if (msg.mime === "image/png" && msg.data) applyClipboardPng(msg.data);
         else if (typeof msg.text === "string") applyClipboardText(msg.text);
       }
+      if (msg && msg.type === "thumbs") applyDisplayThumbs(msg.items);
       if (msg && msg.type === "file") {
         handleFileMsg(msg);
       }
@@ -841,6 +842,45 @@ function liveStreamSource() {
   const canvas = $("stream-canvas");
   if (canvas && !canvas.classList.contains("hidden") && canvas.width) return canvas;
   return null;
+}
+
+function b64ToBytes(b64) {
+  try {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch (e) {
+    return null;
+  }
+}
+
+function applyDisplayThumbs(items) {
+  const map = $("display-map");
+  if (!map || map.classList.contains("hidden")) return;
+  (items || []).forEach(function (it) {
+    if (!it || !it.id || !it.data) return;
+    const tiles = map.querySelectorAll(".mon");
+    for (let i = 0; i < tiles.length; i++) {
+      const b = tiles[i];
+      if (b.dataset.id !== it.id || b.classList.contains("on")) continue;
+      const c = b.querySelector("canvas.mon-thumb");
+      if (!c) continue;
+      const u8 = b64ToBytes(it.data);
+      if (!u8 || typeof createImageBitmap === "undefined") continue;
+      createImageBitmap(new Blob([u8], { type: "image/jpeg" })).then(function (bmp) {
+        if (b.classList.contains("on")) {
+          if (bmp.close) bmp.close();
+          return;
+        }
+        c.width = bmp.width;
+        c.height = bmp.height;
+        const ctx = c.getContext("2d");
+        if (ctx) ctx.drawImage(bmp, 0, 0);
+        if (bmp.close) bmp.close();
+      }).catch(function () {});
+    }
+  });
 }
 
 function paintMapThumbs() {

@@ -142,6 +142,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "host display map must paint a live thumbnail into the active monitor tile"
     );
     assert!(
+        js.contains("applyDisplayThumbs") && js.contains("\"thumbs\""),
+        "host display map must apply JPEG thumbs of unselected monitors"
+    );
+    assert!(
         js.contains("function syncFeatureUi") && js.contains("syncFeatureUi()"),
         "enabling LLM/AI/control must drive a UI reveal helper"
     );
@@ -222,6 +226,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("paintMapThumbs") && s.contains("mon-thumb"),
         "watch page display map must paint a live thumbnail into the active monitor tile"
+    );
+    assert!(
+        s.contains("applyDisplayThumbs") && s.contains("\"thumbs\""),
+        "watch page display map must apply JPEG thumbs of unselected monitors"
     );
     assert!(!s.contains("Add ?token="));
     assert!(

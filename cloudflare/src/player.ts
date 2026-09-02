@@ -550,6 +550,27 @@ export const PLAYER_HTML = `<!doctype html>
       };
     });
   }
+  function applyDisplayThumbs(items) {
+    var map = document.getElementById("display-map");
+    if (!map || map.style.display === "none") return;
+    (items || []).forEach(function (it) {
+      if (!it || !it.id || !it.data) return;
+      map.querySelectorAll(".mon").forEach(function (b) {
+        if (b.dataset.id !== it.id || b.classList.contains("on")) return;
+        var c = b.querySelector("canvas.mon-thumb");
+        if (!c) return;
+        var u8 = b64ToBytes(it.data);
+        if (!u8 || typeof createImageBitmap !== "function") return;
+        createImageBitmap(new Blob([u8], { type: "image/jpeg" })).then(function (bmp) {
+          if (b.classList.contains("on")) { if (bmp.close) bmp.close(); return; }
+          c.width = bmp.width; c.height = bmp.height;
+          var ctx = c.getContext("2d");
+          if (ctx) ctx.drawImage(bmp, 0, 0);
+          if (bmp.close) bmp.close();
+        }).catch(function () {});
+      });
+    });
+  }
   function paintMapThumbs() {
     var map = document.getElementById("display-map");
     if (!map || map.style.display === "none") return;
@@ -650,6 +671,7 @@ export const PLAYER_HTML = `<!doctype html>
         if (msg.mime === "image/png" && msg.data) applyClipboardPng(msg.data);
         else if (typeof msg.text === "string") applyClipboardText(msg.text);
       }
+      if (msg && msg.type === "thumbs") applyDisplayThumbs(msg.items);
       if (msg && msg.type === "file") handleFileMsg(msg);
     } catch (e) {}
   }

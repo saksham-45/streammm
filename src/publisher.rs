@@ -102,6 +102,9 @@ impl Publisher {
             if msg.contains("\"clipboard\"") {
                 latest.retain(|m| !m.contains("\"clipboard\""));
             }
+            if msg.contains("\"thumbs\"") {
+                latest.retain(|m| !m.contains("\"thumbs\""));
+            }
             if msg.contains("\"type\":\"file\"") {
                 // File blobs are transient; do not replay on publisher reconnect.
             } else {
