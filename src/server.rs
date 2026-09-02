@@ -32,6 +32,7 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::convert::Infallible;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -47,6 +48,36 @@ use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
+
+struct ChanWrite {
+    tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
+    buf: Vec<u8>,
+}
+
+impl ChanWrite {
+    fn flush_buf(&mut self) -> std::io::Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        let bytes = Bytes::from(std::mem::take(&mut self.buf));
+        self.tx
+            .blocking_send(Ok(bytes))
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
+    }
+}
+
+impl Write for ChanWrite {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(data);
+        if self.buf.len() >= 64 * 1024 {
+            self.flush_buf()?;
+        }
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.flush_buf()
+    }
+}
 
 const INDEX: &str = include_str!("../web/index.html");
 const APP_JS: &str = include_str!("../web/app.js");
@@ -1902,6 +1933,46 @@ async fn api_files_download(State(app): State<Arc<App>>, req: Request) -> Respon
             }
             res
         }
+        Err(e) if e == "not a file" => match app.files.folder_zip_at(&root, &path, &name) {
+            Ok(zip) => {
+                let disp = format!(
+                    "attachment; filename=\"{}\"",
+                    zip.download_name.replace('"', "")
+                );
+                let len = zip.size;
+                let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+                tokio::task::spawn_blocking(move || {
+                    let mut w = ChanWrite {
+                        tx: tx.clone(),
+                        buf: Vec::with_capacity(64 * 1024),
+                    };
+                    if let Err(err) = zip.write_to(&mut w) {
+                        let _ = tx.blocking_send(Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            err,
+                        )));
+                        return;
+                    }
+                    let _ = w.flush();
+                });
+                let mut res = Response::new(Body::from_stream(ReceiverStream::new(rx)));
+                res.headers_mut()
+                    .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
+                if let Ok(v) = HeaderValue::from_str(&disp) {
+                    res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+                }
+                if let Ok(v) = HeaderValue::from_str(&len.to_string()) {
+                    res.headers_mut().insert(header::CONTENT_LENGTH, v);
+                }
+                res
+            }
+            Err(e) if e == "file not found" || e == "not a folder" => {
+                json_err(StatusCode::NOT_FOUND, "file not found")
+            }
+            Err(e) if e == "folder too large" => json_err(StatusCode::CONFLICT, "folder too large"),
+            Err(e) if e == "file too large" => json_err(StatusCode::PAYLOAD_TOO_LARGE, "file too large"),
+            Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+        },
         Err(e) => json_err(StatusCode::NOT_FOUND, &e),
     }
 }

@@ -594,6 +594,14 @@ impl Inbox {
         self.emit_blob_at("inbox", "", name, emit)
     }
 
+    pub fn folder_zip_at(&self, root: &str, rel: &str, name: &str) -> Result<FolderZip, String> {
+        let path = self.join_under(root, rel, name)?;
+        if !path.is_dir() {
+            return Err("not a folder".into());
+        }
+        FolderZip::from_dir(&path)
+    }
+
     pub fn emit_blob_at<F: FnMut(String)>(
         &self,
         root: &str,
@@ -603,7 +611,8 @@ impl Inbox {
     ) -> Result<(), String> {
         let path = self.join_under(root, rel, name)?;
         if path.is_dir() {
-            return Err("not a file".into());
+            let zip = FolderZip::from_dir(&path)?;
+            return emit_zip_blob(&zip, emit);
         }
         let shown = path
             .file_name()
@@ -878,6 +887,359 @@ impl Inbox {
             }
             _ => vec![err_json("unknown file action")],
         }
+    }
+}
+
+pub fn folder_zip_name(name: &str) -> String {
+    format!("{name}.zip")
+}
+
+struct ZipMember {
+    name: String,
+    src: Option<PathBuf>,
+    crc: u32,
+    size: u32,
+}
+
+pub struct FolderZip {
+    pub download_name: String,
+    pub size: u64,
+    members: Vec<ZipMember>,
+}
+
+impl FolderZip {
+    fn from_dir(dir: &Path) -> Result<Self, String> {
+        let shown = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| "invalid file name".to_string())?;
+        let shown = sanitize_name(shown).ok_or_else(|| "invalid file name".to_string())?;
+        let mut members = Vec::new();
+        let mut n = 0usize;
+        let mut bytes = 0u64;
+        collect_zip_tree(dir, &shown, &mut members, &mut n, &mut bytes)?;
+        let size = zip_store_len(&members);
+        if size > MAX_FILE as u64 {
+            return Err("file too large".into());
+        }
+        Ok(Self {
+            download_name: folder_zip_name(&shown),
+            size,
+            members,
+        })
+    }
+
+    pub fn write_to<W: Write>(&self, w: &mut W) -> Result<(), String> {
+        let mut offset: u32 = 0;
+        let mut offsets = Vec::with_capacity(self.members.len());
+        for m in &self.members {
+            offsets.push(offset);
+            write_local(w, m)?;
+            offset = offset
+                .checked_add(30 + m.name.len() as u32 + m.size)
+                .ok_or_else(|| "file too large".to_string())?;
+        }
+        let cd_start = offset;
+        for (m, off) in self.members.iter().zip(offsets.into_iter()) {
+            write_central(w, m, off)?;
+            offset = offset
+                .checked_add(46 + m.name.len() as u32)
+                .ok_or_else(|| "file too large".to_string())?;
+        }
+        let cd_size = offset.saturating_sub(cd_start);
+        write_eocd(w, self.members.len() as u16, cd_size, cd_start)?;
+        w.flush().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+fn zip_store_len(members: &[ZipMember]) -> u64 {
+    let mut n = 22u64;
+    for m in members {
+        let name = m.name.len() as u64;
+        n = n.saturating_add(30 + name + u64::from(m.size));
+        n = n.saturating_add(46 + name);
+    }
+    n
+}
+
+fn collect_zip_tree(
+    dir: &Path,
+    prefix: &str,
+    out: &mut Vec<ZipMember>,
+    n: &mut usize,
+    bytes: &mut u64,
+) -> Result<(), String> {
+    out.push(ZipMember {
+        name: format!("{prefix}/"),
+        src: None,
+        crc: 0,
+        size: 0,
+    });
+    let rd = match fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return Ok(()),
+    };
+    let mut ents: Vec<_> = rd.flatten().collect();
+    ents.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    for ent in ents {
+        *n += 1;
+        if *n >= RM_MAX {
+            return Err("folder too large".into());
+        }
+        let name = ent.file_name().to_string_lossy().to_string();
+        if sanitize_name(&name).is_none() || name.ends_with(".part") {
+            continue;
+        }
+        let path = ent.path();
+        let meta = match fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            collect_zip_tree(&path, &format!("{prefix}/{name}"), out, n, bytes)?;
+        } else if meta.is_file() {
+            if meta.len() > MAX_FILE as u64 {
+                return Err("file too large".into());
+            }
+            *bytes = bytes.saturating_add(meta.len());
+            if *bytes > MAX_FILE as u64 {
+                return Err("file too large".into());
+            }
+            let (crc, size) = crc32_file(&path)?;
+            if u64::from(size) != meta.len() {
+                return Err("file changed".into());
+            }
+            out.push(ZipMember {
+                name: format!("{prefix}/{name}"),
+                src: Some(path),
+                crc,
+                size,
+            });
+        }
+    }
+    Ok(())
+}
+
+const CRC_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut crc = i as u32;
+        let mut j = 0;
+        while j < 8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB88320
+            } else {
+                crc >> 1
+            };
+            j += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+};
+
+fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
+    for &b in data {
+        crc = CRC_TABLE[((crc ^ b as u32) & 0xff) as usize] ^ (crc >> 8);
+    }
+    crc
+}
+
+#[cfg(test)]
+fn crc32_bytes(data: &[u8]) -> u32 {
+    !crc32_update(0xffffffff, data)
+}
+
+fn crc32_file(path: &Path) -> Result<(u32, u32), String> {
+    let mut f = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 65536];
+    let mut crc = 0xffffffffu32;
+    let mut size = 0u64;
+    loop {
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        size += n as u64;
+        if size > MAX_FILE as u64 {
+            return Err("file too large".into());
+        }
+        crc = crc32_update(crc, &buf[..n]);
+    }
+    Ok((!crc, size as u32))
+}
+
+fn write_u16<W: Write>(w: &mut W, v: u16) -> Result<(), String> {
+    w.write_all(&v.to_le_bytes()).map_err(|e| e.to_string())
+}
+
+fn write_u32<W: Write>(w: &mut W, v: u32) -> Result<(), String> {
+    w.write_all(&v.to_le_bytes()).map_err(|e| e.to_string())
+}
+
+fn write_local<W: Write>(w: &mut W, m: &ZipMember) -> Result<(), String> {
+    w.write_all(b"PK\x03\x04").map_err(|e| e.to_string())?;
+    write_u16(w, 20)?;
+    write_u16(w, 1 << 11)?;
+    write_u16(w, 0)?;
+    write_u16(w, 0)?;
+    write_u16(w, 0)?;
+    write_u32(w, m.crc)?;
+    write_u32(w, m.size)?;
+    write_u32(w, m.size)?;
+    write_u16(w, m.name.len() as u16)?;
+    write_u16(w, 0)?;
+    w.write_all(m.name.as_bytes()).map_err(|e| e.to_string())?;
+    if let Some(src) = &m.src {
+        copy_exact(w, src, m.size)?;
+    }
+    Ok(())
+}
+
+fn write_central<W: Write>(w: &mut W, m: &ZipMember, local_off: u32) -> Result<(), String> {
+    w.write_all(b"PK\x01\x02").map_err(|e| e.to_string())?;
+    write_u16(w, 20)?;
+    write_u16(w, 20)?;
+    write_u16(w, 1 << 11)?;
+    write_u16(w, 0)?;
+    write_u16(w, 0)?;
+    write_u16(w, 0)?;
+    write_u32(w, m.crc)?;
+    write_u32(w, m.size)?;
+    write_u32(w, m.size)?;
+    write_u16(w, m.name.len() as u16)?;
+    write_u16(w, 0)?;
+    write_u16(w, 0)?;
+    write_u16(w, 0)?;
+    write_u16(w, 0)?;
+    let ext = if m.name.ends_with('/') { 0x10 } else { 0 };
+    write_u32(w, ext)?;
+    write_u32(w, local_off)?;
+    w.write_all(m.name.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn write_eocd<W: Write>(w: &mut W, entries: u16, cd_size: u32, cd_off: u32) -> Result<(), String> {
+    w.write_all(b"PK\x05\x06").map_err(|e| e.to_string())?;
+    write_u16(w, 0)?;
+    write_u16(w, 0)?;
+    write_u16(w, entries)?;
+    write_u16(w, entries)?;
+    write_u32(w, cd_size)?;
+    write_u32(w, cd_off)?;
+    write_u16(w, 0)?;
+    Ok(())
+}
+
+fn copy_exact<W: Write>(w: &mut W, path: &Path, expected: u32) -> Result<(), String> {
+    let mut f = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 65536];
+    let mut left = u64::from(expected);
+    loop {
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        if n as u64 > left {
+            return Err("file changed".into());
+        }
+        w.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        left -= n as u64;
+    }
+    if left != 0 {
+        return Err("file changed".into());
+    }
+    Ok(())
+}
+
+fn emit_zip_blob<F: FnMut(String)>(zip: &FolderZip, mut emit: F) -> Result<(), String> {
+    let shown = &zip.download_name;
+    let size = zip.size as usize;
+    if size <= MAX_CHUNK {
+        let mut buf = Vec::with_capacity(size);
+        zip.write_to(&mut buf)?;
+        emit(json!({
+            "type": "file",
+            "action": "blob",
+            "name": shown,
+            "size": buf.len(),
+            "data": encode_b64(&buf)
+        })
+        .to_string());
+        return Ok(());
+    }
+    emit(json!({
+        "type": "file",
+        "action": "blob-begin",
+        "name": shown,
+        "size": size
+    })
+    .to_string());
+    {
+        let mut chunker = BlobChunker {
+            emit: &mut emit,
+            name: shown,
+            buf: Vec::with_capacity(MAX_CHUNK),
+        };
+        zip.write_to(&mut chunker)?;
+        chunker.flush().map_err(|e| e.to_string())?;
+    }
+    emit(json!({"type":"file","action":"blob-end","name":shown}).to_string());
+    Ok(())
+}
+
+struct BlobChunker<'a, F: FnMut(String)> {
+    emit: &'a mut F,
+    name: &'a str,
+    buf: Vec<u8>,
+}
+
+impl<'a, F: FnMut(String)> BlobChunker<'a, F> {
+    fn emit_buf(&mut self) {
+        if self.buf.is_empty() {
+            return;
+        }
+        let data = encode_b64(&self.buf);
+        self.buf.clear();
+        (self.emit)(
+            json!({
+                "type": "file",
+                "action": "blob-chunk",
+                "name": self.name,
+                "data": data
+            })
+            .to_string(),
+        );
+    }
+}
+
+impl<'a, F: FnMut(String)> Write for BlobChunker<'a, F> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut rest = buf;
+        while !rest.is_empty() {
+            if self.buf.len() >= MAX_CHUNK {
+                self.emit_buf();
+            }
+            let space = MAX_CHUNK.saturating_sub(self.buf.len());
+            if space == 0 {
+                continue;
+            }
+            let n = rest.len().min(space);
+            self.buf.extend_from_slice(&rest[..n]);
+            rest = &rest[n..];
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.emit_buf();
+        Ok(())
     }
 }
 
@@ -1385,5 +1747,81 @@ mod tests {
         assert_eq!(msgs, blob_replies("s.bin", &data));
         assert!(msgs[0].contains("blob-begin"));
         assert!(msgs.last().unwrap().contains("blob-end"));
+    }
+
+    #[test]
+    fn crc32_matches_ieee() {
+        assert_eq!(crc32_bytes(b""), 0);
+        assert_eq!(crc32_bytes(b"123456789"), 0xCBF43926);
+    }
+
+    fn store_zip_file<'a>(zip: &'a [u8], want: &str) -> Option<&'a [u8]> {
+        let mut i = 0;
+        while i + 30 <= zip.len() {
+            if &zip[i..i + 4] != b"PK\x03\x04" {
+                break;
+            }
+            let method = u16::from_le_bytes(zip[i + 8..i + 10].try_into().ok()?);
+            let csize = u32::from_le_bytes(zip[i + 18..i + 22].try_into().ok()?) as usize;
+            let nlen = u16::from_le_bytes(zip[i + 26..i + 28].try_into().ok()?) as usize;
+            let elen = u16::from_le_bytes(zip[i + 28..i + 30].try_into().ok()?) as usize;
+            let name_at = i + 30;
+            let data_at = name_at + nlen + elen;
+            if name_at + nlen > zip.len() || data_at + csize > zip.len() {
+                return None;
+            }
+            let name = std::str::from_utf8(&zip[name_at..name_at + nlen]).ok()?;
+            if name == want && method == 0 {
+                return Some(&zip[data_at..data_at + csize]);
+            }
+            i = data_at + csize;
+        }
+        None
+    }
+
+    #[test]
+    fn folder_get_emits_store_zip() {
+        let (_dir, inbox) = tmp_inbox();
+        inbox.mkdir_at("inbox", "", "Pack").unwrap();
+        inbox
+            .put_bytes_at("inbox", "Pack", "note.txt", b"hello-zip")
+            .unwrap();
+        inbox.mkdir_at("inbox", "Pack", "Sub").unwrap();
+        inbox
+            .put_bytes_at("inbox", "Pack/Sub", "inner.bin", b"AB")
+            .unwrap();
+        let zip = inbox.folder_zip_at("inbox", "", "Pack").unwrap();
+        assert_eq!(zip.download_name, "Pack.zip");
+        let mut bytes = Vec::new();
+        zip.write_to(&mut bytes).unwrap();
+        assert_eq!(bytes.len() as u64, zip.size);
+        assert_eq!(&bytes[..4], b"PK\x03\x04");
+        assert_eq!(&bytes[bytes.len() - 22..bytes.len() - 18], b"PK\x05\x06");
+        assert_eq!(store_zip_file(&bytes, "Pack/note.txt"), Some(&b"hello-zip"[..]));
+        assert_eq!(store_zip_file(&bytes, "Pack/Sub/inner.bin"), Some(&b"AB"[..]));
+        assert!(store_zip_file(&bytes, "Pack/Sub/").is_some());
+
+        let mut msgs = Vec::new();
+        inbox.emit_blob_at("inbox", "", "Pack", |m| msgs.push(m)).unwrap();
+        assert!(msgs[0].contains("\"name\":\"Pack.zip\""), "{}", msgs[0]);
+        assert!(msgs[0].contains("blob"), "{}", msgs[0]);
+        assert!(msgs[0].contains(&encode_b64(&bytes)), "{}", msgs[0]);
+        assert!(inbox.readable_path_at("inbox", "", "Pack").is_err());
+    }
+
+    #[test]
+    fn empty_folder_zip_is_valid() {
+        let (_dir, inbox) = tmp_inbox();
+        inbox.mkdir_at("inbox", "", "Empty").unwrap();
+        let zip = inbox.folder_zip_at("inbox", "", "Empty").unwrap();
+        let mut bytes = Vec::new();
+        zip.write_to(&mut bytes).unwrap();
+        assert_eq!(store_zip_file(&bytes, "Empty/"), Some(&b""[..]));
+        assert!(inbox.folder_zip_at("inbox", "", "missing").is_err());
+        inbox.put_bytes("file.txt", b"x").unwrap();
+        assert_eq!(
+            inbox.folder_zip_at("inbox", "", "file.txt").err().as_deref(),
+            Some("not a folder")
+        );
     }
 }

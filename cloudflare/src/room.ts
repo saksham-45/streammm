@@ -428,6 +428,19 @@ export class StreamRoom extends DurableObject<Env> {
     if (from === "viewer") this.sendPublisher(msg);
   }
 
+  private armFileDlTimer(): void {
+    const dl = this.fileDl;
+    if (!dl) return;
+    clearTimeout(dl.timer);
+    const writer = dl.writer;
+    dl.timer = setTimeout(() => {
+      if (this.fileDl && this.fileDl.writer === writer) {
+        void writer.abort("timeout");
+        this.fileDl = null;
+      }
+    }, 20_000);
+  }
+
   private async feedFileDownload(v: {
     action?: string;
     data?: string;
@@ -442,6 +455,10 @@ export class StreamRoom extends DurableObject<Env> {
         await dl.writer.abort(v.error || "file");
         return;
       }
+      if (v.action === "blob-begin") {
+        this.armFileDlTimer();
+        return;
+      }
       if (v.action === "blob" && typeof v.data === "string") {
         await dl.writer.write(b64ToU8(v.data));
         clearTimeout(dl.timer);
@@ -450,6 +467,7 @@ export class StreamRoom extends DurableObject<Env> {
         return;
       }
       if (v.action === "blob-chunk" && typeof v.data === "string") {
+        this.armFileDlTimer();
         await dl.writer.write(b64ToU8(v.data));
         return;
       }

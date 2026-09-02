@@ -1347,6 +1347,38 @@ async fn files_put_list_download_and_reject_traversal() {
         .unwrap();
     assert_eq!(clash.status(), StatusCode::CONFLICT);
 
+    app.files.mkdir_at("inbox", "", "Pack").unwrap();
+    app.files
+        .put_bytes_at("inbox", "Pack", "note.txt", b"hello-zip")
+        .unwrap();
+    let zip_dl = router
+        .clone()
+        .oneshot(
+            Request::get("/api/files/download?name=Pack")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(zip_dl.status(), StatusCode::OK);
+    assert_eq!(
+        zip_dl.headers().get("content-type").and_then(|v| v.to_str().ok()),
+        Some("application/zip")
+    );
+    let disp = zip_dl
+        .headers()
+        .get("content-disposition")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(disp.contains("Pack.zip"), "{disp}");
+    let zip_bytes = zip_dl.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&zip_bytes[..4], b"PK\x03\x04");
+    assert!(
+        zip_bytes.windows(b"hello-zip".len()).any(|w| w == b"hello-zip"),
+        "zip must contain the folder file"
+    );
+
     let copied = router
         .clone()
         .oneshot(

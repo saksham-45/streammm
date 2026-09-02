@@ -883,6 +883,11 @@ function renderFileList(files, root, path) {
       cutDir.textContent = "Cut";
       cutDir.addEventListener("click", function () { clipFile("move", f.name); });
       li.appendChild(cutDir);
+      const getDir = document.createElement("a");
+      getDir.href = url("/api/files/download?name=" + encodeURIComponent(f.name) + "&" + fileLocQuery());
+      getDir.textContent = "Get";
+      getDir.download = f.name + ".zip";
+      li.appendChild(getDir);
       const delDir = document.createElement("button");
       delDir.type = "button";
       delDir.textContent = "Delete";

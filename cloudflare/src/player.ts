@@ -912,28 +912,29 @@ export const PLAYER_HTML = `<!doctype html>
       if (out) out.textContent = "deleting " + name + "…";
     }
   }
-  function startInboxGet(name, size) {
+  function startInboxGet(name, size, saveAs) {
     var out = document.getElementById("file-out");
+    var save = saveAs || name;
     function sendGet() {
       sendFileJson({ type: "file", action: "get", name: name, root: fileRoot, path: filePath });
     }
     if (typeof window.showSaveFilePicker === "function") {
-      window.showSaveFilePicker({ suggestedName: name || "file" }).then(function (handle) {
+      window.showSaveFilePicker({ suggestedName: save || "file" }).then(function (handle) {
         return handle.createWritable();
       }).then(function (writable) {
-        incomingFiles[name] = { writable: writable, written: 0, size: size || 0, queue: Promise.resolve() };
-        if (out) out.textContent = "saving " + name + "…";
+        incomingFiles[save] = { writable: writable, written: 0, size: size || 0, queue: Promise.resolve() };
+        if (out) out.textContent = "saving " + save + "…";
         sendGet();
       }).catch(function () {});
       return;
     }
     var a = document.createElement("a");
     a.href = "/api/files/download?name=" + encodeURIComponent(name) + "&" + fileLocQuery();
-    a.download = name || "file";
+    a.download = save || "file";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    if (out) out.textContent = "saving " + name + "…";
+    if (out) out.textContent = "saving " + save + "…";
   }
   function renderFileList(files, root, path) {
     if (root) fileRoot = root;
@@ -981,6 +982,11 @@ export const PLAYER_HTML = `<!doctype html>
         cutDir.textContent = "Cut";
         cutDir.addEventListener("click", function () { clipFile("move", f.name); });
         li.appendChild(cutDir);
+        var getDir = document.createElement("button");
+        getDir.type = "button";
+        getDir.textContent = "Get";
+        getDir.addEventListener("click", function () { startInboxGet(f.name, 0, f.name + ".zip"); });
+        li.appendChild(getDir);
         var delDir = document.createElement("button");
         delDir.type = "button";
         delDir.textContent = "Delete";
