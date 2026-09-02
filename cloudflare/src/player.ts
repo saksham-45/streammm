@@ -657,8 +657,13 @@ export const PLAYER_HTML = `<!doctype html>
         if (!c) return;
         var u8 = b64ToBytes(it.data);
         if (!u8 || typeof createImageBitmap !== "function") return;
+        var seq = (Number(c.dataset.thumbSeq) || 0) + 1;
+        c.dataset.thumbSeq = String(seq);
         createImageBitmap(new Blob([u8], { type: "image/jpeg" })).then(function (bmp) {
-          if (b.classList.contains("on")) { if (bmp.close) bmp.close(); return; }
+          if (c.dataset.thumbSeq !== String(seq) || b.classList.contains("on")) {
+            if (bmp.close) bmp.close();
+            return;
+          }
           c.width = bmp.width; c.height = bmp.height;
           var ctx = c.getContext("2d");
           if (ctx) ctx.drawImage(bmp, 0, 0);
@@ -966,7 +971,11 @@ export const PLAYER_HTML = `<!doctype html>
     startMse();
     refreshLlm();
     setInterval(refreshLlm, 4000);
-    setInterval(paintMapThumbs, 250);
+    (function loopMapThumbs() {
+      paintMapThumbs();
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(loopMapThumbs);
+      else setTimeout(loopMapThumbs, 33);
+    })();
   }
 
   document.getElementById("pin-form").addEventListener("submit", function (e) {

@@ -77,7 +77,9 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "origin UI must paste PNG clipboard through"
     );
     assert!(
-        js.contains("32 * 1024 * 1024") && js.contains("pasteImageFile") && js.contains("phase: \"begin\""),
+        js.contains("32 * 1024 * 1024")
+            && js.contains("pasteImageFile")
+            && js.contains("phase: \"begin\""),
         "origin UI must chunk clipboard PNGs up to 32 MB"
     );
     assert!(js.contains("streamaid_viewer") || js.contains("hasViewerSession"));
@@ -142,8 +144,16 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "host display map must paint a live thumbnail into the active monitor tile"
     );
     assert!(
+        js.contains("loopMapThumbs") && js.contains("requestAnimationFrame"),
+        "host active map tile must paint every animation frame, not a 250ms still"
+    );
+    assert!(
         js.contains("applyDisplayThumbs") && js.contains("\"thumbs\""),
         "host display map must apply JPEG thumbs of unselected monitors"
+    );
+    assert!(
+        js.contains("thumbSeq"),
+        "host inactive thumbs must drop stale JPEG decodes so live fps does not paint out of order"
     );
     assert!(
         js.contains("function syncFeatureUi") && js.contains("syncFeatureUi()"),
@@ -196,7 +206,9 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page must sync PNG clipboard"
     );
     assert!(
-        s.contains("32 * 1024 * 1024") && s.contains("pasteImageFile") && s.contains("phase: \"begin\""),
+        s.contains("32 * 1024 * 1024")
+            && s.contains("pasteImageFile")
+            && s.contains("phase: \"begin\""),
         "watch page must chunk clipboard PNGs up to 32 MB"
     );
     assert!(
@@ -240,8 +252,16 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page display map must paint a live thumbnail into the active monitor tile"
     );
     assert!(
+        s.contains("loopMapThumbs") && s.contains("requestAnimationFrame"),
+        "watch page active map tile must paint every animation frame, not a 250ms still"
+    );
+    assert!(
         s.contains("applyDisplayThumbs") && s.contains("\"thumbs\""),
         "watch page display map must apply JPEG thumbs of unselected monitors"
+    );
+    assert!(
+        s.contains("thumbSeq"),
+        "watch page inactive thumbs must drop stale JPEG decodes so live fps does not paint out of order"
     );
     assert!(!s.contains("Add ?token="));
     assert!(
@@ -289,7 +309,10 @@ console.log("token-ok");
         ))
         .status()
         .expect("node");
-    assert!(status.success(), "currentToken/url must drive live query+cookie token");
+    assert!(
+        status.success(),
+        "currentToken/url must drive live query+cookie token"
+    );
 }
 
 #[test]
@@ -357,7 +380,10 @@ console.log("map-ok");
         ))
         .status()
         .expect("node");
-    assert!(status.success(), "display map layout must place screens by global bounds");
+    assert!(
+        status.success(),
+        "display map layout must place screens by global bounds"
+    );
 }
 
 #[test]

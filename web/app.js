@@ -914,8 +914,10 @@ function applyDisplayThumbs(items) {
       if (!c) continue;
       const u8 = b64ToBytes(it.data);
       if (!u8 || typeof createImageBitmap === "undefined") continue;
+      const seq = (Number(c.dataset.thumbSeq) || 0) + 1;
+      c.dataset.thumbSeq = String(seq);
       createImageBitmap(new Blob([u8], { type: "image/jpeg" })).then(function (bmp) {
-        if (b.classList.contains("on")) {
+        if (c.dataset.thumbSeq !== String(seq) || b.classList.contains("on")) {
           if (bmp.close) bmp.close();
           return;
         }
@@ -1460,7 +1462,11 @@ function onReady() {
     setInterval(refreshEdgeAnalysis, 4000);
   });
   connectEvents();
-  setInterval(paintMapThumbs, 250);
+  (function loopMapThumbs() {
+    paintMapThumbs();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(loopMapThumbs);
+    else setTimeout(loopMapThumbs, 33);
+  })();
   api("/api/status").then(function (res) { return res.json(); }).then(renderStatus).catch(function () {});
 }
 

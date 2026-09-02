@@ -102,14 +102,13 @@ impl Publisher {
             if msg.contains("\"clipboard\"") {
                 latest.retain(|m| !m.contains("\"clipboard\""));
             }
-            if msg.contains("\"thumbs\"") {
-                latest.retain(|m| !m.contains("\"thumbs\""));
-            }
             let chunked_clip = msg.contains("\"clipboard\"")
                 && (msg.contains("\"action\":\"begin\"")
                     || msg.contains("\"action\":\"chunk\"")
                     || msg.contains("\"action\":\"end\""));
-            if msg.contains("\"type\":\"file\"") || chunked_clip {
+            if msg.contains("\"thumbs\"") && crate::thumbs::merge_thumbs_latest(&mut latest, &msg) {
+                // Per-display live JPEGs union into one snapshot for joiners.
+            } else if msg.contains("\"type\":\"file\"") || chunked_clip {
                 // File blobs and chunked clipboard PNGs are transient.
             } else {
                 latest.push(msg.clone());
@@ -265,6 +264,27 @@ mod tests {
         assert!(u.as_str().contains("token=secret"));
         let u = publish_url_with_token("wss://example.com/publish?token=secret", "other").unwrap();
         assert_eq!(u.query_pairs().filter(|(k, _)| k == "token").count(), 1);
+    }
+
+    #[test]
+    fn thumbs_snapshot_unions_per_display_frames() {
+        let jpeg = b"\xff\xd8\xff\xd9".to_vec();
+        let mut latest = Vec::new();
+        assert!(crate::thumbs::merge_thumbs_latest(
+            &mut latest,
+            &crate::thumbs::thumbs_json(&[("2:".into(), jpeg.clone())])
+        ));
+        assert!(crate::thumbs::merge_thumbs_latest(
+            &mut latest,
+            &crate::thumbs::thumbs_json(&[("3:".into(), jpeg)])
+        ));
+        assert_eq!(
+            latest.len(),
+            1,
+            "joiners must get one thumbs snapshot, not a stack"
+        );
+        assert!(latest[0].contains("2:"));
+        assert!(latest[0].contains("3:"));
     }
 
     #[test]

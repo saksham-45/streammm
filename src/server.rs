@@ -536,19 +536,16 @@ impl App {
         self.publisher.start();
         crate::snapshot::spawn(self.hub.clone());
         let app = self.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                let current = crate::capture::resolve_input(&app.cfg.lock().capture.input);
-                let items = crate::thumbs::grab_inactive(&current).await;
-                if items.is_empty() {
-                    continue;
+        crate::thumbs::spawn_live(
+            move || crate::capture::resolve_input(&app.cfg.lock().capture.input),
+            {
+                let app = self.clone();
+                move |msg: String| {
+                    app.publisher.push_wire(msg.clone());
+                    let _ = app.clip_tx.send(msg);
                 }
-                let msg = crate::thumbs::thumbs_json(&items);
-                app.publisher.push_wire(msg.clone());
-                let _ = app.clip_tx.send(msg);
-            }
-        });
+            },
+        );
         let app = self.clone();
         tokio::spawn(async move {
             loop {
