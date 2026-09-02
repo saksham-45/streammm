@@ -225,6 +225,8 @@ export class StreamRoom extends DurableObject<Env> {
           }
         }
       }
+      await this.hydrateAuth();
+      this.broadcastViewers(this.flagsJson());
     } else {
       await this.hydrateAuth();
       if (this.lastInit) {
@@ -520,7 +522,25 @@ export class StreamRoom extends DurableObject<Env> {
     }
   }
 
-  private flagsJson(): string {
+  private isPublisher(ws: WebSocket): boolean {
+    try {
+      const att = ws.deserializeAttachment() as Attachment | null;
+      return att?.role === "publisher";
+    } catch {
+      return false;
+    }
+  }
+
+  private publisherLive(except?: WebSocket): boolean {
+    for (const peer of this.ctx.getWebSockets()) {
+      if (except && peer === except) continue;
+      if (peer.readyState !== WebSocket.OPEN) continue;
+      if (this.isPublisher(peer)) return true;
+    }
+    return false;
+  }
+
+  private flagsJson(except?: WebSocket): string {
     return JSON.stringify({
       type: "flags",
       control: this.flags.control,
@@ -531,6 +551,7 @@ export class StreamRoom extends DurableObject<Env> {
       display: this.display,
       displays: this.displays,
       macs: this.flags.macs,
+      publisher: this.publisherLive(except),
     });
   }
 
@@ -555,21 +576,31 @@ export class StreamRoom extends DurableObject<Env> {
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     this.dropViewerController(ws);
+    const wasPublisher = this.isPublisher(ws);
     const safe = code === 1000 || (code >= 3000 && code <= 4999) ? code : 1000;
     try {
       ws.close(safe, reason);
     } catch {
       /* ignore */
     }
+    if (wasPublisher) {
+      await this.hydrateAuth();
+      this.broadcastViewers(this.flagsJson(ws));
+    }
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     console.error(JSON.stringify({ message: "websocket error", error: String(error) }));
     this.dropViewerController(ws);
+    const wasPublisher = this.isPublisher(ws);
     try {
       ws.close(1011, "error");
     } catch {
       /* ignore */
+    }
+    if (wasPublisher) {
+      await this.hydrateAuth();
+      this.broadcastViewers(this.flagsJson(ws));
     }
   }
 
@@ -657,8 +688,11 @@ export class StreamRoom extends DurableObject<Env> {
             enabled: this.flags.control,
             ai_enabled: this.flags.ai,
             audio: this.flags.audio,
+            voice: this.flags.voice,
             display: this.display,
             displays: this.displays,
+            macs: this.flags.macs,
+            publisher: this.publisherLive(),
           },
         },
         { headers },

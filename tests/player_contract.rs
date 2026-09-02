@@ -479,6 +479,14 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page must reveal Copy MAC from host flags for Wake-on-LAN"
     );
     assert!(
+        s.contains("id=\"host-offline\"")
+            && s.contains("function syncHostPresence")
+            && s.contains("ctl.publisher")
+            && s.contains("host offline")
+            && s.contains("closed MacBook lid"),
+        "watch page must show host offline and reveal Wake-on-LAN when the publisher is down"
+    );
+    assert!(
         s.contains("id=\"rec\"")
             && s.contains("function startWatchRecord")
             && s.contains("function watchRecordMime")

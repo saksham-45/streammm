@@ -24,6 +24,7 @@ export const PLAYER_HTML = `<!doctype html>
   #unmute { display: none; }
   #talk { display: none; }
   #wol-copy { display: none; }
+  #host-offline { display: none; padding: 8px 16px; background: #2a1818; border-bottom: 1px solid #633; color: #f88; font-size: 13px; line-height: 1.4; }
   #talk.on { border-color: var(--accent); color: var(--accent); }
   #rec.on { border-color: #f88; color: #f88; }
   #fs.on { border-color: var(--accent); color: var(--accent); }
@@ -108,6 +109,7 @@ export const PLAYER_HTML = `<!doctype html>
   <div id="displays"></div>
   <div id="display-map" style="display:none"></div>
 </header>
+<div id="host-offline">Host is offline. Waiting for the origin to publish again.</div>
 <div id="keys-bar" role="toolbar" aria-label="Send keys the browser would steal">
   <span class="keys-label">Send</span>
   <button type="button" data-key="Escape">Esc</button>
@@ -272,12 +274,26 @@ export const PLAYER_HTML = `<!doctype html>
     sel.addEventListener("change", function () { sendQuality(sel.value); });
   })();
   var lastWolMacs = [];
+  var hostLive = null;
+  function syncHostPresence() {
+    var banner = document.getElementById("host-offline");
+    var offline = hostLive === false;
+    if (banner) {
+      banner.style.display = offline ? "block" : "none";
+      banner.textContent = lastWolMacs.length
+        ? "Host is offline. Copy MAC and send a Wake-on-LAN packet from another device on the same LAN. A closed MacBook lid often will not wake."
+        : "Host is offline. Waiting for the origin to publish again.";
+    }
+    var copy = document.getElementById("wol-copy");
+    if (copy) copy.style.display = lastWolMacs.length ? "inline-block" : "none";
+    if (offline) pill.textContent = "host offline";
+    else if (hostLive) pill.textContent = jpegMode ? "live (jpeg)" : "live";
+  }
   function fillWolMacs(macs) {
     if (!Array.isArray(macs)) return;
     if (!macs.length && lastWolMacs.length) return;
     lastWolMacs = macs.filter(Boolean);
-    var btn = document.getElementById("wol-copy");
-    if (btn) btn.style.display = lastWolMacs.length ? "inline-block" : "none";
+    syncHostPresence();
   }
   function copyWolMac() {
     var t = lastWolMacs.join(", ");
@@ -1063,6 +1079,8 @@ export const PLAYER_HTML = `<!doctype html>
     if (controlOn) sendFileJson({ type: "file", action: "list" });
     renderDisplays(ctl && ctl.displays, ctl && (ctl.display || ctl.input));
     fillWolMacs(ctl && ctl.macs);
+    if (ctl && typeof ctl.publisher === "boolean") hostLive = ctl.publisher;
+    syncHostPresence();
     if (nextAudio !== audioOn) {
       audioOn = nextAudio;
       if (ms) startMse();
@@ -1220,6 +1238,7 @@ export const PLAYER_HTML = `<!doctype html>
           display: msg.display,
           displays: msg.displays,
           macs: msg.macs,
+          publisher: msg.publisher,
         });
         return;
       }
@@ -1254,7 +1273,9 @@ export const PLAYER_HTML = `<!doctype html>
     ws = new WebSocket(wsUrl());
     ws.binaryType = "arraybuffer";
     ws.onopen = function () {
-      pill.textContent = jpegMode ? "live (jpeg)" : "live";
+      if (hostLive === false) pill.textContent = "host offline";
+      else if (hostLive) pill.textContent = jpegMode ? "live (jpeg)" : "live";
+      else pill.textContent = "waiting for host";
       if (ws._ping) clearInterval(ws._ping);
       ws._ping = setInterval(function () {
         if (ws && ws.readyState === 1) { try { ws.send("ping"); } catch (e) {} }

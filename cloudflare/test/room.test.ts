@@ -575,6 +575,99 @@ describe("StreamRoom", () => {
     view.close();
   });
 
+  it("tells a joining watcher whether the publisher is live", async () => {
+    const { pub, session } = await viewerSession("pub-live");
+    const view = await openWatch(session, "pub-live");
+    const live = await new Promise<{ publisher?: boolean }>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("no live publisher flag")), 3000);
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data !== "string") return;
+        try {
+          const m = JSON.parse(ev.data) as { type?: string; publisher?: boolean };
+          if (m.type === "flags" && m.publisher === true) {
+            clearTimeout(t);
+            resolve(m);
+          }
+        } catch {
+          /* ignore */
+        }
+      });
+    });
+    expect(live.publisher).toBe(true);
+    pub.close();
+    view.close();
+  });
+
+  it("join after publisher drop is host-offline, then live again on republish", async () => {
+    const { pub, session } = await viewerSession("pub-down");
+    pub.send(JSON.stringify({ type: "flags", control: true, macs: ["aa:bb:cc:dd:ee:ff"] }));
+    await new Promise((r) => setTimeout(r, 80));
+    pub.close();
+    await new Promise((r) => setTimeout(r, 80));
+    const view = await openWatch(session, "pub-down");
+    const offline = await new Promise<{ publisher?: boolean; macs?: string[] }>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("no offline publisher flag")), 3000);
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data !== "string") return;
+        try {
+          const m = JSON.parse(ev.data) as { type?: string; publisher?: boolean; macs?: string[] };
+          if (m.type === "flags" && m.publisher === false) {
+            clearTimeout(t);
+            resolve(m);
+          }
+        } catch {
+          /* ignore */
+        }
+      });
+    });
+    expect(offline.publisher).toBe(false);
+    expect(offline.macs).toEqual(["aa:bb:cc:dd:ee:ff"]);
+    const back = new Promise<{ publisher?: boolean }>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("no republish flag")), 3000);
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data !== "string") return;
+        try {
+          const m = JSON.parse(ev.data) as { type?: string; publisher?: boolean };
+          if (m.type === "flags" && m.publisher === true) {
+            clearTimeout(t);
+            resolve(m);
+          }
+        } catch {
+          /* ignore */
+        }
+      });
+    });
+    const pub2 = await openPublish("pub-down");
+    expect((await back).publisher).toBe(true);
+    pub2.close();
+    view.close();
+  });
+
+  it("fans publisher-down flags to a live watcher", async () => {
+    const { pub, session } = await viewerSession("pub-fan");
+    const view = await openWatch(session, "pub-fan");
+    await new Promise((r) => setTimeout(r, 50));
+    const gone = new Promise<{ publisher?: boolean }>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("no publisher-down fan-out")), 3000);
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data !== "string") return;
+        try {
+          const m = JSON.parse(ev.data) as { type?: string; publisher?: boolean };
+          if (m.type === "flags" && m.publisher === false) {
+            clearTimeout(t);
+            resolve(m);
+          }
+        } catch {
+          /* ignore */
+        }
+      });
+    });
+    pub.close();
+    const msg = await gone;
+    expect(msg.publisher).toBe(false);
+    view.close();
+  });
+
   it("computer-use is 403 when AI disabled and forwards when enabled", async () => {
     const { pub, session } = await viewerSession("ai");
     const off = await SELF.fetch(`https://example.com/api/computer-use?session=${session}&room=ai`, {
