@@ -19,6 +19,26 @@
 </header>
 <div id="analysis-banner" class="hidden">ANALYSIS ACTIVE</div>
 <div id="session-banner" class="hidden"><span id="session-banner-label">REMOTE SESSION</span> <button type="button" id="session-end">End</button></div>
+<div id="keys-bar" class="hidden" role="toolbar" aria-label="Send keys the browser would steal">
+  <span class="keys-label">Send</span>
+  <button type="button" data-key="Escape">Esc</button>
+  <button type="button" data-key="Tab">Tab</button>
+  <button type="button" data-key="Enter">Enter</button>
+  <button type="button" data-key="Backspace">Bksp</button>
+  <button type="button" data-key="Delete">Del</button>
+  <button type="button" data-key="Tab" data-mods="Meta">⌘Tab</button>
+  <button type="button" data-key="`" data-mods="Meta">⌘`</button>
+  <button type="button" data-key="Space" data-mods="Meta">⌘Space</button>
+  <button type="button" data-key="w" data-mods="Meta">⌘W</button>
+  <button type="button" data-key="q" data-mods="Meta">⌘Q</button>
+  <button type="button" data-key="l" data-mods="Meta">⌘L</button>
+  <button type="button" data-key="Tab" data-mods="Alt">Alt+Tab</button>
+  <button type="button" data-key="F4" data-mods="Alt">Alt+F4</button>
+  <button type="button" data-key="Delete" data-mods="Control,Alt">Ctrl+Alt+Del</button>
+  <button type="button" data-key="q" data-mods="Control,Meta">Lock</button>
+  <button type="button" data-key="Meta">⌘/Win</button>
+  <button type="button" data-key="F11">F11</button>
+</div>
 <main>
   <section id="stream-pane">
     <img id="stream-img" class="hidden" alt="screen stream">
@@ -111,6 +131,7 @@
   <label>Cloudflare watch URL <input id="cfg-watch" type="text" placeholder="wss://…/watch (optional)"></label>
   <label><input id="cfg-control-enabled" type="checkbox"> Allow remote computer use (kill switch off = blocked)</label>
   <p id="ctl-hint" class="cfg-hint hidden">Watchers can click (left/right/middle), drag, scroll, type, paste clipboard text or files, and drop files into the host inbox. Incoming files appear on the Desktop and on this Mac's pasteboard as Finder files (Cmd-V). Copy on this Mac (text, PNG, and Finder files) is pushed to the watcher automatically. Uncheck to kill remote input immediately after Save.</p>
+  <p id="keys-hint" class="cfg-hint hidden">A Send-keys bar appears while remote control is on. Use it for shortcuts the browser would steal (⌘Tab, ⌘W, ⌘Q, Ctrl+Alt+Del, Lock). Same injector the AI uses.</p>
   <label id="block-local-fields" class="hidden"><input id="cfg-block-local" type="checkbox"> Block local input during remote session</label>
   <p id="block-hint" class="cfg-hint hidden">While a watcher is driving, this Mac's keyboard and mouse are locked (remote inject still works). Press ⌘⇧Esc to reclaim — the End button will not receive clicks. Requires Accessibility.</p>
   <label><input id="cfg-ai-enabled" type="checkbox"> Allow AI computer use</label>

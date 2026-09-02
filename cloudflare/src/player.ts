@@ -66,6 +66,9 @@ export const PLAYER_HTML = `<!doctype html>
   #file-out { font-size: 12px; color: var(--muted); min-height: 1.2em; }
   #file-offer { display: none; border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 13px; }
   #file-offer-save { margin-left: 8px; }
+  #keys-bar { display: none; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--line); background: #141414; }
+  #keys-bar .keys-label { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; margin-right: 4px; }
+  #keys-bar button { padding: 4px 8px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -76,6 +79,26 @@ export const PLAYER_HTML = `<!doctype html>
   <div id="displays"></div>
   <div id="display-map" style="display:none"></div>
 </header>
+<div id="keys-bar" role="toolbar" aria-label="Send keys the browser would steal">
+  <span class="keys-label">Send</span>
+  <button type="button" data-key="Escape">Esc</button>
+  <button type="button" data-key="Tab">Tab</button>
+  <button type="button" data-key="Enter">Enter</button>
+  <button type="button" data-key="Backspace">Bksp</button>
+  <button type="button" data-key="Delete">Del</button>
+  <button type="button" data-key="Tab" data-mods="Meta">⌘Tab</button>
+  <button type="button" data-key="\`" data-mods="Meta">⌘\`</button>
+  <button type="button" data-key="Space" data-mods="Meta">⌘Space</button>
+  <button type="button" data-key="w" data-mods="Meta">⌘W</button>
+  <button type="button" data-key="q" data-mods="Meta">⌘Q</button>
+  <button type="button" data-key="l" data-mods="Meta">⌘L</button>
+  <button type="button" data-key="Tab" data-mods="Alt">Alt+Tab</button>
+  <button type="button" data-key="F4" data-mods="Alt">Alt+F4</button>
+  <button type="button" data-key="Delete" data-mods="Control,Alt">Ctrl+Alt+Del</button>
+  <button type="button" data-key="q" data-mods="Control,Meta">Lock</button>
+  <button type="button" data-key="Meta">⌘/Win</button>
+  <button type="button" data-key="F11">F11</button>
+</div>
 <div id="gate">
   <form id="pin-form">
     <input id="pin" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="PIN" autocomplete="one-time-code">
@@ -168,6 +191,29 @@ export const PLAYER_HTML = `<!doctype html>
     if (extra) Object.keys(extra).forEach(function (k) { msg[k] = extra[k]; });
     try { ws.send(JSON.stringify(msg)); } catch (e) {}
   }
+  function comboPayload(key, modifiers) {
+    return { type: "control", action: "key", key: String(key || ""), modifiers: (modifiers || []).slice() };
+  }
+  function sendCombo(key, modifiers) {
+    if (!key) return;
+    var p = comboPayload(key, modifiers);
+    sendControl(p.action, { key: p.key, modifiers: p.modifiers });
+  }
+  function bindKeysBar(el) {
+    if (!el || el.dataset.keysBound) return;
+    el.dataset.keysBound = "1";
+    el.addEventListener("mousedown", function (ev) { ev.preventDefault(); });
+    el.addEventListener("click", function (ev) {
+      var btn = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+      if (!btn || !el.contains(btn)) return;
+      var key = btn.getAttribute("data-key");
+      if (!key) return;
+      var raw = btn.getAttribute("data-mods") || "";
+      var mods = raw ? raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean) : [];
+      sendCombo(key, mods);
+    });
+  }
+  bindKeysBar(document.getElementById("keys-bar"));
   function normEvent(el, ev) {
     var r = el.getBoundingClientRect();
     var x = r.width ? (ev.clientX - r.left) / r.width : 0;
@@ -678,6 +724,8 @@ export const PLAYER_HTML = `<!doctype html>
     if (cu) cu.style.display = aiOn ? "block" : "none";
     var files = document.getElementById("files-section");
     if (files) files.style.display = controlOn ? "block" : "none";
+    var keys = document.getElementById("keys-bar");
+    if (keys) keys.style.display = controlOn ? "flex" : "none";
     var un = document.getElementById("unmute");
     if (un) un.style.display = nextAudio ? "inline-block" : "none";
     if (controlOn) sendFileJson({ type: "file", action: "list" });

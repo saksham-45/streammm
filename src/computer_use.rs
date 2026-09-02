@@ -92,6 +92,7 @@ impl LlmActionModel {
             "You operate a computer from a screenshot like a human at the keyboard and mouse. Task: {task}\nStep: {step}\n\
              Coordinates are normalized 0–1 relative to the image.\n\
              Use right-click, drag (down/move/up), modifier keys, paste, clipboard images, inbox files (including files the person pasted or copied in Finder; incoming files land on the Desktop and on the pasteboard as Finder files so Cmd-V pastes them), and switch displays when a person would.\n\
+             Send Cmd+Tab, Cmd+Space, Cmd+W, Alt+Tab, Alt+F4, Ctrl+Alt+Del, and Control+Command+Q (lock) with action key — browsers steal those, the injector does not.\n\
              If the task lists [displays]=JSON, pick another screen with action display and that id, then wait.\n\
              Respond ONLY with JSON: {{\"actions\":[{{\"action\":\"click\",\"x\":0.5,\"y\":0.5}},\
 {{\"action\":\"click\",\"x\":0.5,\"y\":0.5,\"button\":\"right\"}},\
@@ -100,6 +101,9 @@ impl LlmActionModel {
 {{\"action\":\"up\",\"x\":0.8,\"y\":0.8}},\
 {{\"action\":\"type\",\"text\":\"hi\"}},{{\"action\":\"key\",\"key\":\"Enter\"}},\
 {{\"action\":\"key\",\"key\":\"c\",\"modifiers\":[\"Meta\"]}},\
+{{\"action\":\"key\",\"key\":\"Tab\",\"modifiers\":[\"Meta\"]}},\
+{{\"action\":\"key\",\"key\":\"Delete\",\"modifiers\":[\"Control\",\"Alt\"]}},\
+{{\"action\":\"key\",\"key\":\"q\",\"modifiers\":[\"Control\",\"Meta\"]}},\
 {{\"action\":\"paste\",\"text\":\"clipboard text\"}},\
 {{\"action\":\"clipboard\",\"mime\":\"image/png\",\"data\":\"base64-png\"}},\
 {{\"action\":\"file\",\"name\":\"notes.txt\",\"text\":\"file body\"}},\
@@ -402,6 +406,8 @@ mod tests {
         assert!(p.contains("button\":\"right\"") || p.contains("\"right\""));
         assert!(p.contains("paste"));
         assert!(p.contains("modifiers"));
+        assert!(p.contains("Ctrl+Alt+Del") || p.contains("Control+Command+Q"));
+        assert!(p.contains("Cmd+Tab") || p.contains("Tab"));
         assert!(p.contains("down"));
         assert!(p.contains("display"));
         assert!(p.contains("[displays]"));

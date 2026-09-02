@@ -95,6 +95,8 @@ function syncFeatureUi() {
   const f = featureFlags();
   setHidden($("llm-fields"), !f.llm);
   setHidden($("ctl-hint"), !f.ctl);
+  setHidden($("keys-hint"), !f.ctl);
+  setHidden($("keys-bar"), !f.ctl);
   setHidden($("block-local-fields"), !f.ctl);
   setHidden($("block-hint"), !(f.ctl && f.block));
   setHidden($("ai-hint"), !f.ai);
@@ -209,6 +211,36 @@ function sendControl(action, extra) {
   if (!ws || ws.readyState !== 1) return;
   const msg = Object.assign({ type: "control", action: action }, extra || {});
   try { ws.send(JSON.stringify(msg)); } catch (e) { /* ignore */ }
+}
+
+function comboPayload(key, modifiers) {
+  return {
+    type: "control",
+    action: "key",
+    key: String(key || ""),
+    modifiers: (modifiers || []).slice(),
+  };
+}
+
+function sendCombo(key, modifiers) {
+  if (!key) return;
+  const p = comboPayload(key, modifiers);
+  sendControl(p.action, { key: p.key, modifiers: p.modifiers });
+}
+
+function bindKeysBar(el) {
+  if (!el || el.dataset.keysBound) return;
+  el.dataset.keysBound = "1";
+  el.addEventListener("mousedown", function (ev) { ev.preventDefault(); });
+  el.addEventListener("click", function (ev) {
+    const btn = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+    if (!btn || !el.contains(btn)) return;
+    const key = btn.getAttribute("data-key");
+    if (!key) return;
+    const raw = btn.getAttribute("data-mods") || "";
+    const mods = raw ? raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean) : [];
+    sendCombo(key, mods);
+  });
 }
 
 function mouseButtonName(ev) {
@@ -1427,6 +1459,7 @@ function onReady() {
   }
   bindControl($("stream-video"));
   bindControl($("stream-canvas"));
+  bindKeysBar($("keys-bar"));
   function bindFileDrop(el) {
     if (!el || el.dataset.fileBound) return;
     el.dataset.fileBound = "1";
@@ -1585,6 +1618,8 @@ if (typeof window !== "undefined") {
     syncFeatureUi: syncFeatureUi,
     syncEncoderUi: syncEncoderUi,
     featureFlags: featureFlags,
+    comboPayload: comboPayload,
+    sendCombo: sendCombo,
     layoutDisplayMap: layoutDisplayMap,
     paintMapThumbs: paintMapThumbs,
     currentToken: currentToken,

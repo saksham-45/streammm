@@ -122,6 +122,15 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "origin must show a remote-session banner with End"
     );
     assert!(
+        html.contains("id=\"keys-bar\"")
+            && html.contains("id=\"keys-hint\"")
+            && html.contains("Ctrl+Alt+Del")
+            && js.contains("function sendCombo")
+            && js.contains("function comboPayload")
+            && js.contains("bindKeysBar"),
+        "enabling remote control must reveal a Send-keys bar for browser-stolen shortcuts"
+    );
+    assert!(
         html.contains("id=\"cfg-block-local\"") && html.contains("id=\"block-hint\"") && html.contains("id=\"block-local-fields\""),
         "block-local must be a Settings control revealed when remote control is on"
     );
@@ -247,6 +256,14 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("files-section") && s.contains("file-drop"),
         "watch page must reveal file transfer when remote control is on"
+    );
+    assert!(
+        s.contains("keys-bar")
+            && s.contains("function sendCombo")
+            && s.contains("function comboPayload")
+            && s.contains("Ctrl+Alt+Del")
+            && s.contains("keys.style.display = controlOn"),
+        "watch page must reveal a Send-keys bar when remote control is on"
     );
     assert!(
         s.contains("file-offer") && s.contains("msg.offer") && s.contains("showFileOffer"),
@@ -528,6 +545,8 @@ const nodes = {{
   "cu-cancel": el(true),
   "cu-section": el(true),
   "files-section": el(true),
+  "keys-bar": el(true),
+  "keys-hint": el(true),
   "analysis-section": el(true),
   "analysis-banner": el(true),
   "analysis-pane": el(true),
@@ -562,6 +581,8 @@ window.streamaidUi.syncFeatureUi();
 if (!nodes["llm-fields"].classList.contains("hidden")) throw new Error("LLM fields visible while off");
 if (!nodes["analysis-pane"].classList.contains("hidden")) throw new Error("analysis pane visible while off");
 if (!nodes["cu-section"].classList.contains("hidden")) throw new Error("AI form visible while off");
+if (!nodes["keys-bar"].classList.contains("hidden")) throw new Error("keys-bar visible while off");
+if (!nodes["keys-hint"].classList.contains("hidden")) throw new Error("keys-hint visible while off");
 nodes["cfg-llm-enabled"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["llm-fields"].classList.contains("hidden")) throw new Error("LLM fields still hidden after enable");
@@ -578,7 +599,13 @@ nodes["cfg-control-enabled"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["ctl-hint"].classList.contains("hidden")) throw new Error("control hint still hidden after enable");
 if (nodes["files-section"].classList.contains("hidden")) throw new Error("files panel still hidden after control enable");
+if (nodes["keys-bar"].classList.contains("hidden")) throw new Error("keys-bar still hidden after control enable");
+if (nodes["keys-hint"].classList.contains("hidden")) throw new Error("keys-hint still hidden after control enable");
 if (nodes["block-local-fields"].classList.contains("hidden")) throw new Error("block-local still hidden after control enable");
+const combo = window.streamaidUi.comboPayload("Tab", ["Meta"]);
+if (combo.action !== "key" || combo.key !== "Tab" || combo.modifiers[0] !== "Meta") throw new Error("comboPayload Cmd+Tab");
+const cad = window.streamaidUi.comboPayload("Delete", ["Control", "Alt"]);
+if (cad.key !== "Delete" || cad.modifiers.indexOf("Control") < 0 || cad.modifiers.indexOf("Alt") < 0) throw new Error("comboPayload Ctrl+Alt+Del");
 if (!nodes["block-hint"].classList.contains("hidden")) throw new Error("block hint visible while off");
 nodes["cfg-block-local"].checked = true;
 window.streamaidUi.syncFeatureUi();

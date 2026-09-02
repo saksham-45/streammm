@@ -235,7 +235,7 @@ impl Action {
 fn is_accel_mod(m: &str) -> bool {
     matches!(
         m.to_ascii_lowercase().as_str(),
-        "meta" | "command" | "cmd" | "control" | "ctrl" | "os"
+        "meta" | "command" | "cmd" | "control" | "ctrl" | "os" | "win" | "windows" | "super"
     )
 }
 
@@ -510,8 +510,9 @@ pub fn mac_keycode(key: &str) -> Option<u16> {
         "End" => Some(119),
         "PageUp" => Some(116),
         "PageDown" => Some(121),
-        "Meta" | "MetaLeft" | "OS" | "OSLeft" | "Command" | "Cmd" => Some(55),
-        "MetaRight" | "OSRight" | "CommandRight" => Some(54),
+        "Meta" | "MetaLeft" | "OS" | "OSLeft" | "Command" | "Cmd" | "Win" | "Windows"
+        | "Super" => Some(55),
+        "MetaRight" | "OSRight" | "CommandRight" | "WinRight" => Some(54),
         "Shift" | "ShiftLeft" => Some(56),
         "ShiftRight" => Some(60),
         "Alt" | "AltLeft" | "Option" | "OptionLeft" => Some(58),
@@ -600,7 +601,7 @@ pub fn modifier_flag(name: &str) -> u64 {
         "shift" => 0x0002_0000,
         "control" | "ctrl" => 0x0004_0000,
         "alt" | "option" | "alternate" => 0x0008_0000,
-        "meta" | "command" | "cmd" | "os" => 0x0010_0000,
+        "meta" | "command" | "cmd" | "os" | "win" | "windows" | "super" => 0x0010_0000,
         _ => 0,
     }
 }
@@ -1753,6 +1754,29 @@ mod tests {
                 text: "hello from clip".into()
             })
         );
+        let tab = serde_json::json!({"action":"key","key":"Tab","modifiers":["Meta"]});
+        assert_eq!(
+            parse_control_json(&tab),
+            Some(Action::Key {
+                key: "Tab".into(),
+                down: None,
+                modifiers: vec!["Meta".into()]
+            })
+        );
+        let cad = serde_json::json!({
+            "action":"key",
+            "key":"Delete",
+            "modifiers":["Control","Alt"]
+        });
+        match parse_control_json(&cad) {
+            Some(Action::Key { key, modifiers, down }) => {
+                assert_eq!(key, "Delete");
+                assert_eq!(down, None);
+                assert!(modifiers.iter().any(|m| m == "Control"));
+                assert!(modifiers.iter().any(|m| m == "Alt"));
+            }
+            other => panic!("{other:?}"),
+        }
         let disp = serde_json::json!({"action":"display","id":"4:"});
         assert_eq!(
             parse_control_json(&disp),
@@ -1887,7 +1911,11 @@ mod tests {
         assert_eq!(mac_keycode("c"), Some(8));
         assert_eq!(mac_keycode("KeyC"), Some(8));
         assert_eq!(mac_keycode("Meta"), Some(55));
+        assert_eq!(mac_keycode("Win"), Some(55));
+        assert_eq!(mac_keycode("Windows"), Some(55));
         assert_eq!(mac_keycode("F1"), Some(122));
+        assert_eq!(mac_keycode("Tab"), Some(48));
+        assert_eq!(mac_keycode("Delete"), Some(117));
         assert_eq!(mac_keycode("Unidentified"), None);
         assert_eq!(mac_keycode("F99"), None);
         assert_eq!(mac_keycode(""), None);

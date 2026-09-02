@@ -149,6 +149,31 @@ textarea:focus-visible {
   color: #fff;
   border: 1px solid #fff;
 }
+#keys-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 16px;
+  background: #141414;
+  border-bottom: 1px solid #333;
+}
+#keys-bar .keys-label {
+  font-size: 11px;
+  color: #9a9a9a;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-right: 4px;
+}
+#keys-bar button {
+  padding: 4px 8px;
+  font-size: 12px;
+  background: #222;
+  color: #ddd;
+  border: 1px solid #555;
+  border-radius: 6px;
+}
+#keys-bar button:hover { border-color: #7eb8ff; color: #7eb8ff; }
 .hidden { display: none !important; }
 
 main {
