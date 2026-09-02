@@ -47,15 +47,58 @@ pub fn sanitize_name(name: &str) -> Option<String> {
     Some(name.to_string())
 }
 
+pub fn normalize_root(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "inbox" => Some("inbox"),
+        "desktop" => Some("desktop"),
+        "documents" => Some("documents"),
+        "downloads" => Some("downloads"),
+        _ => None,
+    }
+}
+
+pub fn sanitize_rel(rel: &str) -> Option<String> {
+    let rel = rel.trim();
+    if rel.is_empty() {
+        return Some(String::new());
+    }
+    if rel.len() > 512 {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for p in rel.split(['/', '\\']) {
+        if p.is_empty() || p == "." {
+            continue;
+        }
+        if p == ".." {
+            return None;
+        }
+        parts.push(sanitize_name(p)?);
+        if parts.len() > 8 {
+            return None;
+        }
+    }
+    Some(parts.join("/"))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileEntry {
     pub name: String,
     pub size: u64,
+    pub dir: bool,
 }
 
 impl FileEntry {
+    pub fn file(name: String, size: u64) -> Self {
+        Self {
+            name,
+            size,
+            dir: false,
+        }
+    }
+
     pub fn to_json(&self) -> Value {
-        json!({"name": self.name, "size": self.size})
+        json!({"name": self.name, "size": self.size, "dir": self.dir})
     }
 }
 
@@ -67,6 +110,7 @@ struct Incoming {
 
 pub struct Inbox {
     pub dir: PathBuf,
+    home: Option<PathBuf>,
     incoming: Mutex<HashMap<String, Incoming>>,
 }
 
@@ -74,8 +118,82 @@ impl Inbox {
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
+            home: None,
             incoming: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn with_home(mut self, home: PathBuf) -> Self {
+        self.home = Some(home);
+        self
+    }
+
+    fn home_dir(&self) -> Option<PathBuf> {
+        self.home.clone().or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+        })
+    }
+
+    pub fn root_dir(&self, root: &str) -> Result<PathBuf, String> {
+        let root = normalize_root(root).ok_or_else(|| "unknown folder".to_string())?;
+        match root {
+            "inbox" => Ok(self.dir.clone()),
+            "desktop" => self
+                .home_dir()
+                .map(|h| h.join("Desktop"))
+                .ok_or_else(|| "no home directory".into()),
+            "documents" => self
+                .home_dir()
+                .map(|h| h.join("Documents"))
+                .ok_or_else(|| "no home directory".into()),
+            "downloads" => self
+                .home_dir()
+                .map(|h| h.join("Downloads"))
+                .ok_or_else(|| "no home directory".into()),
+            _ => Err("unknown folder".into()),
+        }
+    }
+
+    pub fn join_under(&self, root: &str, rel: &str, name: &str) -> Result<PathBuf, String> {
+        let base = self.root_dir(root)?;
+        let rel = sanitize_rel(rel).ok_or_else(|| "invalid path".to_string())?;
+        if !base.exists() {
+            if rel.is_empty() && name.is_empty() {
+                return Ok(base);
+            }
+            return Err("file not found".into());
+        }
+        let root_can = base.canonicalize().map_err(|e| e.to_string())?;
+        let mut path = root_can.clone();
+        if !rel.is_empty() {
+            path.push(&rel);
+        }
+        if !name.is_empty() {
+            let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
+            path.push(name);
+        }
+        let check = if path.exists() {
+            path.canonicalize().map_err(|e| e.to_string())?
+        } else if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                return Err("file not found".into());
+            }
+            parent
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+                .join(
+                    path.file_name()
+                        .ok_or_else(|| "invalid file name".to_string())?,
+                )
+        } else {
+            return Err("invalid path".into());
+        };
+        if !check.starts_with(&root_can) {
+            return Err("invalid path".into());
+        }
+        Ok(check)
     }
 
     pub fn ensure_dir(&self) -> Result<(), String> {
@@ -96,12 +214,26 @@ impl Inbox {
     }
 
     pub fn list(&self) -> Vec<FileEntry> {
+        self.list_at("inbox", "")
+            .map(|(_, _, files)| files)
+            .unwrap_or_default()
+    }
+
+    pub fn list_at(&self, root: &str, rel: &str) -> Result<(String, String, Vec<FileEntry>), String> {
+        let root = normalize_root(root)
+            .ok_or_else(|| "unknown folder".to_string())?
+            .to_string();
+        let rel = sanitize_rel(rel).ok_or_else(|| "invalid path".to_string())?;
+        let dir = self.join_under(&root, &rel, "")?;
         let mut out = Vec::new();
-        let rd = match fs::read_dir(&self.dir) {
+        let rd = match fs::read_dir(&dir) {
             Ok(r) => r,
-            Err(_) => return out,
+            Err(_) => return Ok((root, rel, out)),
         };
         for ent in rd.flatten() {
+            if out.len() >= 400 {
+                break;
+            }
             let name = ent.file_name().to_string_lossy().to_string();
             if sanitize_name(&name).is_none() {
                 continue;
@@ -109,11 +241,22 @@ impl Inbox {
             if name.ends_with(".part") {
                 continue;
             }
-            let size = ent.metadata().map(|m| m.len()).unwrap_or(0);
-            out.push(FileEntry { name, size });
+            let meta = match ent.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.is_dir() {
+                out.push(FileEntry {
+                    name,
+                    size: 0,
+                    dir: true,
+                });
+            } else if meta.is_file() {
+                out.push(FileEntry::file(name, meta.len()));
+            }
         }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        out
+        out.sort_by(|a, b| a.dir.cmp(&b.dir).reverse().then(a.name.cmp(&b.name)));
+        Ok((root, rel, out))
     }
 
     pub fn put_bytes(&self, name: &str, data: &[u8]) -> Result<FileEntry, String> {
@@ -130,10 +273,10 @@ impl Inbox {
             let _ = fs::remove_file(&tmp);
             e.to_string()
         })?;
-        Ok(FileEntry {
-            name: path.file_name().unwrap().to_string_lossy().into(),
-            size: data.len() as u64,
-        })
+        Ok(FileEntry::file(
+            path.file_name().unwrap().to_string_lossy().into(),
+            data.len() as u64,
+        ))
     }
 
     /// Copy a host-side file into the inbox without loading it into RAM.
@@ -153,7 +296,7 @@ impl Inbox {
         self.ensure_dir()?;
         let dest = self.dest(&name)?;
         if src.canonicalize().ok() == dest.canonicalize().ok() {
-            return Ok(FileEntry { name, size: len });
+            return Ok(FileEntry::file(name, len));
         }
         let tmp = self.part_path(&format!("import-{name}"));
         fs::copy(src, &tmp).map_err(|e| e.to_string())?;
@@ -161,29 +304,45 @@ impl Inbox {
             let _ = fs::remove_file(&tmp);
             e.to_string()
         })?;
-        Ok(FileEntry { name, size: len })
+        Ok(FileEntry::file(name, len))
     }
 
     pub fn list_json(&self) -> String {
-        json!({
-            "type": "file",
-            "action": "list",
-            "files": self.list().iter().map(|e| e.to_json()).collect::<Vec<_>>()
-        })
-        .to_string()
+        self.list_at_json("inbox", "")
+    }
+
+    pub fn list_at_json(&self, root: &str, rel: &str) -> String {
+        match self.list_at(root, rel) {
+            Ok((root, path, files)) => json!({
+                "type": "file",
+                "action": "list",
+                "root": root,
+                "path": path,
+                "files": files.iter().map(|e| e.to_json()).collect::<Vec<_>>()
+            })
+            .to_string(),
+            Err(e) => err_json(&e),
+        }
     }
 
     pub fn remove(&self, name: &str) -> Result<FileEntry, String> {
+        self.remove_at("inbox", "", name)
+    }
+
+    pub fn remove_at(&self, root: &str, rel: &str, name: &str) -> Result<FileEntry, String> {
         let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
-        let path = self.dest(&name)?;
+        let path = self.join_under(root, rel, &name)?;
+        if path.is_dir() {
+            return Err("not a file".into());
+        }
         let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
         fs::remove_file(&path).map_err(|e| e.to_string())?;
-        let _ = fs::remove_file(self.part_path(&name));
-        self.incoming.lock().retain(|_, inc| inc.name != name);
-        Ok(FileEntry {
-            name,
-            size: meta.len(),
-        })
+        if normalize_root(root) == Some("inbox") && sanitize_rel(rel).unwrap_or_default().is_empty()
+        {
+            let _ = fs::remove_file(self.part_path(&name));
+            self.incoming.lock().retain(|_, inc| inc.name != name);
+        }
+        Ok(FileEntry::file(name, meta.len()))
     }
 
     pub fn get_bytes(&self, name: &str) -> Result<Vec<u8>, String> {
@@ -197,7 +356,19 @@ impl Inbox {
     }
 
     pub fn readable_path(&self, name: &str) -> Result<(PathBuf, u64), String> {
-        let path = self.dest(name)?;
+        self.readable_path_at("inbox", "", name)
+    }
+
+    pub fn readable_path_at(
+        &self,
+        root: &str,
+        rel: &str,
+        name: &str,
+    ) -> Result<(PathBuf, u64), String> {
+        let path = self.join_under(root, rel, name)?;
+        if path.is_dir() {
+            return Err("not a file".into());
+        }
         let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
         if meta.len() > MAX_FILE as u64 {
             return Err("file too large".into());
@@ -206,8 +377,21 @@ impl Inbox {
     }
 
     /// Send a stored file as blob / blob-begin+chunk+end without holding it in RAM.
-    pub fn emit_blob<F: FnMut(String)>(&self, name: &str, mut emit: F) -> Result<(), String> {
-        let path = self.dest(name)?;
+    pub fn emit_blob<F: FnMut(String)>(&self, name: &str, emit: F) -> Result<(), String> {
+        self.emit_blob_at("inbox", "", name, emit)
+    }
+
+    pub fn emit_blob_at<F: FnMut(String)>(
+        &self,
+        root: &str,
+        rel: &str,
+        name: &str,
+        mut emit: F,
+    ) -> Result<(), String> {
+        let path = self.join_under(root, rel, name)?;
+        if path.is_dir() {
+            return Err("not a file".into());
+        }
         let shown = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -324,16 +508,15 @@ impl Inbox {
         }
         let dest = self.dest(&inc.name)?;
         fs::rename(&part, &dest).map_err(|e| e.to_string())?;
-        Ok(FileEntry {
-            name: inc.name,
-            size: inc.size as u64,
-        })
+        Ok(FileEntry::file(inc.name, inc.size as u64))
     }
 
     pub fn handle_message(&self, v: &Value) -> Vec<String> {
         let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
+        let root = v.get("root").and_then(|a| a.as_str()).unwrap_or("inbox");
+        let rel = v.get("path").and_then(|a| a.as_str()).unwrap_or("");
         match action {
-            "list" => vec![self.list_json()],
+            "list" => vec![self.list_at_json(root, rel)],
             "put" => {
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let data = v.get("data").and_then(|d| d.as_str()).unwrap_or("");
@@ -376,23 +559,25 @@ impl Inbox {
             "get" => {
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let mut out = Vec::new();
-                match self.emit_blob(name, |m| out.push(m)) {
+                match self.emit_blob_at(root, rel, name, |m| out.push(m)) {
                     Ok(()) => out,
                     Err(e) => vec![err_json(&e)],
                 }
             }
             "delete" => {
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                match self.remove(name) {
+                match self.remove_at(root, rel, name) {
                     Ok(ent) => vec![
                         json!({
                             "type": "file",
                             "action": "deleted",
                             "name": ent.name,
-                            "size": ent.size
+                            "size": ent.size,
+                            "root": normalize_root(root).unwrap_or("inbox"),
+                            "path": sanitize_rel(rel).unwrap_or_default()
                         })
                         .to_string(),
-                        self.list_json(),
+                        self.list_at_json(root, rel),
                     ],
                     Err(e) => vec![err_json(&e)],
                 }
@@ -568,6 +753,39 @@ mod tests {
         let replies = inbox.handle_message(&serde_json::json!({"action":"delete","name":"bye.txt"}));
         assert!(replies.iter().any(|m| m.contains("\"deleted\"")));
         assert!(inbox.list().is_empty());
+    }
+
+    #[test]
+    fn browse_desktop_lists_dirs_and_rejects_escape() {
+        let home = tempfile::tempdir().unwrap();
+        let desk = home.path().join("Desktop");
+        fs::create_dir(&desk).unwrap();
+        fs::write(desk.join("shot.png"), b"png").unwrap();
+        fs::create_dir(desk.join("Work")).unwrap();
+        fs::write(desk.join("Work").join("a.txt"), b"hi").unwrap();
+        let inbox = Inbox::new(home.path().join("inbox")).with_home(home.path().to_path_buf());
+        inbox.put_bytes("in.txt", b"x").unwrap();
+        let (root, path, files) = inbox.list_at("desktop", "").unwrap();
+        assert_eq!(root, "desktop");
+        assert_eq!(path, "");
+        assert!(files.iter().any(|f| f.name == "shot.png" && !f.dir));
+        assert!(files.iter().any(|f| f.name == "Work" && f.dir));
+        let files = inbox.list_at("desktop", "Work").unwrap().2;
+        assert_eq!(files[0].name, "a.txt");
+        assert_eq!(
+            fs::read(inbox.join_under("desktop", "Work", "a.txt").unwrap()).unwrap(),
+            b"hi"
+        );
+        assert!(inbox.list_at("desktop", "../inbox").is_err());
+        assert!(inbox.join_under("desktop", "", "../in.txt").is_err());
+        assert!(inbox.list_at("nope", "").is_err());
+        assert_eq!(sanitize_rel("Work/a").as_deref(), Some("Work/a"));
+        assert!(sanitize_rel("..").is_none());
+        inbox.remove_at("desktop", "Work", "a.txt").unwrap();
+        assert!(inbox.list_at("desktop", "Work").unwrap().2.is_empty());
+        let listed = inbox.handle_message(&json!({"action":"list","root":"desktop"}));
+        assert!(listed[0].contains("shot.png"));
+        assert!(listed[0].contains("\"root\":\"desktop\""));
     }
 
     #[test]

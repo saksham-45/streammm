@@ -123,7 +123,7 @@ impl Recorder {
                 continue;
             }
             let size = ent.metadata().map(|m| m.len()).unwrap_or(0);
-            out.push(FileEntry { name, size });
+            out.push(FileEntry::file(name, size));
         }
         out.sort_by(|a, b| b.name.cmp(&a.name));
         out

@@ -792,14 +792,85 @@ function sendFileJson(msg) {
   return false;
 }
 
-function renderFileList(files) {
+let fileRoot = "inbox";
+let filePath = "";
+
+function fileLocQuery() {
+  return "root=" + encodeURIComponent(fileRoot) + "&path=" + encodeURIComponent(filePath);
+}
+
+function joinFilePath(base, name) {
+  return base ? base + "/" + name : name;
+}
+
+function parentFilePath(p) {
+  const i = String(p || "").lastIndexOf("/");
+  return i < 0 ? "" : p.slice(0, i);
+}
+
+function browseFiles(root, path) {
+  if (root) fileRoot = String(root);
+  filePath = path == null ? filePath : String(path);
+  const roots = $("file-roots");
+  if (roots) {
+    roots.querySelectorAll("button").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-root") === fileRoot);
+    });
+  }
+  const crumb = $("file-path");
+  if (crumb) crumb.textContent = filePath ? (fileRoot + " / " + filePath.replace(/\//g, " / ")) : fileRoot;
+  refreshFiles();
+  return { root: fileRoot, path: filePath };
+}
+
+function bindFileRoots(el) {
+  if (!el || el.dataset.rootsBound) return;
+  el.dataset.rootsBound = "1";
+  el.addEventListener("click", function (ev) {
+    const btn = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+    if (!btn || !el.contains(btn)) return;
+    const root = btn.getAttribute("data-root");
+    if (!root) return;
+    browseFiles(root, "");
+  });
+}
+
+function renderFileList(files, root, path) {
+  if (root) fileRoot = root;
+  if (typeof path === "string") filePath = path;
+  const roots = $("file-roots");
+  if (roots) {
+    roots.querySelectorAll("button").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-root") === fileRoot);
+    });
+  }
+  const crumb = $("file-path");
+  if (crumb) crumb.textContent = filePath ? (fileRoot + " / " + filePath.replace(/\//g, " / ")) : fileRoot;
   const ul = $("file-list");
   if (!ul) return;
   ul.innerHTML = "";
+  if (filePath) {
+    const up = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Up";
+    btn.addEventListener("click", function () { browseFiles(fileRoot, parentFilePath(filePath)); });
+    up.appendChild(btn);
+    ul.appendChild(up);
+  }
   (files || []).forEach(function (f) {
     const li = document.createElement("li");
+    if (f.dir) {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.textContent = f.name + "/";
+      open.addEventListener("click", function () { browseFiles(fileRoot, joinFilePath(filePath, f.name)); });
+      li.appendChild(open);
+      ul.appendChild(li);
+      return;
+    }
     const a = document.createElement("a");
-    a.href = url("/api/files/download?name=" + encodeURIComponent(f.name));
+    a.href = url("/api/files/download?name=" + encodeURIComponent(f.name) + "&" + fileLocQuery());
     a.textContent = f.name + (f.size != null ? " (" + f.size + " B)" : "");
     a.download = f.name;
     li.appendChild(a);
@@ -815,12 +886,12 @@ function renderFileList(files) {
 function deleteInboxFile(name) {
   const out = $("file-out");
   if (!name) return;
-  if (sendFileJson({ type: "file", action: "delete", name: name })) {
+  if (sendFileJson({ type: "file", action: "delete", name: name, root: fileRoot, path: filePath })) {
     if (out) out.textContent = "deleting " + name + "…";
     return;
   }
   if (typeof fetch !== "function") return;
-  fetch(url("/api/files?name=" + encodeURIComponent(name)), { method: "DELETE" })
+  fetch(url("/api/files?name=" + encodeURIComponent(name) + "&" + fileLocQuery()), { method: "DELETE" })
     .then(function (r) { return r.json(); })
     .then(function (body) {
       if (!body) return;
@@ -860,10 +931,10 @@ function refreshRecordings() {
 
 function refreshFiles() {
   if (!featureFlags().ctl) return;
-  sendFileJson({ type: "file", action: "list" });
+  sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
   if (typeof fetch !== "function") return;
-  fetch(url("/api/files")).then(function (r) { return r.json(); }).then(function (body) {
-    if (body && body.files) renderFileList(body.files);
+  fetch(url("/api/files?" + fileLocQuery())).then(function (r) { return r.json(); }).then(function (body) {
+    if (body && body.files) renderFileList(body.files, body.root, body.path);
   }).catch(function () {});
 }
 
@@ -1144,7 +1215,7 @@ function handleFileMsg(msg) {
     return;
   }
   if (msg.action === "list" && msg.files) {
-    renderFileList(msg.files);
+    renderFileList(msg.files, msg.root, msg.path);
     return;
   }
   if (msg.action === "ok") {
@@ -1971,6 +2042,7 @@ function onReady() {
   }
   bindFileDrop($("file-drop"));
   bindFileDrop($("stream-pane"));
+  bindFileRoots($("file-roots"));
   const fileInput = $("file-input");
   if (fileInput) {
     fileInput.addEventListener("change", function () {
@@ -2160,6 +2232,7 @@ if (typeof window !== "undefined") {
     wolPayload: wolPayload,
     fillWolMacs: fillWolMacs,
     copyWolMac: copyWolMac,
+    browseFiles: browseFiles,
   };
 }
 

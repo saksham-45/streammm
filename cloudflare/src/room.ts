@@ -94,6 +94,23 @@ function safeDownloadName(name: string): string | null {
   return n;
 }
 
+function cleanRoot(raw: string): string {
+  const s = raw.trim().toLowerCase();
+  if (s === "desktop" || s === "documents" || s === "downloads") return s;
+  return "inbox";
+}
+
+function cleanRel(raw: string): string {
+  const parts = raw.split(/[/\\]/).map((s) => s.trim()).filter(Boolean);
+  const out: string[] = [];
+  for (const p of parts) {
+    if (!safeDownloadName(p)) continue;
+    out.push(p);
+    if (out.length >= 8) break;
+  }
+  return out.join("/");
+}
+
 function corsHeaders(): Record<string, string> {
   return {
     "content-type": "application/json",
@@ -721,7 +738,9 @@ export class StreamRoom extends DurableObject<Env> {
         }
       }, 20_000);
       this.fileDl = { name, writer, timer };
-      this.sendPublisher(JSON.stringify({ type: "file", action: "get", name, session: sess }));
+      const root = cleanRoot(url.searchParams.get("root") ?? "");
+      const path = cleanRel(url.searchParams.get("path") ?? "");
+      this.sendPublisher(JSON.stringify({ type: "file", action: "get", name, root, path, session: sess }));
       const disp = `attachment; filename="${name.replace(/"/g, "")}"`;
       return new Response(readable, {
         headers: {

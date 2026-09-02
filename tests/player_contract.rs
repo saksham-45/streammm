@@ -265,6 +265,15 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must have a files drop target to reveal"
     );
     assert!(
+        html.contains("id=\"file-roots\"")
+            && html.contains("data-root=\"desktop\"")
+            && html.contains("data-root=\"documents\"")
+            && html.contains("data-root=\"downloads\"")
+            && js.contains("function browseFiles")
+            && js.contains("root: fileRoot"),
+        "enabling remote control must reveal Inbox/Desktop/Documents/Downloads browse"
+    );
+    assert!(
         js.contains("action: \"begin\"") && js.contains("action: \"chunk\""),
         "origin UI must send large inbox files in chunks"
     );
@@ -371,6 +380,13 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("files-section") && s.contains("file-drop"),
         "watch page must reveal file transfer when remote control is on"
+    );
+    assert!(
+        s.contains("id=\"file-roots\"")
+            && s.contains("data-root=\"desktop\"")
+            && s.contains("function browseFiles")
+            && s.contains("root: fileRoot"),
+        "watch page must reveal host folder browse when remote control is on"
     );
     assert!(
         s.contains("keys-bar")

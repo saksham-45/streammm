@@ -66,6 +66,13 @@
     </div>
     <div id="files-section" class="hidden">
       <h2>Files</h2>
+      <div id="file-roots" role="tablist" aria-label="Host folders">
+        <button type="button" data-root="inbox" class="on">Inbox</button>
+        <button type="button" data-root="desktop">Desktop</button>
+        <button type="button" data-root="documents">Documents</button>
+        <button type="button" data-root="downloads">Downloads</button>
+      </div>
+      <div id="file-path"></div>
       <div id="file-drop" tabindex="0">Drop files here or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
       <div id="file-out"></div>
       <ul id="file-list"></ul>

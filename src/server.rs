@@ -403,7 +403,9 @@ impl App {
                 let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
                 if action == "get" {
                     let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    if let Err(e) = self.files.emit_blob(name, |msg| {
+                    let root = v.get("root").and_then(|n| n.as_str()).unwrap_or("inbox");
+                    let path = v.get("path").and_then(|n| n.as_str()).unwrap_or("");
+                    if let Err(e) = self.files.emit_blob_at(root, path, name, |msg| {
                         self.publisher.push_wire(msg.clone());
                         let _ = self.clip_tx.send(msg);
                     }) {
@@ -1590,6 +1592,21 @@ async fn api_permissions_open(State(app): State<Arc<App>>, req: Request) -> Resp
     }
 }
 
+fn file_loc_from_query(query: &str) -> (String, String, String) {
+    let mut name = String::new();
+    let mut root = String::from("inbox");
+    let mut path = String::new();
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        match &*k {
+            "name" => name = v.into_owned(),
+            "root" => root = v.into_owned(),
+            "path" => path = v.into_owned(),
+            _ => {}
+        }
+    }
+    (root, path, name)
+}
+
 fn files_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> Result<(), Response> {
     if host_ok(app, headers, uri) {
         return Ok(());
@@ -1607,8 +1624,18 @@ async fn api_files_list(State(app): State<Arc<App>>, req: Request) -> Response {
     if let Err(e) = files_ok(&app, req.headers(), req.uri()) {
         return e;
     }
-    let files: Vec<Value> = app.files.list().iter().map(|e| e.to_json()).collect();
-    Json(json!({"files": files, "dir": app.files.dir.display().to_string()})).into_response()
+    let query = req.uri().query().unwrap_or("");
+    let (root, path, _) = file_loc_from_query(query);
+    match app.files.list_at(&root, &path) {
+        Ok((root, path, files)) => Json(json!({
+            "files": files.iter().map(|e| e.to_json()).collect::<Vec<_>>(),
+            "root": root,
+            "path": path,
+            "dir": app.files.dir.display().to_string()
+        }))
+        .into_response(),
+        Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+    }
 }
 
 async fn api_files_put(State(app): State<Arc<App>>, req: Request) -> Response {
@@ -1656,16 +1683,11 @@ async fn api_files_delete(State(app): State<Arc<App>>, req: Request) -> Response
         return e;
     }
     let query = req.uri().query().unwrap_or("");
-    let mut name = String::new();
-    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
-        if k == "name" {
-            name = v.into_owned();
-        }
-    }
+    let (root, path, name) = file_loc_from_query(query);
     if name.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "missing name");
     }
-    match app.files.remove(&name) {
+    match app.files.remove_at(&root, &path, &name) {
         Ok(ent) => Json(json!({"ok": true, "deleted": true, "name": ent.name, "size": ent.size}))
             .into_response(),
         Err(e) if e == "file not found" => json_err(StatusCode::NOT_FOUND, "file not found"),
@@ -1679,16 +1701,11 @@ async fn api_files_download(State(app): State<Arc<App>>, req: Request) -> Respon
         return e;
     }
     let query = req.uri().query().unwrap_or("");
-    let mut name = String::new();
-    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
-        if k == "name" {
-            name = v.into_owned();
-        }
-    }
+    let (root, path, name) = file_loc_from_query(query);
     if name.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "missing name");
     }
-    match app.files.readable_path(&name) {
+    match app.files.readable_path_at(&root, &path, &name) {
         Ok((path, len)) => {
             let mut file = match tokio::fs::File::open(&path).await {
                 Ok(f) => f,
