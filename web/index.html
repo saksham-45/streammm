@@ -83,12 +83,6 @@
       <option value="1.0">1.0</option>
     </select>
   </label>
-  <label>JPEG quality
-    <div class="row">
-      <input id="cfg-jpeg" type="range" min="30" max="95" step="1">
-      <span id="jpeg-val"></span>
-    </div>
-  </label>
   <label>Encoder mode
     <select id="cfg-mode">
       <option value="ffmpeg">H.264 (Twitch-class)</option>
@@ -96,8 +90,14 @@
       <option value="mjpeg">MJPEG (compat)</option>
     </select>
   </label>
-  <label>Bitrate kbps <input id="cfg-bitrate" type="number" min="2000" max="50000"></label>
-  <label>GOP frames <input id="cfg-gop" type="number" min="6" max="60"></label>
+  <label id="jpeg-fields" class="hidden">JPEG quality
+    <div class="row">
+      <input id="cfg-jpeg" type="range" min="30" max="95" step="1">
+      <span id="jpeg-val"></span>
+    </div>
+  </label>
+  <label id="bitrate-fields">Bitrate kbps <input id="cfg-bitrate" type="number" min="2000" max="50000"></label>
+  <label id="gop-fields">GOP frames <input id="cfg-gop" type="number" min="6" max="60"></label>
   <label>Max width <input id="cfg-max-w" type="number" min="640" max="7680"></label>
   <label>Max height <input id="cfg-max-h" type="number" min="360" max="4320"></label>
   <label>Cloudflare publish URL <input id="cfg-publish" type="text" placeholder="wss://…/publish"></label>

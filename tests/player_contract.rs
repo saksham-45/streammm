@@ -150,6 +150,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling LLM/AI/control must drive a UI reveal helper"
     );
     assert!(
+        html.contains("id=\"jpeg-fields\"") && js.contains("function syncEncoderUi"),
+        "JPEG quality must hide unless MJPEG is selected"
+    );
+    assert!(
         !js.contains("pane.classList.add(\"hidden\")"),
         "loadConfig must not force-hide analysis chrome after the host enables it"
     );
@@ -456,7 +460,11 @@ const nodes = {{
   "files-section": el(true),
   "analysis-section": el(true),
   "analysis-banner": el(true),
-  "analysis-pane": el(true)
+  "analysis-pane": el(true),
+  "jpeg-fields": el(true),
+  "bitrate-fields": el(false),
+  "gop-fields": el(false),
+  "cfg-mode": {{ classList: tokenList(false), hidden: false, checked: false, value: "ffmpeg" }}
 }};
 globalThis.window = globalThis;
 globalThis.document = {{
@@ -496,6 +504,13 @@ window.streamaidUi.syncFeatureUi();
 if (nodes["ctl-hint"].classList.contains("hidden")) throw new Error("control hint still hidden after enable");
 if (nodes["files-section"].classList.contains("hidden")) throw new Error("files panel still hidden after control enable");
 if (nodes["analysis-pane"].classList.contains("hidden")) throw new Error("side pane still hidden after control enable");
+if (!nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality visible in H.264 mode");
+if (nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate hidden in H.264 mode");
+nodes["cfg-mode"].value = "mjpeg";
+window.streamaidUi.syncEncoderUi();
+if (nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality still hidden after MJPEG enable");
+if (!nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate still visible in MJPEG mode");
+if (!nodes["gop-fields"].classList.contains("hidden")) throw new Error("GOP still visible in MJPEG mode");
 console.log("reveal-ok");
 "#,
             js_path

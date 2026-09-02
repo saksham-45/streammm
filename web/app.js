@@ -76,6 +76,15 @@ function featureFlags() {
   };
 }
 
+function syncEncoderUi() {
+  const modeEl = $("cfg-mode");
+  const mode = (modeEl && modeEl.value) || (cfg && cfg.encoder && cfg.encoder.mode) || "ffmpeg";
+  const mjpeg = mode === "mjpeg";
+  setHidden($("jpeg-fields"), !mjpeg);
+  setHidden($("bitrate-fields"), mjpeg);
+  setHidden($("gop-fields"), mjpeg);
+}
+
 function syncFeatureUi() {
   const f = featureFlags();
   setHidden($("llm-fields"), !f.llm);
@@ -87,6 +96,7 @@ function syncFeatureUi() {
   setHidden($("analysis-section"), !f.llm);
   setHidden($("analysis-banner"), !f.llm);
   setHidden($("analysis-pane"), !(f.llm || f.ai || f.ctl));
+  syncEncoderUi();
   if (f.ctl) refreshFiles();
 }
 
@@ -1054,6 +1064,7 @@ function fillConfigForm(c) {
   const jv = $("jpeg-val");
   if (jv) jv.textContent = c.capture && c.capture.jpeg_quality;
   set("cfg-mode", c.encoder && c.encoder.mode);
+  syncEncoderUi();
   set("cfg-bitrate", c.encoder && c.encoder.bitrate_kbps);
   set("cfg-gop", c.encoder && c.encoder.gop_frames || 15);
   set("cfg-max-w", c.encoder && c.encoder.max_width || 3840);
@@ -1264,6 +1275,8 @@ function onReady() {
     if (!el) return;
     el.addEventListener("change", function () { syncFeatureUi(); });
   });
+  const modeEl = $("cfg-mode");
+  if (modeEl) modeEl.addEventListener("change", function () { syncEncoderUi(); });
   const save = $("save");
   if (save) {
     save.addEventListener("click", async function () {
@@ -1458,6 +1471,7 @@ if (typeof window !== "undefined") {
     isDrawerOpen: isDrawerOpen,
     setDrawerOpen: setDrawerOpen,
     syncFeatureUi: syncFeatureUi,
+    syncEncoderUi: syncEncoderUi,
     featureFlags: featureFlags,
     layoutDisplayMap: layoutDisplayMap,
     paintMapThumbs: paintMapThumbs,
