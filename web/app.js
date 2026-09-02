@@ -77,6 +77,7 @@ function featureFlags() {
     ai: aiEl ? !!aiEl.checked : !!(cfg && cfg.control && cfg.control.ai_enabled),
     ctl: ctlEl ? !!ctlEl.checked : !!(cfg && cfg.control && cfg.control.enabled),
     block: ($("cfg-block-local") ? !!$("cfg-block-local").checked : !!(cfg && cfg.control && cfg.control.block_local)),
+    unattended: ($("cfg-unattended") ? !!$("cfg-unattended").checked : !!(cfg && cfg.access && cfg.access.unattended)),
     audio: audioEl ? !!audioEl.checked : !!(cfg && cfg.capture && cfg.capture.audio),
     mjpeg: mode === "mjpeg",
   };
@@ -108,6 +109,8 @@ function syncFeatureUi() {
   setHidden($("analysis-section"), !f.llm);
   setHidden($("analysis-banner"), !f.llm);
   setHidden($("analysis-pane"), !(f.llm || f.ai || f.ctl));
+  setHidden($("unattended-hint"), !f.unattended);
+  setHidden($("unattended-fields"), !f.unattended);
   setHidden($("audio-hint"), !f.audio);
   setHidden($("audio-fields"), !(f.audio && !f.mjpeg));
   setHidden($("unmute"), !(f.audio && !f.mjpeg));
@@ -1230,6 +1233,13 @@ function fillConfigForm(c) {
   set("cfg-max-h", c.encoder && c.encoder.max_height || 4320);
   set("cfg-publish", c.cloudflare && c.cloudflare.publish_url || "");
   set("cfg-watch", c.cloudflare && c.cloudflare.watch_url || "");
+  const unat = $("cfg-unattended");
+  if (unat) unat.checked = !!(c.access && c.access.unattended);
+  const unatPw = $("cfg-unattended-password");
+  if (unatPw) {
+    unatPw.value = "";
+    unatPw.placeholder = (c.access && c.access.password_set) ? "saved — leave blank to keep" : "8–128 characters";
+  }
   const ctl = $("cfg-control-enabled");
   if (ctl) ctl.checked = !!(c.control && c.control.enabled);
   const blk = $("cfg-block-local");
@@ -1283,6 +1293,10 @@ function readConfigForm() {
     cloudflare: {
       publish_url: val("cfg-publish"),
       watch_url: val("cfg-watch"),
+    },
+    access: {
+      unattended: !!( $("cfg-unattended") && $("cfg-unattended").checked ),
+      password: val("cfg-unattended-password"),
     },
     llm: {
       enabled: !!(llmEn && llmEn.checked),
@@ -1353,7 +1367,7 @@ function onReady() {
       }
       function tryToken() {
         if (!t) {
-          showLoginError("Enter the 6-digit PIN or host token");
+          showLoginError("Enter the PIN, unattended password, or host token");
           return;
         }
         fetch("/api/login", {
@@ -1384,7 +1398,7 @@ function onReady() {
               tryToken();
               return;
             }
-            showLoginError(x.b.error || (x.status === 429 ? "too many tries" : "bad PIN"));
+            showLoginError(x.b.error || (x.status === 429 ? "too many tries" : "bad PIN or password"));
             return;
           }
           setCookie("streamaid_session", x.b.session);
@@ -1438,7 +1452,7 @@ function onReady() {
       if (jv) jv.textContent = jpeg.value;
     });
   }
-  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-block-local"].forEach(function (id) {
+  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-block-local", "cfg-unattended"].forEach(function (id) {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", function () { syncFeatureUi(); });

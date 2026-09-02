@@ -51,7 +51,7 @@ export const PLAYER_HTML = `<!doctype html>
     align-items: center; justify-content: center; z-index: 20;
   }
   #gate form { display: flex; gap: 8px; }
-  #gate input { font-size: 22px; letter-spacing: 0.4em; width: 9em; text-align: center;
+  #gate input { font-size: 18px; letter-spacing: 0.12em; width: 16em; text-align: center;
     background: #111; color: #fff; border: 1px solid #444; border-radius: 8px; padding: 10px; }
   #cu-form { display: flex; gap: 6px; margin: 8px 0; }
   #cu-form input { flex: 1; background: #111; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
@@ -108,7 +108,7 @@ export const PLAYER_HTML = `<!doctype html>
 </div>
 <div id="gate">
   <form id="pin-form">
-    <input id="pin" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="PIN" autocomplete="one-time-code">
+    <input id="pin" maxlength="128" placeholder="PIN or password" autocomplete="one-time-code">
     <button type="submit">Unlock</button>
   </form>
 </div>
@@ -1184,8 +1184,8 @@ export const PLAYER_HTML = `<!doctype html>
       body: JSON.stringify({ pin: pin }),
     }).then(function (r) { return r.json().then(function (b) { return { status: r.status, b: b }; }); }).then(function (x) {
       if (x.status !== 200 || !x.b.session) {
-        err.textContent = x.b.error || "bad PIN";
-        pill.textContent = "bad PIN";
+        err.textContent = x.b.error || "bad PIN or password";
+        pill.textContent = "bad PIN or password";
         return;
       }
       unlockPlayer(x.b.session, x.b.expires_in_s);

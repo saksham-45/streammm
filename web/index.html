@@ -137,6 +137,11 @@
   <label>Max height <input id="cfg-max-h" type="number" min="360" max="4320"></label>
   <label>Cloudflare publish URL <input id="cfg-publish" type="text" placeholder="wss://…/publish"></label>
   <label>Cloudflare watch URL <input id="cfg-watch" type="text" placeholder="wss://…/watch (optional)"></label>
+  <label><input id="cfg-unattended" type="checkbox"> Allow unattended access</label>
+  <p id="unattended-hint" class="cfg-hint hidden">Watchers can join with this password after the 6-digit PIN expires (about 5 minutes). Leave the field blank to keep the current password. Uncheck to disable. Wrong tries are rate-limited like the PIN.</p>
+  <label id="unattended-fields" class="hidden">Unattended password
+    <input id="cfg-unattended-password" type="password" autocomplete="new-password" maxlength="128" placeholder="leave blank to keep">
+  </label>
   <label><input id="cfg-control-enabled" type="checkbox"> Allow remote computer use (kill switch off = blocked)</label>
   <p id="ctl-hint" class="cfg-hint hidden">Watchers can click (left/right/middle), drag, scroll, type, paste clipboard text or files, and drop files into the host inbox. Incoming files appear on the Desktop and on this Mac's pasteboard as Finder files (Cmd-V). Copy on this Mac (text, PNG, and Finder files) is pushed to the watcher automatically. Uncheck to kill remote input immediately after Save.</p>
   <p id="keys-hint" class="cfg-hint hidden">A Send-keys bar appears while remote control is on. Use it for shortcuts the browser would steal (⌘Tab, ⌘W, ⌘Q, Ctrl+Alt+Del, Lock). Same injector the AI uses.</p>
@@ -161,7 +166,7 @@
 
 <div id="login-overlay" class="hidden">
   <form id="login-form">
-    <input id="login-pin" inputmode="numeric" maxlength="6" placeholder="6-digit PIN" autocomplete="one-time-code">
+    <input id="login-pin" maxlength="128" placeholder="6-digit PIN or password" autocomplete="one-time-code">
     <input id="login-token" type="password" placeholder="Host token" autocomplete="off">
     <button type="submit">Unlock</button>
     <div id="login-error" role="alert"></div>

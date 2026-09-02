@@ -205,6 +205,74 @@ pub struct ControlConfig {
     pub block_local: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AccessConfig {
+    /// Persistent password join after the 6-digit PIN expires. OFF by default.
+    #[serde(default)]
+    pub unattended: bool,
+    /// SHA-256 hex of the unattended password. Never the plaintext.
+    #[serde(default)]
+    pub password_hash: String,
+}
+
+impl AccessConfig {
+    pub fn clamp(&mut self) {
+        self.password_hash = normalize_password_hash(&self.password_hash);
+        if !self.unattended {
+            self.password_hash.clear();
+        }
+    }
+}
+
+pub fn normalize_password_hash(raw: &str) -> String {
+    let s = raw.trim().to_ascii_lowercase();
+    if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+        s
+    } else {
+        String::new()
+    }
+}
+
+/// Pull plaintext `access.password` out of a config PATCH so it is never stored.
+pub fn take_access_password(patch: &mut serde_json::Value) -> Option<String> {
+    let obj = patch.get_mut("access")?.as_object_mut()?;
+    match obj.remove("password") {
+        Some(serde_json::Value::String(s)) => Some(s),
+        _ => None,
+    }
+}
+
+pub fn apply_unattended_password(cfg: &mut Config, password: Option<String>) -> Result<(), &'static str> {
+    if !cfg.access.unattended {
+        cfg.access.password_hash.clear();
+        return Ok(());
+    }
+    let Some(raw) = password else {
+        return Ok(());
+    };
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(());
+    }
+    let n = t.chars().count();
+    if n < 8 || n > 128 {
+        return Err("unattended password must be 8–128 characters");
+    }
+    cfg.access.password_hash = crate::otp::sha256_hex(t);
+    Ok(())
+}
+
+/// Host GET /api/config: never send the hash, only whether a password is set.
+pub fn redact_access(cfg: &Config) -> serde_json::Value {
+    let mut v = serde_json::to_value(cfg).unwrap_or(serde_json::json!({}));
+    if let Some(access) = v.get_mut("access").and_then(|x| x.as_object_mut()) {
+        let set = cfg.access.password_hash.len() == 64;
+        access.remove("password_hash");
+        access.insert("password_set".into(), serde_json::json!(set));
+    }
+    v
+}
+
 impl CloudflareConfig {
     pub fn clamp(&mut self) {
         self.publish_url = self.publish_url.trim().to_string();
@@ -236,6 +304,8 @@ pub struct Config {
     pub cloudflare: CloudflareConfig,
     #[serde(default)]
     pub control: ControlConfig,
+    #[serde(default)]
+    pub access: AccessConfig,
 }
 
 fn default_host() -> String {
@@ -256,6 +326,7 @@ impl Default for Config {
             llm: LlmConfig::default(),
             cloudflare: CloudflareConfig::default(),
             control: ControlConfig::default(),
+            access: AccessConfig::default(),
         }
     }
 }
@@ -269,6 +340,7 @@ impl Config {
         self.encoder.clamp();
         self.llm.clamp();
         self.cloudflare.clamp();
+        self.access.clamp();
     }
 
     pub fn from_value(v: serde_json::Value) -> Self {
@@ -349,6 +421,8 @@ mod tests {
         assert_eq!(cfg.encoder.max_height, 4320);
         assert_eq!(cfg.cloudflare.publish_url, "");
         assert!(!cfg.llm.enabled);
+        assert!(!cfg.access.unattended);
+        assert!(cfg.access.password_hash.is_empty());
     }
 
     #[test]
@@ -425,6 +499,28 @@ mod tests {
         let new = Config::default();
         assert!(cloudflare_endpoint_changed(&old, &new));
         assert!(!cloudflare_endpoint_changed(&new, &new));
+    }
+
+    #[test]
+    fn unattended_password_is_hashed_and_redacted() {
+        let mut cfg = Config::default();
+        cfg.access.unattended = true;
+        apply_unattended_password(&mut cfg, Some("short".into())).unwrap_err();
+        apply_unattended_password(&mut cfg, Some("s3cret!!".into())).unwrap();
+        assert_eq!(cfg.access.password_hash.len(), 64);
+        let hash = cfg.access.password_hash.clone();
+        apply_unattended_password(&mut cfg, Some("".into())).unwrap();
+        assert_eq!(cfg.access.password_hash, hash, "blank password must keep the hash");
+        let v = redact_access(&cfg);
+        assert_eq!(v["access"]["unattended"], true);
+        assert_eq!(v["access"]["password_set"], true);
+        assert!(v["access"].get("password_hash").is_none());
+        cfg.access.unattended = false;
+        apply_unattended_password(&mut cfg, None).unwrap();
+        assert!(cfg.access.password_hash.is_empty());
+        let mut patch = serde_json::json!({"access": {"unattended": true, "password": "leave-me-out"}});
+        assert_eq!(take_access_password(&mut patch).as_deref(), Some("leave-me-out"));
+        assert!(patch["access"].get("password").is_none());
     }
 
     #[test]

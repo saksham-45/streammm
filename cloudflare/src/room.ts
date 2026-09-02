@@ -149,6 +149,7 @@ export class StreamRoom extends DurableObject<Env> {
   private analyzedSeq = 0;
   private otpHash = "";
   private otpExp = 0;
+  private unattendedHash = "";
   private sessions = new Map<string, number>();
   private fails = 0;
   private lockUntil = 0;
@@ -289,9 +290,16 @@ export class StreamRoom extends DurableObject<Env> {
       if (v.type === "otp" && typeof v.hash === "string") {
         this.otpHash = v.hash;
         this.otpExp = Number(v.exp) || Date.now() + 300_000;
+        const rec = v as { unattended?: string };
+        this.unattendedHash =
+          typeof rec.unattended === "string" && rec.unattended.length === 64 ? rec.unattended : "";
         this.fails = 0;
         this.lockUntil = 0;
-        await this.ctx.storage.put("otp", { hash: this.otpHash, exp: this.otpExp });
+        await this.ctx.storage.put("otp", {
+          hash: this.otpHash,
+          exp: this.otpExp,
+          unattended: this.unattendedHash,
+        });
       }
       if (v.type === "flags") {
         this.flags.control = !!v.control;
@@ -456,10 +464,11 @@ export class StreamRoom extends DurableObject<Env> {
 
   private async hydrateAuth(): Promise<void> {
     if (!this.otpHash) {
-      const otp = await this.ctx.storage.get<{ hash: string; exp: number }>("otp");
+      const otp = await this.ctx.storage.get<{ hash: string; exp: number; unattended?: string }>("otp");
       if (otp?.hash) {
         this.otpHash = otp.hash;
         this.otpExp = otp.exp;
+        this.unattendedHash = otp.unattended || "";
       }
     }
     if (this.sessions.size === 0) {
@@ -704,13 +713,21 @@ export class StreamRoom extends DurableObject<Env> {
     const hash = await sha256hex(pin);
     const enc = new TextEncoder();
     const ga = await crypto.subtle.digest("SHA-256", enc.encode(hash));
-    const ea = await crypto.subtle.digest("SHA-256", enc.encode(this.otpHash || "none"));
-    const match =
-      this.otpHash &&
+    const pinOk =
+      !!this.otpHash &&
       this.otpExp > now &&
       pin.length === 6 &&
-      crypto.subtle.timingSafeEqual(ga, ea);
-    if (!match) {
+      crypto.subtle.timingSafeEqual(
+        ga,
+        await crypto.subtle.digest("SHA-256", enc.encode(this.otpHash || "none")),
+      );
+    const unattendedOk =
+      !!this.unattendedHash &&
+      crypto.subtle.timingSafeEqual(
+        ga,
+        await crypto.subtle.digest("SHA-256", enc.encode(this.unattendedHash || "none")),
+      );
+    if (!pinOk && !unattendedOk) {
       this.fails += 1;
       if (this.fails >= FAIL_LIMIT) {
         this.lockUntil = now + LOCKOUT_MS;

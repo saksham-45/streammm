@@ -656,6 +656,32 @@ describe("StreamRoom", () => {
     pub.close();
   });
 
+  it("redeems unattended password after the PIN expires", async () => {
+    const pub = await openPublish("unattended");
+    const pin = "123456";
+    const pinHash = await sha256hex(pin);
+    const password = "s3cret!!";
+    const unattended = await sha256hex(password);
+    pub.send(JSON.stringify({ type: "otp", hash: pinHash, exp: Date.now() - 1000, unattended }));
+    await new Promise((r) => setTimeout(r, 40));
+    const base = "https://example.com/api/otp/redeem?room=unattended";
+    const expired = await SELF.fetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin }),
+    });
+    expect(expired.status).toBe(401);
+    const ok = await SELF.fetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin: password }),
+    });
+    expect(ok.status).toBe(200);
+    const body = await ok.json<{ session: string }>();
+    expect(body.session).toBeTruthy();
+    pub.close();
+  });
+
   it("redeem rate-limits after FAIL_LIMIT wrong tries with 429 JSON", async () => {
     const pub = await openPublish("redeem-429");
     await installPin(pub, "654321");

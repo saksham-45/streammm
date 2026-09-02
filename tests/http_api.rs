@@ -896,6 +896,84 @@ async fn otp_redeem_rejects_malformed_empty_and_non_string_pin() {
 }
 
 #[tokio::test]
+async fn unattended_password_redeems_after_pin_expires() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use streamaid::computer_use::DoneModel;
+    use streamaid::input::FakeInjector;
+    use streamaid::otp::{FakeClock, PIN_TTL};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let cfg = Config::default();
+    streamaid::config::save(&cfg, &path).unwrap();
+    let clock = FakeClock::new();
+    let app = App::new_for_test(
+        cfg,
+        path,
+        clock.clone(),
+        FakeInjector::new(),
+        Arc::new(DoneModel),
+    );
+    let router = app.router();
+
+    let short = post_json(
+        router.clone(),
+        "/api/config",
+        Body::from(json!({"access": {"unattended": true, "password": "short"}}).to_string()),
+    )
+    .await;
+    assert_eq!(short.status(), StatusCode::BAD_REQUEST);
+
+    let set = post_json(
+        router.clone(),
+        "/api/config",
+        Body::from(json!({"access": {"unattended": true, "password": "s3cret!!"}}).to_string()),
+    )
+    .await;
+    assert_eq!(set.status(), StatusCode::OK);
+
+    let shown = router
+        .clone()
+        .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let shown = body_json(shown).await;
+    assert_eq!(shown["access"]["unattended"], true);
+    assert_eq!(shown["access"]["password_set"], true);
+    assert!(shown["access"].get("password_hash").is_none());
+
+    let minted = router
+        .clone()
+        .oneshot(Request::post("/api/otp").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let pin = body_json(minted).await["pin"].as_str().unwrap().to_string();
+    clock.advance(PIN_TTL + Duration::from_secs(1));
+
+    let expired = post_json(
+        router.clone(),
+        "/api/otp/redeem",
+        Body::from(json!({"pin": pin}).to_string()),
+    )
+    .await;
+    assert_eq!(expired.status(), StatusCode::UNAUTHORIZED);
+
+    let ok = post_json(
+        router,
+        "/api/otp/redeem",
+        Body::from(json!({"pin": "s3cret!!"}).to_string()),
+    )
+    .await;
+    assert_eq!(ok.status(), StatusCode::OK);
+    let sess = body_json(ok).await;
+    assert!(
+        sess["session"].as_str().filter(|s| !s.is_empty()).is_some(),
+        "unattended password must issue a session after the PIN expires, got {sess}"
+    );
+}
+
+#[tokio::test]
 async fn config_post_rejects_malformed_non_object_and_unauthorized() {
     let (_dir, app) = token_app();
     let router = app.router();

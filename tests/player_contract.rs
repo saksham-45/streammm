@@ -158,6 +158,19 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "audio must be a Settings checkbox that reveals a device picker and Unmute"
     );
     assert!(
+        html.contains("id=\"cfg-unattended\"")
+            && html.contains("id=\"unattended-fields\"")
+            && html.contains("id=\"unattended-hint\"")
+            && html.contains("id=\"cfg-unattended-password\"")
+            && js.contains("access")
+            && js.contains("password_set"),
+        "unattended access must be a Settings checkbox that reveals a password field"
+    );
+    assert!(
+        html.contains("PIN or password") || html.contains("PIN or unattended"),
+        "host login must accept the unattended password as well as the PIN"
+    );
+    assert!(
         js.contains("mp4a.40.2") && js.contains("cfg-audio"),
         "host player must request an AAC SourceBuffer when mic audio is on"
     );
@@ -347,6 +360,12 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("Max-Age=86400") || s.contains("expires_in_s"),
         "watch page must keep the redeemed session for a day"
+    );
+    assert!(
+        s.contains("PIN or password")
+            && s.contains("maxlength=\"128\"")
+            && !s.contains("maxlength=\"6\""),
+        "watch page must accept an unattended password after the PIN expires"
     );
 }
 
@@ -573,6 +592,10 @@ const nodes = {{
   "jpeg-fields": el(true),
   "bitrate-fields": el(false),
   "gop-fields": el(false),
+  "cfg-unattended": el(false),
+  "unattended-hint": el(true),
+  "unattended-fields": el(true),
+  "cfg-unattended-password": el(false),
   "cfg-audio": el(false),
   "audio-hint": el(true),
   "audio-fields": el(true),
@@ -601,6 +624,7 @@ window.streamaidUi.syncFeatureUi();
 if (!nodes["llm-fields"].classList.contains("hidden")) throw new Error("LLM fields visible while off");
 if (!nodes["analysis-pane"].classList.contains("hidden")) throw new Error("analysis pane visible while off");
 if (!nodes["cu-section"].classList.contains("hidden")) throw new Error("AI form visible while off");
+if (!nodes["unattended-fields"].classList.contains("hidden")) throw new Error("unattended password visible while off");
 if (!nodes["keys-bar"].classList.contains("hidden")) throw new Error("keys-bar visible while off");
 if (!nodes["keys-hint"].classList.contains("hidden")) throw new Error("keys-hint visible while off");
 if (!nodes["chat-section"].classList.contains("hidden")) throw new Error("chat visible while off");
@@ -639,6 +663,10 @@ if (nodes["block-hint"].classList.contains("hidden")) throw new Error("block hin
 if (nodes["analysis-pane"].classList.contains("hidden")) throw new Error("side pane still hidden after control enable");
 if (!nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality visible in H.264 mode");
 if (nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate hidden in H.264 mode");
+nodes["cfg-unattended"].checked = true;
+window.streamaidUi.syncFeatureUi();
+if (nodes["unattended-fields"].classList.contains("hidden")) throw new Error("unattended password still hidden after enable");
+if (nodes["unattended-hint"].classList.contains("hidden")) throw new Error("unattended hint still hidden after enable");
 if (!nodes["audio-hint"].classList.contains("hidden")) throw new Error("audio hint visible while mic off");
 if (!nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute visible while mic off");
 nodes["cfg-audio"].checked = true;

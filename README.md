@@ -55,6 +55,8 @@ https://<your-worker>.workers.dev/
 
 The host UI (`http://127.0.0.1:8080`) shows a live **6-digit PIN** (about 5 minutes; regenerate from Settings / `POST /api/otp`). The remote person types that PIN on the Worker page or localhost login overlay. Redeem issues a short-lived `streamaid_session` cookie. Wrong PINs are 401 and rate-limited.
 
+**Allow unattended access** (Settings) reveals a persistent password. After the PIN expires, watchers join with that password on the same unlock field (`POST /api/otp/redeem` `{ "pin": "…" }`). The origin stores only a SHA-256 hash; GET `/api/config` reports `access.password_set` and never the hash. Uncheck to disable.
+
 `STREAM_TOKEN` stays the publisher secret (`npx wrangler secret put STREAM_TOKEN`). It is not the human watch password.
 
 The Worker homepage is a player with PIN unlock, **Have AI use this computer**, and a screen analysis + Ask sidebar. `/watch` is the viewer WebSocket (session); `/publish` is ingest from the origin; `/health` is public.

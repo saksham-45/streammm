@@ -168,6 +168,11 @@ impl App {
             .parent()
             .map(|p| p.join("inbox"))
             .unwrap_or_else(|| PathBuf::from("inbox"));
+        let unattended = if cfg.access.unattended {
+            cfg.access.password_hash.clone()
+        } else {
+            String::new()
+        };
         let app = Arc::new(Self {
             cfg: Mutex::new(cfg),
             cfg_path,
@@ -189,6 +194,7 @@ impl App {
             incoming_png: Mutex::new(None),
             chat_log: Mutex::new(Vec::new()),
         });
+        app.otp.set_unattended(unattended);
         let app2 = app.clone();
         tokio::spawn(async move {
             let mut rx = inbound_rx;
@@ -238,9 +244,16 @@ impl App {
     }
 
     pub fn push_otp_wire(&self) {
+        let unattended = self.otp.unattended_hash();
         if let Some((hash, exp)) = self.otp.wire_payload() {
-            self.publisher
-                .push_wire(json!({"type": "otp", "hash": hash, "exp": exp}).to_string());
+            self.publisher.push_wire(
+                json!({"type": "otp", "hash": hash, "exp": exp, "unattended": unattended})
+                    .to_string(),
+            );
+        } else if !unattended.is_empty() {
+            self.publisher.push_wire(
+                json!({"type": "otp", "hash": "", "exp": 0, "unattended": unattended}).to_string(),
+            );
         }
         let cfg = self.cfg.lock().clone();
         let audio = crate::encoder::capture_wants_audio(&cfg, crate::encoder::sysname());
@@ -804,6 +817,10 @@ impl App {
             },
             "otp": {
                 "has_pin": self.otp.current_pin().is_some(),
+            },
+            "access": {
+                "unattended": cfg.access.unattended,
+                "password_set": cfg.access.password_hash.len() == 64,
             }
         })
     }
@@ -1002,7 +1019,7 @@ async fn api_config_get(State(app): State<Arc<App>>, req: Request) -> Response {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     let cfg = app.cfg.lock().clone();
-    Json(cfg).into_response()
+    Json(config::redact_access(&cfg)).into_response()
 }
 
 async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response {
@@ -1019,8 +1036,13 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
     if !patch.is_object() {
         return json_err(StatusCode::BAD_REQUEST, "expected JSON object");
     }
+    let mut patch = patch;
+    let password = config::take_access_password(&mut patch);
     let old = app.cfg.lock().clone();
-    let new_cfg = old.merge_patch(patch);
+    let mut new_cfg = old.merge_patch(patch);
+    if let Err(e) = config::apply_unattended_password(&mut new_cfg, password) {
+        return json_err(StatusCode::BAD_REQUEST, e);
+    }
     let restart_bind =
         old.host != new_cfg.host || old.port != new_cfg.port || old.token != new_cfg.token;
     let recapture = old.capture != new_cfg.capture || old.encoder != new_cfg.encoder;
@@ -1034,6 +1056,12 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
     }
     app.apply_display(&new_cfg.capture.input);
     app.sync_block_local();
+    let unattended = if new_cfg.access.unattended {
+        new_cfg.access.password_hash.clone()
+    } else {
+        String::new()
+    };
+    app.otp.set_unattended(unattended);
     app.push_otp_wire();
     if recapture {
         app.capture.restart(new_cfg);

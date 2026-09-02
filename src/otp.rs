@@ -121,6 +121,7 @@ struct Inner {
     sessions: HashMap<String, Instant>,
     fails: u32,
     lock_until: Option<Instant>,
+    unattended_hash: String,
 }
 
 pub struct OtpGate {
@@ -137,6 +138,7 @@ impl OtpGate {
                 sessions: HashMap::new(),
                 fails: 0,
                 lock_until: None,
+                unattended_hash: String::new(),
             }),
         }
     }
@@ -188,6 +190,20 @@ impl OtpGate {
         Some((st.hash, st.exp_unix_ms))
     }
 
+    pub fn set_unattended(&self, hash: String) {
+        let h = hash.trim().to_ascii_lowercase();
+        let mut g = self.inner.lock();
+        g.unattended_hash = if h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()) {
+            h
+        } else {
+            String::new()
+        };
+    }
+
+    pub fn unattended_hash(&self) -> String {
+        self.inner.lock().unattended_hash.clone()
+    }
+
     pub fn redeem(&self, pin: &str) -> Result<Session, RedeemError> {
         let now = self.clock.now();
         let pin = pin.trim();
@@ -200,12 +216,15 @@ impl OtpGate {
                 g.lock_until = None;
                 g.fails = 0;
             }
-            let ok = g
+            let secret_hash = sha256_hex(pin);
+            let pin_ok = g
                 .pin
                 .as_ref()
-                .map(|st| st.exp > now && hash_eq(&st.hash, &sha256_hex(pin)))
+                .map(|st| st.exp > now && hash_eq(&st.hash, &secret_hash))
                 .unwrap_or(false);
-            if !ok {
+            let unattended_ok =
+                !g.unattended_hash.is_empty() && hash_eq(&g.unattended_hash, &secret_hash);
+            if !pin_ok && !unattended_ok {
                 g.fails += 1;
                 if g.fails >= FAIL_LIMIT {
                     g.lock_until = Some(now + LOCKOUT);
@@ -335,5 +354,19 @@ mod tests {
         );
         clock.advance(Duration::from_secs(2 * 3600));
         assert!(!g.session_ok(&sess.token));
+    }
+
+    #[test]
+    fn unattended_password_works_after_pin_expires() {
+        let clock = FakeClock::new();
+        let g = OtpGate::new(clock.clone());
+        let st = g.mint();
+        g.set_unattended(sha256_hex("s3cret!!"));
+        clock.advance(PIN_TTL + Duration::from_secs(1));
+        assert_eq!(g.redeem(&st.pin).unwrap_err(), RedeemError::Unauthorized);
+        let sess = g.redeem("s3cret!!").unwrap();
+        assert!(g.session_ok(&sess.token));
+        g.set_unattended(String::new());
+        assert_eq!(g.redeem("s3cret!!").unwrap_err(), RedeemError::Unauthorized);
     }
 }
