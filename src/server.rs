@@ -94,7 +94,7 @@ impl App {
     ) -> Arc<Self> {
         let hub = Hub::new();
         let capture = Capture::new(hub.clone());
-        let (inbound_tx, inbound_rx) = mpsc::channel::<String>(64);
+        let (inbound_tx, inbound_rx) = mpsc::channel::<String>(256);
         let publisher = Publisher::new(hub.clone(), cfg.clone(), inbound_tx);
         let (events, _) = tokio::sync::broadcast::channel(128);
         let (clip_tx, _) = tokio::sync::broadcast::channel(16);
@@ -941,7 +941,7 @@ async fn api_files_put(State(app): State<Arc<App>>, req: Request) -> Response {
     if let Err(e) = files_ok(&app, req.headers(), req.uri()) {
         return e;
     }
-    let body = axum::body::to_bytes(req.into_body(), crate::files::MAX_FILE * 2)
+    let body = axum::body::to_bytes(req.into_body(), crate::files::HTTP_PUT_MAX * 2)
         .await
         .unwrap_or_default();
     let v: Value = match serde_json::from_slice(&body) {
@@ -962,6 +962,12 @@ async fn api_files_put(State(app): State<Arc<App>>, req: Request) -> Response {
         },
         None => return json_err(StatusCode::BAD_REQUEST, "missing data"),
     };
+    if data.len() > crate::files::HTTP_PUT_MAX {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "file too large for HTTP; drop it on the live session instead",
+        );
+    }
     match app.files.put_bytes(name, &data) {
         Ok(ent) => Json(json!({"ok": true, "name": ent.name, "size": ent.size})).into_response(),
         Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
@@ -1680,6 +1686,80 @@ mod tests {
         }
         assert!(saw_list, "list must include the uploaded file");
         assert!(saw_blob, "get must return the file bytes");
+    }
+
+    #[tokio::test]
+    async fn viewer_chunked_file_put_over_websocket() {
+        use crate::computer_use::DoneModel;
+        use crate::files::encode_b64;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.token = "s3cret".into();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            FakeInjector::new(),
+            Arc::new(DoneModel),
+        );
+        let pin = app.otp.mint().pin;
+        let sess = app.otp.redeem(&pin).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = app.clone().router();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let url = format!("ws://{addr}/stream.ws?session={}", sess.token);
+        let (mut ws, _) = connect_async(&url).await.expect("ws");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await;
+        let a = encode_b64(b"AAAA");
+        let b = encode_b64(b"BBBB");
+        ws.send(Message::Text(
+            r#"{"type":"file","action":"begin","id":"xfer1","name":"part.bin","size":8}"#.into(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            format!(r#"{{"type":"file","action":"chunk","id":"xfer1","data":"{a}"}}"#).into(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            format!(r#"{{"type":"file","action":"chunk","id":"xfer1","data":"{b}"}}"#).into(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            r#"{"type":"file","action":"end","id":"xfer1"}"#.into(),
+        ))
+        .await
+        .unwrap();
+        let mut saw_ok = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), ws.next()).await {
+                Ok(Some(Ok(Message::Text(t)))) => {
+                    if t.contains("part.bin") && t.contains("\"ok\"") {
+                        saw_ok = true;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_ok, "chunked put must ack");
+        assert_eq!(app.files.get_bytes("part.bin").unwrap(), b"AAAABBBB");
     }
 
     #[tokio::test]

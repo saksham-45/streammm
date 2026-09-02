@@ -217,7 +217,8 @@ function applyClipboardText(text) {
   navigator.clipboard.writeText(text).catch(function () {});
 }
 
-const FILE_MAX = 8 * 1024 * 1024;
+const FILE_MAX = 64 * 1024 * 1024;
+const FILE_CHUNK = 24 * 1024;
 
 function bytesToB64(u8) {
   let s = "";
@@ -262,13 +263,39 @@ function refreshFiles() {
 function uploadFileBytes(name, u8) {
   const out = $("file-out");
   if (u8.length > FILE_MAX) {
-    if (out) out.textContent = "file too large (8 MB max)";
+    if (out) out.textContent = "file too large (64 MB max)";
     return;
   }
   if (out) out.textContent = "sending " + name + "…";
-  if (sendFileJson({ type: "file", action: "put", name: name, data: bytesToB64(u8) })) {
+  if (ws && ws.readyState === 1) {
+    const id = "f" + Date.now().toString(36);
+    sendFileJson({ type: "file", action: "begin", id: id, name: name, size: u8.length });
+    let off = 0;
+    function pump() {
+      let n = 0;
+      while (n < 8 && off < u8.length) {
+        const end = Math.min(off + FILE_CHUNK, u8.length);
+        sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(u8.subarray(off, end)) });
+        off = end;
+        n += 1;
+      }
+      if (out) {
+        out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / u8.length)) + "%";
+      }
+      if (off >= u8.length) {
+        sendFileJson({ type: "file", action: "end", id: id });
+        return;
+      }
+      setTimeout(pump, 0);
+    }
+    pump();
     return;
   }
+  if (u8.length > 8 * 1024 * 1024) {
+    if (out) out.textContent = "file too large for HTTP; wait for the live session";
+    return;
+  }
+  if (typeof fetch !== "function") return;
   fetch(url("/api/files"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },

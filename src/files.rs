@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const MAX_FILE: usize = 8 * 1024 * 1024;
+pub const MAX_FILE: usize = 64 * 1024 * 1024;
+pub const HTTP_PUT_MAX: usize = 8 * 1024 * 1024;
 pub const MAX_CHUNK: usize = 24 * 1024;
 pub const MAX_NAME: usize = 128;
 
@@ -340,6 +341,30 @@ mod tests {
         let ent = inbox.end("t1").unwrap();
         assert_eq!(ent.size, 8);
         assert_eq!(inbox.get_bytes("chunk.bin").unwrap(), b"abcdefgh");
+    }
+
+    #[test]
+    fn handle_begin_chunk_end_json_larger_than_one_chunk() {
+        let (_dir, inbox) = tmp_inbox();
+        let data = vec![7u8; MAX_CHUNK + 100];
+        let begin = inbox.handle_message(&json!({
+            "action": "begin",
+            "id": "xfer1",
+            "name": "big.bin",
+            "size": data.len()
+        }));
+        assert!(begin[0].contains("accept"), "{}", begin[0]);
+        for part in data.chunks(MAX_CHUNK) {
+            let r = inbox.handle_message(&json!({
+                "action": "chunk",
+                "id": "xfer1",
+                "data": encode_b64(part)
+            }));
+            assert!(r.is_empty() || r.iter().all(|m| !m.contains("error")), "{r:?}");
+        }
+        let end = inbox.handle_message(&json!({"action":"end","id":"xfer1"}));
+        assert!(end[0].contains("\"ok\""), "{}", end[0]);
+        assert_eq!(inbox.get_bytes("big.bin").unwrap(), data);
     }
 
     #[test]

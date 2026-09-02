@@ -219,12 +219,14 @@ async fn run_session(
                         send_ping(&mut ws, Message::Pong(p)).await?;
                     }
                     Some(Ok(Message::Text(t))) => {
-                        let _ = inbound.try_send(t.to_string());
+                        if inbound.send(t.to_string()).await.is_err() {
+                            anyhow::bail!("publisher inbound closed");
+                        }
                     }
                     Some(Ok(Message::Binary(b))) => {
                         if let Ok(s) = std::str::from_utf8(&b) {
-                            if s.starts_with('{') {
-                                let _ = inbound.try_send(s.to_string());
+                            if s.starts_with('{') && inbound.send(s.to_string()).await.is_err() {
+                                anyhow::bail!("publisher inbound closed");
                             }
                         }
                     }

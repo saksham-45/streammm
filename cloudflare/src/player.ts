@@ -222,7 +222,8 @@ export const PLAYER_HTML = `<!doctype html>
   });
   bindControl(video);
   bindControl(canvas);
-  var FILE_MAX = 8 * 1024 * 1024;
+  var FILE_MAX = 64 * 1024 * 1024;
+  var FILE_CHUNK = 24 * 1024;
   var incomingFiles = {};
   function sendFileJson(msg) {
     if (!controlOn || !ws || ws.readyState !== 1) return false;
@@ -292,9 +293,27 @@ export const PLAYER_HTML = `<!doctype html>
   }
   function uploadFileBytes(name, u8) {
     var out = document.getElementById("file-out");
-    if (u8.length > FILE_MAX) { if (out) out.textContent = "file too large (8 MB max)"; return; }
+    if (u8.length > FILE_MAX) { if (out) out.textContent = "file too large (64 MB max)"; return; }
     if (out) out.textContent = "sending " + name + "…";
-    sendFileJson({ type: "file", action: "put", name: name, data: bytesToB64(u8) });
+    var id = "f" + Date.now().toString(36);
+    if (!sendFileJson({ type: "file", action: "begin", id: id, name: name, size: u8.length })) return;
+    var off = 0;
+    function pump() {
+      var n = 0;
+      while (n < 8 && off < u8.length) {
+        var end = Math.min(off + FILE_CHUNK, u8.length);
+        sendFileJson({ type: "file", action: "chunk", id: id, data: bytesToB64(u8.subarray(off, end)) });
+        off = end;
+        n += 1;
+      }
+      if (out) out.textContent = "sending " + name + " " + Math.min(100, Math.round((off * 100) / u8.length)) + "%";
+      if (off >= u8.length) {
+        sendFileJson({ type: "file", action: "end", id: id });
+        return;
+      }
+      setTimeout(pump, 0);
+    }
+    pump();
   }
   function uploadDroppedFiles(fileList) {
     if (!controlOn) return;
