@@ -1297,6 +1297,39 @@ async fn files_put_list_download_and_reject_traversal() {
     assert_eq!(del_dir_body["deleted"], true);
     assert_eq!(del_dir_body["dir"], true);
 
+    app.files.put_bytes("rename-me.txt", b"hi").unwrap();
+    let renamed = router
+        .clone()
+        .oneshot(
+            Request::post("/api/files/rename")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "rename-me.txt", "to": "renamed.txt"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.status(), StatusCode::OK);
+    let renamed_body = body_json(renamed).await;
+    assert_eq!(renamed_body["renamed"], true);
+    assert_eq!(renamed_body["name"], "renamed.txt");
+    let clash = router
+        .clone()
+        .oneshot(
+            Request::post("/api/files/rename")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "renamed.txt", "to": "big.bin"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(clash.status(), StatusCode::CONFLICT);
+
     let del = router
         .clone()
         .oneshot(

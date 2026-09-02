@@ -866,6 +866,11 @@ function renderFileList(files, root, path) {
       open.textContent = f.name + "/";
       open.addEventListener("click", function () { browseFiles(fileRoot, joinFilePath(filePath, f.name)); });
       li.appendChild(open);
+      const renDir = document.createElement("button");
+      renDir.type = "button";
+      renDir.textContent = "Rename";
+      renDir.addEventListener("click", function () { renameInboxFile(f.name); });
+      li.appendChild(renDir);
       const delDir = document.createElement("button");
       delDir.type = "button";
       delDir.textContent = "Delete";
@@ -879,6 +884,11 @@ function renderFileList(files, root, path) {
     a.textContent = f.name + (f.size != null ? " (" + f.size + " B)" : "");
     a.download = f.name;
     li.appendChild(a);
+    const ren = document.createElement("button");
+    ren.type = "button";
+    ren.textContent = "Rename";
+    ren.addEventListener("click", function () { renameInboxFile(f.name); });
+    li.appendChild(ren);
     const del = document.createElement("button");
     del.type = "button";
     del.textContent = "Delete";
@@ -886,6 +896,33 @@ function renderFileList(files, root, path) {
     li.appendChild(del);
     ul.appendChild(li);
   });
+}
+
+function renameInboxFile(from, to) {
+  const out = $("file-out");
+  const src = String(from || "").trim();
+  if (!src) return "";
+  let dest = to;
+  if (dest == null && typeof window.prompt === "function") dest = window.prompt("New name", src);
+  dest = String(dest || "").trim();
+  if (!dest || dest === src) return dest;
+  if (sendFileJson({ type: "file", action: "rename", name: src, to: dest, root: fileRoot, path: filePath })) {
+    if (out) out.textContent = "renaming " + src + "…";
+    return dest;
+  }
+  if (typeof fetch !== "function") return dest;
+  fetch(url("/api/files/rename"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: src, to: dest, root: fileRoot, path: filePath })
+  }).then(function (r) { return r.json(); }).then(function (body) {
+    if (!body) return;
+    if (out) out.textContent = body.error ? ("error: " + body.error) : ("renamed " + dest);
+    refreshFiles();
+  }).catch(function (err) {
+    if (out) out.textContent = "error: " + err.message;
+  });
+  return dest;
 }
 
 function mkdirInboxFolder(name) {
@@ -1267,6 +1304,11 @@ function handleFileMsg(msg) {
   }
   if (msg.action === "mkdir") {
     if (out) out.textContent = "created " + (msg.name || "");
+    refreshFiles();
+    return;
+  }
+  if (msg.action === "renamed") {
+    if (out) out.textContent = "renamed " + (msg.name || "");
     refreshFiles();
     return;
   }
@@ -2277,6 +2319,7 @@ if (typeof window !== "undefined") {
     copyWolMac: copyWolMac,
     browseFiles: browseFiles,
     mkdirInboxFolder: mkdirInboxFolder,
+    renameInboxFile: renameInboxFile,
   };
 }
 

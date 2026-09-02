@@ -405,6 +405,50 @@ impl Inbox {
         Ok(FileEntry::file(name, meta.len()))
     }
 
+    pub fn rename_at(
+        &self,
+        root: &str,
+        rel: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<FileEntry, String> {
+        let from = sanitize_name(from).ok_or_else(|| "invalid file name".to_string())?;
+        let to = sanitize_name(to).ok_or_else(|| "invalid file name".to_string())?;
+        if from == to {
+            let path = self.join_under(root, rel, &from)?;
+            let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
+            return Ok(FileEntry {
+                name: to,
+                size: if meta.is_dir() { 0 } else { meta.len() },
+                dir: meta.is_dir(),
+            });
+        }
+        let src = self.join_under(root, rel, &from)?;
+        let dest = self.join_under(root, rel, &to)?;
+        if !src.exists() {
+            return Err("file not found".into());
+        }
+        if dest.exists() {
+            return Err("already exists".into());
+        }
+        let meta = fs::metadata(&src).map_err(|_| "file not found".to_string())?;
+        fs::rename(&src, &dest).map_err(|e| e.to_string())?;
+        if normalize_root(root) == Some("inbox") && sanitize_rel(rel).unwrap_or_default().is_empty()
+        {
+            let _ = fs::rename(self.part_path(&from), self.part_path(&to));
+            self.incoming.lock().iter_mut().for_each(|(_, inc)| {
+                if inc.name == from {
+                    inc.name = to.clone();
+                }
+            });
+        }
+        Ok(FileEntry {
+            name: to,
+            size: if meta.is_dir() { 0 } else { meta.len() },
+            dir: meta.is_dir(),
+        })
+    }
+
     pub fn get_bytes(&self, name: &str) -> Result<Vec<u8>, String> {
         let path = self.dest(name)?;
         let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
@@ -655,6 +699,26 @@ impl Inbox {
                             "action": "mkdir",
                             "name": ent.name,
                             "dir": true,
+                            "root": normalize_root(root).unwrap_or("inbox"),
+                            "path": sanitize_rel(rel).unwrap_or_default()
+                        })
+                        .to_string(),
+                        self.list_at_json(root, rel),
+                    ],
+                    Err(e) => vec![err_json(&e)],
+                }
+            }
+            "rename" => {
+                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let to = v.get("to").and_then(|n| n.as_str()).unwrap_or("");
+                match self.rename_at(root, rel, name, to) {
+                    Ok(ent) => vec![
+                        json!({
+                            "type": "file",
+                            "action": "renamed",
+                            "name": ent.name,
+                            "from": name,
+                            "dir": ent.dir,
                             "root": normalize_root(root).unwrap_or("inbox"),
                             "path": sanitize_rel(rel).unwrap_or_default()
                         })
@@ -952,6 +1016,32 @@ mod tests {
         let gone = inbox.remove_at("desktop", "", "Empty").unwrap();
         assert!(gone.dir);
         assert!(!desk.join("Empty").exists());
+        inbox.mkdir_at("desktop", "", "Old").unwrap();
+        let renamed = inbox.rename_at("desktop", "", "Old", "Renamed").unwrap();
+        assert!(renamed.dir);
+        assert_eq!(renamed.name, "Renamed");
+        assert!(desk.join("Renamed").is_dir());
+        assert!(!desk.join("Old").exists());
+        assert_eq!(
+            inbox.rename_at("desktop", "", "Renamed", "Work").unwrap_err(),
+            "already exists"
+        );
+        assert!(inbox.rename_at("desktop", "", "Renamed", "../x").is_err());
+        inbox
+            .put_bytes_at("desktop", "Work", "n.txt", b"1")
+            .unwrap();
+        inbox
+            .rename_at("desktop", "Work", "n.txt", "m.txt")
+            .unwrap();
+        assert_eq!(fs::read(desk.join("Work").join("m.txt")).unwrap(), b"1");
+        let rn = inbox.handle_message(&json!({
+            "action": "rename",
+            "root": "desktop",
+            "path": "Work",
+            "name": "m.txt",
+            "to": "z.txt"
+        }));
+        assert!(rn.iter().any(|m| m.contains("\"renamed\"") && m.contains("z.txt")));
     }
 
     #[test]

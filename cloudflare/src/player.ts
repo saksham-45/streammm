@@ -818,6 +818,19 @@ export const PLAYER_HTML = `<!doctype html>
     });
   }
   bindFileRoots(document.getElementById("file-roots"));
+  function renameInboxFile(from, to) {
+    var out = document.getElementById("file-out");
+    var src = String(from || "").trim();
+    if (!src) return "";
+    var dest = to;
+    if (dest == null && typeof window.prompt === "function") dest = window.prompt("New name", src);
+    dest = String(dest || "").trim();
+    if (!dest || dest === src) return dest;
+    if (sendFileJson({ type: "file", action: "rename", name: src, to: dest, root: fileRoot, path: filePath })) {
+      if (out) out.textContent = "renaming " + src + "…";
+    }
+    return dest;
+  }
   function mkdirInboxFolder(name) {
     var out = document.getElementById("file-out");
     var n = String(name || "").trim();
@@ -897,6 +910,11 @@ export const PLAYER_HTML = `<!doctype html>
         open.textContent = f.name + "/";
         open.addEventListener("click", function () { browseFiles(fileRoot, joinFilePath(filePath, f.name)); });
         li.appendChild(open);
+        var renDir = document.createElement("button");
+        renDir.type = "button";
+        renDir.textContent = "Rename";
+        renDir.addEventListener("click", function () { renameInboxFile(f.name); });
+        li.appendChild(renDir);
         var delDir = document.createElement("button");
         delDir.type = "button";
         delDir.textContent = "Delete";
@@ -913,6 +931,11 @@ export const PLAYER_HTML = `<!doctype html>
         startInboxGet(f.name, f.size);
       });
       li.appendChild(btn);
+      var ren = document.createElement("button");
+      ren.type = "button";
+      ren.textContent = "Rename";
+      ren.addEventListener("click", function () { renameInboxFile(f.name); });
+      li.appendChild(ren);
       var del = document.createElement("button");
       del.type = "button";
       del.textContent = "Delete";
@@ -976,6 +999,11 @@ export const PLAYER_HTML = `<!doctype html>
     }
     if (msg.action === "mkdir") {
       if (out) out.textContent = "created " + (msg.name || "");
+      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
+      return;
+    }
+    if (msg.action === "renamed") {
+      if (out) out.textContent = "renamed " + (msg.name || "");
       sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
       return;
     }
