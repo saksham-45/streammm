@@ -129,6 +129,7 @@ function syncFeatureUi() {
   setHidden($("audio-fields"), !(f.audio && !f.mjpeg));
   setHidden($("unmute"), !(f.audio && !f.mjpeg));
   setHidden($("voice-hint"), !f.voice);
+  setHidden($("voice-aec-hint"), !(f.voice && f.audio && !f.mjpeg));
   setHidden($("talk"), !f.voice);
   syncEncoderUi();
   if (f.ctl) refreshFiles();
@@ -266,6 +267,18 @@ function voicePayload(pcm, rate) {
   return { type: "voice", pcm: pcm, rate: rate || 16000 };
 }
 
+function talkMicConstraints() {
+  return {
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1
+    },
+    video: false
+  };
+}
+
 function sendVoice(u8, rate) {
   if (!ws || ws.readyState !== 1) return;
   if (!u8 || !u8.length) return;
@@ -273,6 +286,28 @@ function sendVoice(u8, rate) {
 }
 
 let talkState = null;
+let talkEchoSaved = null;
+function setTalkEchoGate(on) {
+  const video = $("stream-video");
+  if (on) {
+    if (talkEchoSaved) return talkEchoSaved;
+    talkEchoSaved = {
+      muted: video ? !!video.muted : true,
+      volume: video && typeof video.volume === "number" ? video.volume : 1
+    };
+    if (video) video.muted = true;
+    return talkEchoSaved;
+  }
+  if (talkEchoSaved && video) {
+    video.muted = !!talkEchoSaved.muted;
+    if (typeof talkEchoSaved.volume === "number") video.volume = talkEchoSaved.volume;
+    const unmute = $("unmute");
+    if (unmute) unmute.textContent = video.muted ? "Unmute" : "Mute";
+  }
+  talkEchoSaved = null;
+  return talkEchoSaved;
+}
+
 function stopTalk() {
   if (!talkState) return;
   try { talkState.proc.disconnect(); } catch (e) {}
@@ -280,13 +315,14 @@ function stopTalk() {
   try { talkState.ac.close(); } catch (e) {}
   if (talkState.stream) talkState.stream.getTracks().forEach(function (t) { t.stop(); });
   talkState = null;
+  setTalkEchoGate(false);
   const btn = $("talk");
   if (btn) { btn.textContent = "Talk"; btn.classList.remove("on"); }
 }
 
 function startTalk() {
   if (talkState || typeof navigator === "undefined" || !navigator.mediaDevices) return;
-  navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(function (stream) {
+  navigator.mediaDevices.getUserMedia(talkMicConstraints()).then(function (stream) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
     const ac = new AC();
@@ -311,6 +347,7 @@ function startTalk() {
     src.connect(proc);
     proc.connect(mute);
     mute.connect(ac.destination);
+    setTalkEchoGate(true);
     talkState = { stream: stream, ac: ac, src: src, proc: proc };
     const btn = $("talk");
     if (btn) { btn.textContent = "Talking…"; btn.classList.add("on"); }
@@ -1743,6 +1780,11 @@ function onReady() {
     unmute.addEventListener("click", function () {
       const video = $("stream-video");
       if (!video) return;
+      if (talkState || talkEchoSaved) {
+        talkEchoSaved = { muted: false, volume: 1 };
+        unmute.textContent = "Mute";
+        return;
+      }
       video.muted = false;
       video.volume = 1;
       video.play().catch(function () {});
@@ -1982,6 +2024,8 @@ if (typeof window !== "undefined") {
     qualityPayload: qualityPayload,
     sendQuality: sendQuality,
     voicePayload: voicePayload,
+    talkMicConstraints: talkMicConstraints,
+    setTalkEchoGate: setTalkEchoGate,
     sendVoice: sendVoice,
     watchRecordMime: watchRecordMime,
     startWatchRecord: startWatchRecord,

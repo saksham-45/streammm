@@ -124,7 +124,8 @@
     <select id="cfg-audio-device"></select>
   </label>
   <label><input id="cfg-voice" type="checkbox"> Allow watcher to talk</label>
-  <p id="voice-hint" class="cfg-hint hidden">Watchers get a Talk button. Their microphone plays continuously on this Mac's speakers (ffmpeg audiotoolbox / ffplay pipe, afplay fallback). Independent of Capture audio, which is the host mic in the stream.</p>
+  <p id="voice-hint" class="cfg-hint hidden">Watchers get a Talk button. Their microphone plays continuously on this Mac's speakers (ffmpeg audiotoolbox / ffplay pipe, afplay fallback). The browser requests echo cancellation. Independent of Capture audio, which is the host mic in the stream.</p>
+  <p id="voice-aec-hint" class="cfg-hint hidden">Capture audio is on, so Talk is half-duplex: the live stream mutes while you speak so you do not hear yourself from the host mic. Unmute is restored when Talk ends.</p>
   <label>Scale
     <select id="cfg-scale">
       <option value="0.25">0.25</option>

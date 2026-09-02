@@ -184,6 +184,8 @@ export const PLAYER_HTML = `<!doctype html>
   var controlOn = false;
   var audioOn = false;
   var aiOn = false;
+  var talkState = null;
+  var talkEchoSaved = null;
   var pill = document.getElementById("pill");
   var err = document.getElementById("err");
   var video = document.getElementById("v");
@@ -197,6 +199,11 @@ export const PLAYER_HTML = `<!doctype html>
   var unmuteBtn = document.getElementById("unmute");
   if (unmuteBtn) {
     unmuteBtn.addEventListener("click", function () {
+      if (talkState || talkEchoSaved) {
+        talkEchoSaved = { muted: false, volume: 1 };
+        unmuteBtn.textContent = "Mute";
+        return;
+      }
       video.muted = false;
       video.volume = 1;
       video.play().catch(function () { showTap(); });
@@ -262,14 +269,38 @@ export const PLAYER_HTML = `<!doctype html>
     sel.dataset.qBound = "1";
     sel.addEventListener("change", function () { sendQuality(sel.value); });
   })();
-  var talkState = null;
   function voicePayload(pcm, rate) {
     return { type: "voice", pcm: pcm, rate: rate || 16000 };
+  }
+  function talkMicConstraints() {
+    return {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1
+      },
+      video: false
+    };
   }
   function sendVoice(u8, rate) {
     if (!ws || ws.readyState !== 1) return;
     if (!u8 || !u8.length) return;
     try { ws.send(JSON.stringify(voicePayload(bytesToB64(u8), rate || 16000))); } catch (e) {}
+  }
+  function setTalkEchoGate(on) {
+    if (on) {
+      if (talkEchoSaved) return;
+      talkEchoSaved = { muted: !!(video && video.muted), volume: video && typeof video.volume === "number" ? video.volume : 1 };
+      if (video) video.muted = true;
+      return;
+    }
+    if (talkEchoSaved && video) {
+      video.muted = !!talkEchoSaved.muted;
+      if (typeof talkEchoSaved.volume === "number") video.volume = talkEchoSaved.volume;
+      if (unmuteBtn) unmuteBtn.textContent = video.muted ? "Unmute" : "Mute";
+    }
+    talkEchoSaved = null;
   }
   function stopTalk() {
     if (!talkState) return;
@@ -278,12 +309,13 @@ export const PLAYER_HTML = `<!doctype html>
     try { talkState.ac.close(); } catch (e) {}
     if (talkState.stream) talkState.stream.getTracks().forEach(function (t) { t.stop(); });
     talkState = null;
+    setTalkEchoGate(false);
     var btn = document.getElementById("talk");
     if (btn) { btn.textContent = "Talk"; btn.classList.remove("on"); }
   }
   function startTalk() {
     if (talkState || !navigator.mediaDevices) return;
-    navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(function (stream) {
+    navigator.mediaDevices.getUserMedia(talkMicConstraints()).then(function (stream) {
       var AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
       var ac = new AC();
@@ -308,6 +340,7 @@ export const PLAYER_HTML = `<!doctype html>
       src.connect(proc);
       proc.connect(mute);
       mute.connect(ac.destination);
+      setTalkEchoGate(true);
       talkState = { stream: stream, ac: ac, src: src, proc: proc };
       var btn = document.getElementById("talk");
       if (btn) { btn.textContent = "Talking…"; btn.classList.add("on"); }

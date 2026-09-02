@@ -212,11 +212,15 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     assert!(
         html.contains("id=\"cfg-voice\"")
             && html.contains("id=\"voice-hint\"")
+            && html.contains("id=\"voice-aec-hint\"")
             && html.contains("id=\"talk\"")
             && js.contains("function sendVoice")
             && js.contains("function startTalk")
+            && js.contains("function talkMicConstraints")
+            && js.contains("function setTalkEchoGate")
+            && js.contains("echoCancellation")
             && js.contains("getUserMedia"),
-        "allow watcher to talk must reveal a Talk button that captures the mic"
+        "allow watcher to talk must reveal a Talk button with AEC and half-duplex mute"
     );
     assert!(
         html.contains("id=\"cfg-unattended\"")
@@ -439,9 +443,12 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         s.contains("id=\"talk\"")
             && s.contains("function sendVoice")
             && s.contains("function startTalk")
+            && s.contains("function talkMicConstraints")
+            && s.contains("function setTalkEchoGate")
+            && s.contains("echoCancellation")
             && s.contains("ctl.voice")
             && s.contains("getUserMedia"),
-        "watch page must reveal Talk when the host allows watcher voice"
+        "watch page must Talk with AEC and mute the stream while speaking"
     );
     assert!(
         s.contains("id=\"rec\"")
@@ -703,7 +710,9 @@ const nodes = {{
   "keep-awake-hint": el(true),
   "cfg-voice": el(false),
   "voice-hint": el(true),
+  "voice-aec-hint": el(true),
   "talk": el(true),
+  "stream-video": {{ classList: tokenList(false), hidden: false, muted: true, volume: 1 }},
   "cfg-audio": el(false),
   "audio-hint": el(true),
   "audio-fields": el(true),
@@ -809,13 +818,22 @@ window.streamaidUi.syncFeatureUi();
 if (nodes["unattended-fields"].classList.contains("hidden")) throw new Error("unattended password still hidden after enable");
 if (nodes["unattended-hint"].classList.contains("hidden")) throw new Error("unattended hint still hidden after enable");
 if (!nodes["voice-hint"].classList.contains("hidden")) throw new Error("voice hint visible while off");
+if (!nodes["voice-aec-hint"].classList.contains("hidden")) throw new Error("AEC hint visible while voice off");
 if (!nodes["talk"].classList.contains("hidden")) throw new Error("Talk visible while voice off");
 nodes["cfg-voice"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["voice-hint"].classList.contains("hidden")) throw new Error("voice hint still hidden after enable");
 if (nodes["talk"].classList.contains("hidden")) throw new Error("Talk still hidden after voice enable");
+if (!nodes["voice-aec-hint"].classList.contains("hidden")) throw new Error("AEC hint visible without capture audio");
 const vp = window.streamaidUi.voicePayload("AQI=", 16000);
 if (vp.type !== "voice" || vp.pcm !== "AQI=" || vp.rate !== 16000) throw new Error("voicePayload");
+const mic = window.streamaidUi.talkMicConstraints();
+if (!mic.audio || !mic.audio.echoCancellation) throw new Error("talkMicConstraints AEC");
+nodes["stream-video"].muted = false;
+window.streamaidUi.setTalkEchoGate(true);
+if (!nodes["stream-video"].muted) throw new Error("Talk must mute the live stream");
+window.streamaidUi.setTalkEchoGate(false);
+if (nodes["stream-video"].muted) throw new Error("Talk end must restore stream mute");
 if (!nodes["audio-hint"].classList.contains("hidden")) throw new Error("audio hint visible while mic off");
 if (!nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute visible while mic off");
 nodes["cfg-audio"].checked = true;
@@ -823,8 +841,10 @@ window.streamaidUi.syncFeatureUi();
 if (nodes["audio-hint"].classList.contains("hidden")) throw new Error("audio hint still hidden after mic enable");
 if (nodes["audio-fields"].classList.contains("hidden")) throw new Error("audio device picker still hidden after mic enable");
 if (nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute still hidden after mic enable");
+if (nodes["voice-aec-hint"].classList.contains("hidden")) throw new Error("AEC hint still hidden when talk+mic");
 nodes["cfg-mode"].value = "mjpeg";
 window.streamaidUi.syncFeatureUi();
+if (!nodes["voice-aec-hint"].classList.contains("hidden")) throw new Error("AEC hint visible in MJPEG mode");
 if (!nodes["unmute"].classList.contains("hidden")) throw new Error("Unmute still visible in MJPEG mode");
 if (!nodes["audio-fields"].classList.contains("hidden")) throw new Error("audio picker still visible in MJPEG mode");
 if (nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG quality still hidden after MJPEG enable");
