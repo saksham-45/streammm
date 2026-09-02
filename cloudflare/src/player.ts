@@ -897,6 +897,11 @@ export const PLAYER_HTML = `<!doctype html>
         open.textContent = f.name + "/";
         open.addEventListener("click", function () { browseFiles(fileRoot, joinFilePath(filePath, f.name)); });
         li.appendChild(open);
+        var delDir = document.createElement("button");
+        delDir.type = "button";
+        delDir.textContent = "Delete";
+        delDir.addEventListener("click", function () { deleteInboxFile(f.name); });
+        li.appendChild(delDir);
         ul.appendChild(li);
         return;
       }

@@ -299,6 +299,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must reveal Delete on inbox files"
     );
     assert!(
+        js.contains("f.dir") && js.contains("deleteInboxFile(f.name)"),
+        "enabling remote control must reveal Delete on empty folders as well as files"
+    );
+    assert!(
         html.contains("id=\"file-mkdir\"")
             && js.contains("function mkdirInboxFolder")
             && js.contains("action: \"mkdir\""),
@@ -449,6 +453,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("action: \"delete\"")
             && s.contains("textContent = \"Delete\""),
         "watch page must reveal Delete on inbox files when remote control is on"
+    );
+    assert!(
+        s.contains("f.dir") && s.contains("deleteInboxFile(f.name)"),
+        "watch page must reveal Delete on empty folders as well as files"
     );
     assert!(
         s.contains("id=\"file-mkdir\"")

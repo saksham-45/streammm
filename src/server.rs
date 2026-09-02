@@ -1747,9 +1747,16 @@ async fn api_files_delete(State(app): State<Arc<App>>, req: Request) -> Response
         return json_err(StatusCode::BAD_REQUEST, "missing name");
     }
     match app.files.remove_at(&root, &path, &name) {
-        Ok(ent) => Json(json!({"ok": true, "deleted": true, "name": ent.name, "size": ent.size}))
-            .into_response(),
+        Ok(ent) => Json(json!({
+            "ok": true,
+            "deleted": true,
+            "name": ent.name,
+            "size": ent.size,
+            "dir": ent.dir
+        }))
+        .into_response(),
         Err(e) if e == "file not found" => json_err(StatusCode::NOT_FOUND, "file not found"),
+        Err(e) if e == "not empty" => json_err(StatusCode::CONFLICT, "not empty"),
         Err(e) if e == "invalid file name" => json_err(StatusCode::BAD_REQUEST, "invalid file name"),
         Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
     }

@@ -383,10 +383,19 @@ impl Inbox {
     pub fn remove_at(&self, root: &str, rel: &str, name: &str) -> Result<FileEntry, String> {
         let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
         let path = self.join_under(root, rel, &name)?;
-        if path.is_dir() {
-            return Err("not a file".into());
-        }
         let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
+        if meta.is_dir() {
+            let mut rd = fs::read_dir(&path).map_err(|e| e.to_string())?;
+            if rd.next().is_some() {
+                return Err("not empty".into());
+            }
+            fs::remove_dir(&path).map_err(|e| e.to_string())?;
+            return Ok(FileEntry {
+                name,
+                size: 0,
+                dir: true,
+            });
+        }
         fs::remove_file(&path).map_err(|e| e.to_string())?;
         if normalize_root(root) == Some("inbox") && sanitize_rel(rel).unwrap_or_default().is_empty()
         {
@@ -933,6 +942,16 @@ mod tests {
         }));
         assert!(mk.iter().any(|m| m.contains("\"mkdir\"") && m.contains("NewFolder")));
         assert!(home.path().join("NewFolder").is_dir());
+        inbox.remove_at("home", "", "NewFolder").unwrap();
+        assert!(!home.path().join("NewFolder").exists());
+        assert_eq!(
+            inbox.remove_at("desktop", "", "Work").unwrap_err(),
+            "not empty"
+        );
+        inbox.mkdir_at("desktop", "", "Empty").unwrap();
+        let gone = inbox.remove_at("desktop", "", "Empty").unwrap();
+        assert!(gone.dir);
+        assert!(!desk.join("Empty").exists());
     }
 
     #[test]

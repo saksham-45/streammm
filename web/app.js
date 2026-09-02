@@ -866,6 +866,11 @@ function renderFileList(files, root, path) {
       open.textContent = f.name + "/";
       open.addEventListener("click", function () { browseFiles(fileRoot, joinFilePath(filePath, f.name)); });
       li.appendChild(open);
+      const delDir = document.createElement("button");
+      delDir.type = "button";
+      delDir.textContent = "Delete";
+      delDir.addEventListener("click", function () { deleteInboxFile(f.name); });
+      li.appendChild(delDir);
       ul.appendChild(li);
       return;
     }

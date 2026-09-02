@@ -1282,6 +1282,21 @@ async fn files_put_list_download_and_reject_traversal() {
         .unwrap();
     assert_eq!(mkdir_again.status(), StatusCode::CONFLICT);
 
+    let del_dir = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/files?name=SubDir")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(del_dir.status(), StatusCode::OK);
+    let del_dir_body = body_json(del_dir).await;
+    assert_eq!(del_dir_body["deleted"], true);
+    assert_eq!(del_dir_body["dir"], true);
+
     let del = router
         .clone()
         .oneshot(
