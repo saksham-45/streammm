@@ -124,7 +124,7 @@
     <select id="cfg-audio-device"></select>
   </label>
   <label><input id="cfg-voice" type="checkbox"> Allow watcher to talk</label>
-  <p id="voice-hint" class="cfg-hint hidden">Watchers get a Talk button. Their microphone plays on this Mac's speakers (afplay). Independent of Capture audio, which is the host mic in the stream.</p>
+  <p id="voice-hint" class="cfg-hint hidden">Watchers get a Talk button. Their microphone plays continuously on this Mac's speakers (ffmpeg audiotoolbox / ffplay pipe, afplay fallback). Independent of Capture audio, which is the host mic in the stream.</p>
   <label>Scale
     <select id="cfg-scale">
       <option value="0.25">0.25</option>

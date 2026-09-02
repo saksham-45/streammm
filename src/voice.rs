@@ -1,12 +1,14 @@
-//! Watcher microphone → host speakers. Tests use FakeVoice; macOS uses afplay.
+//! Watcher microphone → host speakers. Tests use FakeVoice; live uses a persistent ffmpeg/ffplay pipe.
 
 use parking_lot::Mutex;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 pub const VOICE_MAX: usize = 48 * 1024;
 pub const VOICE_RATE: u32 = 16_000;
@@ -76,6 +78,200 @@ impl VoiceSink for NullVoice {
     fn play_pcm(&self, _pcm: &[u8], _rate: u32) {}
 }
 
+pub fn ffmpeg_audiotoolbox_argv(rate: u32) -> Vec<String> {
+    let rate = clamp_rate(rate).to_string();
+    vec![
+        "-nostdin".into(),
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-f".into(),
+        "s16le".into(),
+        "-ar".into(),
+        rate,
+        "-ac".into(),
+        "1".into(),
+        "-i".into(),
+        "pipe:0".into(),
+        "-f".into(),
+        "audiotoolbox".into(),
+        "default".into(),
+    ]
+}
+
+pub fn ffplay_voice_argv(rate: u32) -> Vec<String> {
+    let rate = clamp_rate(rate).to_string();
+    vec![
+        "-nodisp".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-fflags".into(),
+        "nobuffer".into(),
+        "-flags".into(),
+        "low_delay".into(),
+        "-probesize".into(),
+        "32".into(),
+        "-analyzeduration".into(),
+        "0".into(),
+        "-f".into(),
+        "s16le".into(),
+        "-ar".into(),
+        rate,
+        "-ac".into(),
+        "1".into(),
+        "-i".into(),
+        "pipe:0".into(),
+    ]
+}
+
+pub fn voice_player_candidates(rate: u32) -> Vec<(&'static str, Vec<String>)> {
+    let mut out = Vec::new();
+    if cfg!(target_os = "macos") {
+        out.push(("ffmpeg", ffmpeg_audiotoolbox_argv(rate)));
+    }
+    out.push(("ffplay", ffplay_voice_argv(rate)));
+    out
+}
+
+struct PipeInner {
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    rate: u32,
+}
+
+pub struct PipeVoice {
+    inner: Mutex<PipeInner>,
+    fallback: AfplayVoice,
+}
+
+impl PipeVoice {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(PipeInner {
+                child: None,
+                stdin: None,
+                rate: 0,
+            }),
+            fallback: AfplayVoice::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn spawned(program: &str, args: &[String], stdout: Stdio) -> Option<Self> {
+        let mut cmd = Command::new(program);
+        cmd.args(args)
+            .stdin(Stdio::piped())
+            .stdout(stdout)
+            .stderr(Stdio::null());
+        let mut child = cmd.spawn().ok()?;
+        let stdin = child.stdin.take()?;
+        Some(Self {
+            inner: Mutex::new(PipeInner {
+                child: Some(child),
+                stdin: Some(stdin),
+                rate: VOICE_RATE,
+            }),
+            fallback: AfplayVoice::new(),
+        })
+    }
+
+    fn ensure_pipe(inner: &mut PipeInner, rate: u32) -> bool {
+        if inner.stdin.is_some() && inner.rate == rate {
+            if let Some(child) = inner.child.as_mut() {
+                if child.try_wait().ok().flatten().is_none() {
+                    return true;
+                }
+            }
+        }
+        inner.stdin.take();
+        if let Some(mut child) = inner.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        for (bin, args) in voice_player_candidates(rate) {
+            let mut cmd = Command::new(bin);
+            cmd.args(&args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let Ok(mut child) = cmd.spawn() else {
+                continue;
+            };
+            thread::sleep(Duration::from_millis(30));
+            if child.try_wait().ok().flatten().is_some() {
+                continue;
+            }
+            let Some(stdin) = child.stdin.take() else {
+                let _ = child.kill();
+                continue;
+            };
+            inner.child = Some(child);
+            inner.stdin = Some(stdin);
+            inner.rate = rate;
+            return true;
+        }
+        false
+    }
+}
+
+impl PipeVoice {
+    fn write_pcm(inner: &mut PipeInner, pcm: &[u8]) -> bool {
+        inner
+            .stdin
+            .as_mut()
+            .map(|s| s.write_all(pcm).is_ok() && s.flush().is_ok())
+            .unwrap_or(false)
+    }
+
+    fn pipe_alive(inner: &mut PipeInner, rate: u32) -> bool {
+        inner.stdin.is_some()
+            && inner.rate == rate
+            && inner
+                .child
+                .as_mut()
+                .map(|c| c.try_wait().ok().flatten().is_none())
+                .unwrap_or(false)
+    }
+}
+
+impl VoiceSink for PipeVoice {
+    fn play_pcm(&self, pcm: &[u8], rate: u32) {
+        let rate = clamp_rate(rate);
+        let mut g = self.inner.lock();
+        if !Self::pipe_alive(&mut g, rate) && !Self::ensure_pipe(&mut g, rate) {
+            drop(g);
+            self.fallback.play_pcm(pcm, rate);
+            return;
+        }
+        if !Self::write_pcm(&mut g, pcm) {
+            g.stdin.take();
+            if let Some(mut child) = g.child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            drop(g);
+            self.fallback.play_pcm(pcm, rate);
+        }
+    }
+}
+
+impl Drop for PipeVoice {
+    fn drop(&mut self) {
+        let mut g = self.inner.lock();
+        g.stdin.take();
+        if let Some(mut child) = g.child.take() {
+            for _ in 0..25 {
+                if child.try_wait().ok().flatten().is_some() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 pub struct AfplayVoice {
     dir: PathBuf,
     seq: AtomicU64,
@@ -116,11 +312,7 @@ impl VoiceSink for AfplayVoice {
 }
 
 pub fn production_voice() -> Arc<dyn VoiceSink> {
-    if cfg!(target_os = "macos") {
-        Arc::new(AfplayVoice::new())
-    } else {
-        Arc::new(NullVoice)
-    }
+    Arc::new(PipeVoice::new())
 }
 
 #[cfg(test)]
@@ -156,5 +348,34 @@ mod tests {
         assert_eq!(rec.len(), 1);
         assert_eq!(rec[0].0, 16_000);
         assert_eq!(rec[0].1, vec![9, 8]);
+    }
+
+    #[test]
+    fn voice_player_argv_is_raw_s16le_on_stdin() {
+        let ff = ffmpeg_audiotoolbox_argv(16_000);
+        assert!(ff.windows(2).any(|w| w[0] == "-f" && w[1] == "s16le"));
+        assert!(ff.windows(2).any(|w| w[0] == "-i" && w[1] == "pipe:0"));
+        assert!(ff.windows(2).any(|w| w[0] == "-f" && w[1] == "audiotoolbox"));
+        let play = ffplay_voice_argv(16_000);
+        assert!(play.iter().any(|a| a == "-nodisp"));
+        assert!(play.windows(2).any(|w| w[0] == "-f" && w[1] == "s16le"));
+        assert!(play.windows(2).any(|w| w[0] == "-i" && w[1] == "pipe:0"));
+        let cands = voice_player_candidates(16_000);
+        assert!(cands.iter().any(|(bin, _)| *bin == "ffplay"));
+    }
+
+    #[test]
+    fn pipe_voice_writes_continuous_pcm_to_child_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.raw");
+        let file = fs::File::create(&path).unwrap();
+        let v = PipeVoice::spawned("/bin/cat", &[], Stdio::from(file)).expect("cat");
+        {
+            let mut g = v.inner.lock();
+            assert!(PipeVoice::write_pcm(&mut g, &[1, 2, 3, 4]));
+            assert!(PipeVoice::write_pcm(&mut g, &[5, 6]));
+        }
+        drop(v);
+        assert_eq!(fs::read(&path).unwrap(), vec![1, 2, 3, 4, 5, 6]);
     }
 }
