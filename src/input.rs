@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub const CLIP_MAX: usize = 512 * 1024;
-pub const CLIP_PNG_MAX: usize = 16 * 1024 * 1024;
+pub const CLIP_PNG_MAX: usize = 32 * 1024 * 1024;
 pub const PNG_SIG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 pub fn is_png(data: &[u8]) -> bool {

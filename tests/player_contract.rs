@@ -77,8 +77,8 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "origin UI must paste PNG clipboard through"
     );
     assert!(
-        js.contains("16 * 1024 * 1024") && js.contains("pasteImageFile") && js.contains("createImageBitmap"),
-        "origin UI must accept 16 MB clipboard images and convert JPEG/WebP to PNG"
+        js.contains("32 * 1024 * 1024") && js.contains("pasteImageFile") && js.contains("phase: \"begin\""),
+        "origin UI must chunk clipboard PNGs up to 32 MB"
     );
     assert!(js.contains("streamaid_viewer") || js.contains("hasViewerSession"));
     assert!(js.contains("/api/computer-use/cancel"));
@@ -192,8 +192,8 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page must sync PNG clipboard"
     );
     assert!(
-        s.contains("16 * 1024 * 1024") && s.contains("pasteImageFile") && s.contains("createImageBitmap"),
-        "watch page must accept 16 MB clipboard images and convert JPEG/WebP to PNG"
+        s.contains("32 * 1024 * 1024") && s.contains("pasteImageFile") && s.contains("phase: \"begin\""),
+        "watch page must chunk clipboard PNGs up to 32 MB"
     );
     assert!(
         s.contains("files-section") && s.contains("file-drop"),

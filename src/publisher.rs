@@ -74,7 +74,7 @@ pub struct Publisher {
 
 impl Publisher {
     pub fn new(hub: Hub, cfg: Config, inbound: mpsc::Sender<String>) -> Self {
-        let (wire_out, _) = broadcast::channel(64);
+        let (wire_out, _) = broadcast::channel(2048);
         Self {
             hub,
             cfg: Arc::new(Mutex::new(cfg)),
@@ -105,8 +105,12 @@ impl Publisher {
             if msg.contains("\"thumbs\"") {
                 latest.retain(|m| !m.contains("\"thumbs\""));
             }
-            if msg.contains("\"type\":\"file\"") {
-                // File blobs are transient; do not replay on publisher reconnect.
+            let chunked_clip = msg.contains("\"clipboard\"")
+                && (msg.contains("\"action\":\"begin\"")
+                    || msg.contains("\"action\":\"chunk\"")
+                    || msg.contains("\"action\":\"end\""));
+            if msg.contains("\"type\":\"file\"") || chunked_clip {
+                // File blobs and chunked clipboard PNGs are transient.
             } else {
                 latest.push(msg.clone());
             }

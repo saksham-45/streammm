@@ -217,22 +217,61 @@ function applyClipboardText(text) {
   navigator.clipboard.writeText(text).catch(function () {});
 }
 
+function applyClipboardPngBlob(blob) {
+  if (!blob || typeof navigator === "undefined" || !navigator.clipboard || !window.ClipboardItem) return;
+  navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]).catch(function () {});
+}
+
 function applyClipboardPng(b64) {
-  if (!b64 || typeof navigator === "undefined" || !navigator.clipboard || !window.ClipboardItem) return;
+  if (!b64) return;
   try {
     const bin = atob(b64);
     const u8 = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    const blob = new Blob([u8], { type: "image/png" });
-    navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]).catch(function () {});
+    applyClipboardPngBlob(new Blob([u8], { type: "image/png" }));
   } catch (e) { /* ignore */ }
 }
 
-const CLIP_PNG_MAX = 16 * 1024 * 1024;
+const CLIP_PNG_MAX = 32 * 1024 * 1024;
+const CLIP_PNG_CHUNK = 24 * 1024;
+let incomingPng = null;
 
 function sendClipboardPng(u8) {
   if (!u8 || !u8.length || u8.length > CLIP_PNG_MAX) return;
-  sendControl("clipboard", { mime: "image/png", data: bytesToB64(u8) });
+  if (u8.length <= CLIP_PNG_CHUNK) {
+    sendControl("clipboard", { mime: "image/png", data: bytesToB64(u8) });
+    return;
+  }
+  sendControl("clipboard", { mime: "image/png", phase: "begin", size: u8.length });
+  let off = 0;
+  function pump() {
+    let n = 0;
+    while (n < 8 && off < u8.length) {
+      const end = Math.min(off + CLIP_PNG_CHUNK, u8.length);
+      sendControl("clipboard", { mime: "image/png", phase: "chunk", data: bytesToB64(u8.subarray(off, end)) });
+      off = end;
+      n += 1;
+    }
+    if (off >= u8.length) sendControl("clipboard", { mime: "image/png", phase: "end" });
+    else setTimeout(pump, 0);
+  }
+  pump();
+}
+
+function handleClipboardMsg(msg) {
+  if (msg.mime === "image/png") {
+    if (msg.action === "begin") { incomingPng = []; return; }
+    if (msg.action === "chunk" && incomingPng) { incomingPng.push(b64ToBytes(msg.data)); return; }
+    if (msg.action === "end" && incomingPng) {
+      const parts = incomingPng;
+      incomingPng = null;
+      applyClipboardPngBlob(new Blob(parts, { type: "image/png" }));
+      return;
+    }
+    if (msg.data) applyClipboardPng(msg.data);
+    return;
+  }
+  if (typeof msg.text === "string") applyClipboardText(msg.text);
 }
 
 function pasteImageFile(file) {
@@ -589,10 +628,7 @@ function onWsMessage(ev) {
   if (typeof ev.data === "string") {
     try {
       const msg = JSON.parse(ev.data);
-      if (msg && msg.type === "clipboard") {
-        if (msg.mime === "image/png" && msg.data) applyClipboardPng(msg.data);
-        else if (typeof msg.text === "string") applyClipboardText(msg.text);
-      }
+      if (msg && msg.type === "clipboard") handleClipboardMsg(msg);
       if (msg && msg.type === "thumbs") applyDisplayThumbs(msg.items);
       if (msg && msg.type === "file") {
         handleFileMsg(msg);

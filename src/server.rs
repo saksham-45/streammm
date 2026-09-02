@@ -59,6 +59,7 @@ pub struct App {
     pub files: Inbox,
     pub displays: Mutex<Vec<Device>>,
     pub last_clip: Mutex<String>,
+    incoming_png: Mutex<Option<(usize, Vec<u8>)>>,
 }
 
 struct DisplaySwitchInjector {
@@ -132,10 +133,10 @@ impl App {
     ) -> Arc<Self> {
         let hub = Hub::new();
         let capture = Capture::new(hub.clone());
-        let (inbound_tx, inbound_rx) = mpsc::channel::<String>(256);
+        let (inbound_tx, inbound_rx) = mpsc::channel::<String>(2048);
         let publisher = Publisher::new(hub.clone(), cfg.clone(), inbound_tx);
         let (events, _) = tokio::sync::broadcast::channel(128);
-        let (clip_tx, _) = tokio::sync::broadcast::channel(16);
+        let (clip_tx, _) = tokio::sync::broadcast::channel(2048);
         let inbox_dir = cfg_path
             .parent()
             .map(|p| p.join("inbox"))
@@ -158,6 +159,7 @@ impl App {
             files: Inbox::new(inbox_dir),
             displays: Mutex::new(enumerate_devices()),
             last_clip: Mutex::new(String::new()),
+            incoming_png: Mutex::new(None),
         });
         let app2 = app.clone();
         tokio::spawn(async move {
@@ -242,6 +244,14 @@ impl App {
                 if !self.take_controller(sess) {
                     return;
                 }
+                if let Some(maybe) = self.ingest_clip_png(&v) {
+                    if let Some(png) = maybe {
+                        let a = input::Action::ClipboardPng { png };
+                        self.injector.apply(&a);
+                        self.fanout_clipboard_action(&a);
+                    }
+                    return;
+                }
                 if let Some(a) = input::parse_control_json(&v) {
                     self.injector.apply(&a);
                     self.fanout_clipboard_action(&a);
@@ -304,6 +314,62 @@ impl App {
         }
     }
 
+    /// Phased PNG clipboard (`phase` begin/chunk/end). `None` = not this protocol;
+    /// `Some(None)` = consumed but incomplete; `Some(Some(png))` = ready.
+    fn ingest_clip_png(&self, v: &Value) -> Option<Option<Vec<u8>>> {
+        if v.get("action").and_then(|a| a.as_str()) != Some("clipboard") {
+            return None;
+        }
+        let mime = v.get("mime").and_then(|m| m.as_str()).unwrap_or("");
+        if !mime.contains("png") {
+            return None;
+        }
+        let phase = v.get("phase").and_then(|p| p.as_str()).unwrap_or("");
+        if phase.is_empty() {
+            return None;
+        }
+        match phase {
+            "begin" => {
+                let size = v.get("size").and_then(|n| n.as_u64()).unwrap_or(0) as usize;
+                if size == 0 || size > input::CLIP_PNG_MAX {
+                    *self.incoming_png.lock() = None;
+                } else {
+                    *self.incoming_png.lock() = Some((size, Vec::with_capacity(size.min(1024 * 1024))));
+                }
+                Some(None)
+            }
+            "chunk" => {
+                let data = v.get("data").and_then(|d| d.as_str()).unwrap_or("");
+                let bytes = crate::files::decode_b64(data).ok();
+                let mut g = self.incoming_png.lock();
+                match (bytes, g.as_mut()) {
+                    (Some(b), Some((size, buf))) => {
+                        if buf.len().saturating_add(b.len()) > *size
+                            || buf.len().saturating_add(b.len()) > input::CLIP_PNG_MAX
+                        {
+                            *g = None;
+                        } else {
+                            buf.extend_from_slice(&b);
+                        }
+                    }
+                    _ => *g = None,
+                }
+                Some(None)
+            }
+            "end" => {
+                let ready = self.incoming_png.lock().take().and_then(|(size, buf)| {
+                    if buf.len() == size {
+                        input::accept_png(buf)
+                    } else {
+                        None
+                    }
+                });
+                Some(ready)
+            }
+            _ => Some(None),
+        }
+    }
+
     fn fanout_clipboard_action(&self, action: &input::Action) {
         match action {
             input::Action::Clipboard { text } | input::Action::Paste { text } => {
@@ -345,14 +411,45 @@ impl App {
             }
             *last = key;
         }
-        let msg = json!({
+        if png.len() <= crate::files::MAX_CHUNK {
+            let msg = json!({
+                "type": "clipboard",
+                "mime": "image/png",
+                "data": crate::files::encode_b64(png)
+            })
+            .to_string();
+            self.publisher.push_wire(msg.clone());
+            let _ = self.clip_tx.send(msg);
+            return true;
+        }
+        let begin = json!({
             "type": "clipboard",
             "mime": "image/png",
-            "data": crate::files::encode_b64(png)
+            "action": "begin",
+            "size": png.len()
         })
         .to_string();
-        self.publisher.push_wire(msg.clone());
-        let _ = self.clip_tx.send(msg);
+        self.publisher.push_wire(begin.clone());
+        let _ = self.clip_tx.send(begin);
+        for part in png.chunks(crate::files::MAX_CHUNK) {
+            let msg = json!({
+                "type": "clipboard",
+                "mime": "image/png",
+                "action": "chunk",
+                "data": crate::files::encode_b64(part)
+            })
+            .to_string();
+            self.publisher.push_wire(msg.clone());
+            let _ = self.clip_tx.send(msg);
+        }
+        let end = json!({
+            "type": "clipboard",
+            "mime": "image/png",
+            "action": "end"
+        })
+        .to_string();
+        self.publisher.push_wire(end.clone());
+        let _ = self.clip_tx.send(end);
         true
     }
 
@@ -2062,6 +2159,95 @@ mod tests {
         assert!(msg.contains("image/png"), "{msg}");
         assert!(msg.contains(&crate::files::encode_b64(TINY_PNG)), "{msg}");
         assert!(!app.poll_clipboard(), "same png must not resend");
+    }
+
+    #[tokio::test]
+    async fn poll_clipboard_fans_large_png_in_chunks() {
+        use crate::computer_use::DoneModel;
+        use crate::files::MAX_CHUNK;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        const TINY_PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x05, 0xFE,
+            0xD4, 0xEF, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        let mut rx = app.clip_tx.subscribe();
+        let mut png = TINY_PNG.to_vec();
+        png.resize(MAX_CHUNK + 16, 0);
+        fake.clipboard_set_png(&png);
+        assert!(app.poll_clipboard());
+        let mut msgs = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        while tokio::time::Instant::now() < deadline && msgs.len() < 8 {
+            match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+                Ok(Ok(m)) => msgs.push(m),
+                _ => break,
+            }
+        }
+        let joined = msgs.join("\n");
+        assert!(joined.contains("\"action\":\"begin\""), "{joined}");
+        assert!(joined.contains("\"action\":\"chunk\""), "{joined}");
+        assert!(joined.contains("\"action\":\"end\""), "{joined}");
+    }
+
+    #[tokio::test]
+    async fn ingest_chunked_clipboard_png_from_viewer() {
+        use crate::computer_use::DoneModel;
+        use crate::files::encode_b64;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        const TINY_PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x05, 0xFE,
+            0xD4, 0xEF, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        let b64 = encode_b64(TINY_PNG);
+        app.handle_inbound_json(&format!(
+            r#"{{"type":"control","action":"clipboard","mime":"image/png","phase":"begin","size":{}}}"#,
+            TINY_PNG.len()
+        ));
+        app.handle_inbound_json(&format!(
+            r#"{{"type":"control","action":"clipboard","mime":"image/png","phase":"chunk","data":"{b64}"}}"#
+        ));
+        app.handle_inbound_json(
+            r#"{"type":"control","action":"clipboard","mime":"image/png","phase":"end"}"#,
+        );
+        assert_eq!(fake.clipboard_get_png().as_deref(), Some(TINY_PNG));
     }
 
     #[tokio::test]
