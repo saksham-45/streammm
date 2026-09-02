@@ -62,7 +62,7 @@ The Worker homepage is a player with PIN unlock, **Have AI use this computer**, 
 
 Remote control is **off by default**. On the origin UI, enable:
 
-- **Allow remote computer use** — the remote watcher can click (left/right/middle), drag, scroll, type, use modifier shortcuts (⌘/Ctrl+C), paste clipboard text, and **drop files** onto the session. Files land in the origin `inbox/` folder (next to `config.json`, 8 MB each). Kill switch: uncheck it.
+- **Allow remote computer use** — the remote watcher can click (left/right/middle), drag, scroll, type, use modifier shortcuts (⌘/Ctrl+C), paste clipboard text, and **drop files** onto the session. Copy on the host is pushed to the watcher (no extra shortcut). Files land in the origin `inbox/` folder (next to `config.json`, 8 MB each). Kill switch: uncheck it.
 - **Allow AI computer use** — the same watcher can submit a task in **Have AI use this computer**. The origin loops TYPE_SNAP JPEG → vision model JSON actions → the same injector (click/right-click/drag/type/key/paste). **Cancel AI** on the origin UI (`POST /api/computer-use/cancel`) stops a running loop.
 
 macOS: grant **Streamaid** Accessibility (and Input Monitoring if prompted) in System Settings → Privacy & Security, in addition to Screen Recording. CI tests use a fake injector; they never post real HID events.

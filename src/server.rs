@@ -58,6 +58,7 @@ pub struct App {
     pub clip_tx: tokio::sync::broadcast::Sender<String>,
     pub files: Inbox,
     pub displays: Mutex<Vec<Device>>,
+    pub last_clip: Mutex<String>,
 }
 
 impl App {
@@ -118,6 +119,7 @@ impl App {
             clip_tx,
             files: Inbox::new(inbox_dir),
             displays: Mutex::new(enumerate_devices()),
+            last_clip: Mutex::new(String::new()),
         });
         let app2 = app.clone();
         tokio::spawn(async move {
@@ -256,28 +258,42 @@ impl App {
             input::Action::Clipboard { text } | input::Action::Paste { text } => text.clone(),
             _ => return,
         };
+        self.push_clipboard_text(&text);
+    }
+
+    fn push_clipboard_text(&self, text: &str) -> bool {
         if text.is_empty() {
-            return;
+            return false;
+        }
+        {
+            let mut last = self.last_clip.lock();
+            if *last == text {
+                return false;
+            }
+            *last = text.to_string();
         }
         let msg = json!({"type": "clipboard", "text": text}).to_string();
         self.publisher.push_wire(msg.clone());
         let _ = self.clip_tx.send(msg);
+        true
+    }
+
+    /// Push host pasteboard to watchers when it changes. No-op if control is off.
+    pub fn poll_clipboard(&self) -> bool {
+        if !self.cfg.lock().control.enabled {
+            return false;
+        }
+        match self.injector.clipboard_get() {
+            Some(text) => self.push_clipboard_text(&text),
+            None => false,
+        }
     }
 
     fn spawn_clipboard_push(self: &Arc<Self>) {
-        let inj = self.injector.clone();
-        let publisher = self.publisher.clone();
-        let clip_tx = self.clip_tx.clone();
+        let app = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(120)).await;
-            if let Some(text) = inj.clipboard_get() {
-                if text.is_empty() {
-                    return;
-                }
-                let msg = json!({"type": "clipboard", "text": text}).to_string();
-                publisher.push_wire(msg.clone());
-                let _ = clip_tx.send(msg);
-            }
+            let _ = app.poll_clipboard();
         });
     }
 
@@ -345,6 +361,13 @@ impl App {
                 if before.as_ref() != Some(&st.hash) {
                     app.push_otp_wire();
                 }
+            }
+        });
+        let app = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                let _ = app.poll_clipboard();
             }
         });
     }
@@ -1295,6 +1318,7 @@ mod tests {
         assert!(html.contains("cu-cancel"));
         assert!(html.contains("id=\"cfg-display\""));
         assert!(html.contains("id=\"display-pill\""));
+        assert!(html.contains("Copy on this Mac"));
         assert!(html.contains("id=\"login-overlay\""));
         assert!(html.contains("id=\"login-token\""));
         assert!(html.contains("id=\"login-error\""));
@@ -1747,5 +1771,48 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert_eq!(app.cfg.lock().capture.input, "9:");
+    }
+
+    #[tokio::test]
+    async fn poll_clipboard_fans_host_copy_when_control_on() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.token = "s3cret".into();
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        let mut rx = app.clip_tx.subscribe();
+        fake.clipboard_set("host-copied");
+        assert!(
+            !app.poll_clipboard(),
+            "kill switch off must not leak the pasteboard"
+        );
+        app.cfg.lock().control.enabled = true;
+        assert!(app.poll_clipboard(), "first host copy must fan out");
+        let msg = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("clipboard fan-out")
+            .expect("clip channel");
+        assert!(msg.contains("host-copied"), "{msg}");
+        assert!(msg.contains("clipboard"), "{msg}");
+        assert!(!app.poll_clipboard(), "unchanged pasteboard must not resend");
+        fake.clipboard_set("second-copy");
+        assert!(app.poll_clipboard());
+        let msg2 = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("second clipboard")
+            .expect("clip channel");
+        assert!(msg2.contains("second-copy"), "{msg2}");
     }
 }
