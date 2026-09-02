@@ -61,7 +61,7 @@ The Worker homepage is a player with PIN unlock, **Have AI use this computer**, 
 
 Remote control is **off by default**. On the origin UI, enable:
 
-- **Allow remote computer use** — the remote watcher can click (left/right/middle), drag, scroll, type, use modifier shortcuts (⌘/Ctrl+C), and paste clipboard text on the live video (normalized 0–1 coordinates). Copy on the host fans the pasteboard back to the watcher. Kill switch: uncheck it.
+- **Allow remote computer use** — the remote watcher can click (left/right/middle), drag, scroll, type, use modifier shortcuts (⌘/Ctrl+C), paste clipboard text, and **drop files** onto the session. Files land in the origin `inbox/` folder (next to `config.json`, 8 MB each). Kill switch: uncheck it.
 - **Allow AI computer use** — the same watcher can submit a task in **Have AI use this computer**. The origin loops TYPE_SNAP JPEG → vision model JSON actions → the same injector (click/right-click/drag/type/key/paste). **Cancel AI** on the origin UI (`POST /api/computer-use/cancel`) stops a running loop.
 
 macOS: grant **Streamaid** Accessibility (and Input Monitoring if prompted) in System Settings → Privacy & Security, in addition to Screen Recording. CI tests use a fake injector; they never post real HID events.
@@ -123,6 +123,8 @@ GET  /api/config      full config        POST /api/config   apply+save
 GET  /api/otp         host: current PIN   POST /api/otp     regenerate PIN
 POST /api/otp/redeem  `{ "pin": "123456" }` → session cookie
 POST /api/computer-use `{ "task": "…" }`  (403 unless AI control enabled)
+GET/POST /api/files     inbox list / `{ "name", "data" }` (base64; 403 unless control on)
+GET  /api/files/download?name=…
 GET  /api/events      SSE
 GET  /api/capture-devices
 ```

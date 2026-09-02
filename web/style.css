@@ -127,6 +127,24 @@ aside h3 { font-size: 13px; margin: 16px 0 6px; color: #aaa; text-transform: upp
 details { margin-top: 6px; font-size: 13px; color: #aaa; }
 summary { cursor: pointer; }
 
+#file-drop {
+  border: 1px dashed #555;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 13px;
+  color: #9a9a9a;
+  text-align: center;
+  margin: 8px 0;
+}
+#file-drop.drop-hover,
+#stream-pane.drop-hover { border-color: #7eb8ff; background: #182030; }
+.file-pick { color: #7eb8ff; cursor: pointer; }
+.file-pick input { display: none; }
+#file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
+#file-list li { border-top: 1px solid #333; padding: 6px 0; }
+#file-list a { color: #7eb8ff; }
+#file-out { font-size: 12px; color: #9a9a9a; min-height: 1.2em; }
+
 #cu-form,
 #ask-form { display: flex; gap: 8px; margin: 12px 0; }
 #cu-task,

@@ -306,6 +306,52 @@ describe("StreamRoom", () => {
     view.close();
   });
 
+  it("forwards viewer file put to publisher and fans origin file list to watchers", async () => {
+    const { pub, session } = await viewerSession("files");
+    pub.send(JSON.stringify({ type: "flags", control: true, ai: false }));
+    await new Promise((r) => setTimeout(r, 30));
+    const view = await openWatch(session, "files");
+    const got = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("\"file\"")) resolve(ev.data);
+      });
+    });
+    view.send(
+      JSON.stringify({
+        type: "file",
+        action: "put",
+        name: "note.txt",
+        data: "aGk=",
+      }),
+    );
+    const raw = await Promise.race([
+      got,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no file put")), 3000)),
+    ]);
+    const msg = JSON.parse(raw) as { type: string; action: string; name?: string };
+    expect(msg.type).toBe("file");
+    expect(msg.action).toBe("put");
+    expect(msg.name).toBe("note.txt");
+
+    const list = new Promise<string>((resolve) => {
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("file") && ev.data.includes("list")) {
+          resolve(ev.data);
+        }
+      });
+    });
+    pub.send(JSON.stringify({ type: "file", action: "list", files: [{ name: "note.txt", size: 2 }] }));
+    const listRaw = await Promise.race([
+      list,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no file list fan-out")), 3000)),
+    ]);
+    const listMsg = JSON.parse(listRaw) as { type: string; action: string; files: { name: string }[] };
+    expect(listMsg.action).toBe("list");
+    expect(listMsg.files[0].name).toBe("note.txt");
+    pub.close();
+    view.close();
+  });
+
   it("does not forward control when host disabled", async () => {
     const { pub, session } = await viewerSession("ctl-off");
     pub.send(JSON.stringify({ type: "flags", control: false, ai: false }));

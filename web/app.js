@@ -83,9 +83,11 @@ function syncFeatureUi() {
   setHidden($("ai-hint"), !f.ai);
   setHidden($("cu-cancel"), !f.ai);
   setHidden($("cu-section"), !f.ai);
+  setHidden($("files-section"), !f.ctl);
   setHidden($("analysis-section"), !f.llm);
   setHidden($("analysis-banner"), !f.llm);
-  setHidden($("analysis-pane"), !(f.llm || f.ai));
+  setHidden($("analysis-pane"), !(f.llm || f.ai || f.ctl));
+  if (f.ctl) refreshFiles();
 }
 
 function setDrawerOpen(open) {
@@ -213,6 +215,80 @@ function pointerPayload(el, ev) {
 function applyClipboardText(text) {
   if (!text || typeof navigator === "undefined" || !navigator.clipboard || !navigator.clipboard.writeText) return;
   navigator.clipboard.writeText(text).catch(function () {});
+}
+
+const FILE_MAX = 8 * 1024 * 1024;
+
+function bytesToB64(u8) {
+  let s = "";
+  const step = 0x8000;
+  for (let i = 0; i < u8.length; i += step) {
+    s += String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + step, u8.length)));
+  }
+  return btoa(s);
+}
+
+function sendFileJson(msg) {
+  if (ws && ws.readyState === 1) {
+    try { ws.send(JSON.stringify(msg)); return true; } catch (e) { /* fall through */ }
+  }
+  return false;
+}
+
+function renderFileList(files) {
+  const ul = $("file-list");
+  if (!ul) return;
+  ul.innerHTML = "";
+  (files || []).forEach(function (f) {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = url("/api/files/download?name=" + encodeURIComponent(f.name));
+    a.textContent = f.name + (f.size != null ? " (" + f.size + " B)" : "");
+    a.download = f.name;
+    li.appendChild(a);
+    ul.appendChild(li);
+  });
+}
+
+function refreshFiles() {
+  if (!featureFlags().ctl) return;
+  sendFileJson({ type: "file", action: "list" });
+  if (typeof fetch !== "function") return;
+  fetch(url("/api/files")).then(function (r) { return r.json(); }).then(function (body) {
+    if (body && body.files) renderFileList(body.files);
+  }).catch(function () {});
+}
+
+function uploadFileBytes(name, u8) {
+  const out = $("file-out");
+  if (u8.length > FILE_MAX) {
+    if (out) out.textContent = "file too large (8 MB max)";
+    return;
+  }
+  if (out) out.textContent = "sending " + name + "…";
+  if (sendFileJson({ type: "file", action: "put", name: name, data: bytesToB64(u8) })) {
+    return;
+  }
+  fetch(url("/api/files"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name, data: bytesToB64(u8) }),
+  }).then(function (r) { return r.json(); }).then(function (body) {
+    if (out) out.textContent = body.error ? ("error: " + body.error) : ("saved " + (body.name || name));
+    refreshFiles();
+  }).catch(function (err) {
+    if (out) out.textContent = "error: " + err.message;
+  });
+}
+
+function uploadDroppedFiles(fileList) {
+  if (!featureFlags().ctl) return;
+  Array.prototype.forEach.call(fileList || [], function (file) {
+    if (!file) return;
+    file.arrayBuffer().then(function (buf) {
+      uploadFileBytes(file.name, new Uint8Array(buf));
+    }).catch(function () {});
+  });
 }
 
 function bindControl(el) {
@@ -396,12 +472,29 @@ function scheduleMseReconnect() {
   }, delay);
 }
 
+function handleFileMsg(msg) {
+  const out = $("file-out");
+  if (msg.action === "list" && msg.files) {
+    renderFileList(msg.files);
+    return;
+  }
+  if (msg.action === "ok") {
+    if (out) out.textContent = "saved " + (msg.name || "");
+    refreshFiles();
+    return;
+  }
+  if (msg.action === "error" && out) out.textContent = "error: " + (msg.error || "file");
+}
+
 function onWsMessage(ev) {
   if (typeof ev.data === "string") {
     try {
       const msg = JSON.parse(ev.data);
       if (msg && msg.type === "clipboard" && typeof msg.text === "string") {
         applyClipboardText(msg.text);
+      }
+      if (msg && msg.type === "file") {
+        handleFileMsg(msg);
       }
     } catch (e) { /* ignore */ }
     return;
@@ -884,6 +977,31 @@ function onReady() {
   }
   bindControl($("stream-video"));
   bindControl($("stream-canvas"));
+  function bindFileDrop(el) {
+    if (!el || el.dataset.fileBound) return;
+    el.dataset.fileBound = "1";
+    el.addEventListener("dragover", function (ev) {
+      if (!featureFlags().ctl) return;
+      ev.preventDefault();
+      el.classList.add("drop-hover");
+    });
+    el.addEventListener("dragleave", function () { el.classList.remove("drop-hover"); });
+    el.addEventListener("drop", function (ev) {
+      el.classList.remove("drop-hover");
+      if (!featureFlags().ctl) return;
+      ev.preventDefault();
+      uploadDroppedFiles(ev.dataTransfer && ev.dataTransfer.files);
+    });
+  }
+  bindFileDrop($("file-drop"));
+  bindFileDrop($("stream-pane"));
+  const fileInput = $("file-input");
+  if (fileInput) {
+    fileInput.addEventListener("change", function () {
+      uploadDroppedFiles(fileInput.files);
+      fileInput.value = "";
+    });
+  }
   function sendKeyEvent(ev, down) {
     if (isDrawerOpen()) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;

@@ -106,6 +106,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "LLM and AI controls must exist so enabling a setting can reveal them"
     );
     assert!(
+        html.contains("id=\"files-section\"") && html.contains("id=\"file-drop\""),
+        "enabling remote control must have a files drop target to reveal"
+    );
+    assert!(
         js.contains("function syncFeatureUi") && js.contains("syncFeatureUi()"),
         "enabling LLM/AI/control must drive a UI reveal helper"
     );
@@ -146,6 +150,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("paste"),
         "watch page must paste clipboard through"
+    );
+    assert!(
+        s.contains("files-section") && s.contains("file-drop"),
+        "watch page must reveal file transfer when remote control is on"
     );
     assert!(!s.contains("Add ?token="));
     assert!(
@@ -326,6 +334,7 @@ const nodes = {{
   "ai-hint": el(true),
   "cu-cancel": el(true),
   "cu-section": el(true),
+  "files-section": el(true),
   "analysis-section": el(true),
   "analysis-banner": el(true),
   "analysis-pane": el(true)
@@ -366,6 +375,8 @@ if (!nodes["llm-fields"].classList.contains("hidden")) throw new Error("LLM fiel
 nodes["cfg-control-enabled"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["ctl-hint"].classList.contains("hidden")) throw new Error("control hint still hidden after enable");
+if (nodes["files-section"].classList.contains("hidden")) throw new Error("files panel still hidden after control enable");
+if (nodes["analysis-pane"].classList.contains("hidden")) throw new Error("side pane still hidden after control enable");
 console.log("reveal-ok");
 "#,
             js_path

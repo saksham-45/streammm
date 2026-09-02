@@ -31,6 +31,12 @@
       </form>
       <div id="cu-out"></div>
     </div>
+    <div id="files-section" class="hidden">
+      <h2>Files</h2>
+      <div id="file-drop" tabindex="0">Drop files here or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
+      <div id="file-out"></div>
+      <ul id="file-list"></ul>
+    </div>
     <div id="analysis-section" class="hidden">
       <h2>Screen analysis</h2>
       <div id="llm-note">Analysis is delivered on the Cloudflare watch page. Attach DEEPSEEK_API_KEY there with wrangler.</div>
@@ -92,7 +98,7 @@
   <label>Cloudflare publish URL <input id="cfg-publish" type="text" placeholder="wss://…/publish"></label>
   <label>Cloudflare watch URL <input id="cfg-watch" type="text" placeholder="wss://…/watch (optional)"></label>
   <label><input id="cfg-control-enabled" type="checkbox"> Allow remote computer use (kill switch off = blocked)</label>
-  <p id="ctl-hint" class="cfg-hint hidden">Watchers can click (left/right/middle), drag, scroll, type, use modifier shortcuts, and paste clipboard text on the live video. Uncheck to kill remote input immediately after Save.</p>
+  <p id="ctl-hint" class="cfg-hint hidden">Watchers can click (left/right/middle), drag, scroll, type, paste clipboard text, and drop files into the host inbox. Uncheck to kill remote input immediately after Save.</p>
   <label><input id="cfg-ai-enabled" type="checkbox"> Allow AI computer use</label>
   <p id="ai-hint" class="cfg-hint hidden">Watchers (and this host page) can submit a task in Have AI use this computer. Cancel AI stops a running loop.</p>
   <label><input id="cfg-llm-enabled" type="checkbox"> LLM analysis</label>

@@ -47,6 +47,14 @@ export const PLAYER_HTML = `<!doctype html>
   #cu-form { display: flex; gap: 6px; margin: 8px 0; }
   #cu-form input { flex: 1; background: #111; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
   #cu-out { font-size: 12px; color: var(--muted); min-height: 1.2em; }
+  #file-drop { border: 1px dashed #555; border-radius: 8px; padding: 10px; font-size: 13px; color: var(--muted); text-align: center; margin: 8px 0; }
+  #file-drop.drop-hover { border-color: var(--accent); }
+  .file-pick { color: var(--accent); cursor: pointer; }
+  .file-pick input { display: none; }
+  #file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
+  #file-list li { border-top: 1px solid var(--line); padding: 6px 0; }
+  #file-list button { padding: 2px 8px; margin-left: 8px; }
+  #file-out { font-size: 12px; color: var(--muted); min-height: 1.2em; }
 </style>
 </head>
 <body>
@@ -74,6 +82,12 @@ export const PLAYER_HTML = `<!doctype html>
       <button type="submit">Run</button>
     </form>
     <div id="cu-out"></div>
+    </div>
+    <div id="files-section" style="display:none">
+    <h2>Files</h2>
+    <div id="file-drop">Drop files here or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
+    <div id="file-out"></div>
+    <ul id="file-list"></ul>
     </div>
     <h2>Screen analysis</h2>
     <div id="llm-note">Waiting for DeepSeek key and a screenshot…</div>
@@ -204,6 +218,111 @@ export const PLAYER_HTML = `<!doctype html>
   });
   bindControl(video);
   bindControl(canvas);
+  var FILE_MAX = 8 * 1024 * 1024;
+  var incomingFiles = {};
+  function sendFileJson(msg) {
+    if (!controlOn || !ws || ws.readyState !== 1) return false;
+    try { ws.send(JSON.stringify(msg)); return true; } catch (e) { return false; }
+  }
+  function bytesToB64(u8) {
+    var s = "", step = 0x8000;
+    for (var i = 0; i < u8.length; i += step) {
+      s += String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + step, u8.length)));
+    }
+    return btoa(s);
+  }
+  function b64ToBytes(b64) {
+    var bin = atob(b64);
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function triggerDownload(name, u8) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([u8]));
+    a.download = name || "file";
+    a.click();
+    setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 2000);
+  }
+  function renderFileList(files) {
+    var ul = document.getElementById("file-list");
+    if (!ul) return;
+    ul.innerHTML = "";
+    (files || []).forEach(function (f) {
+      var li = document.createElement("li");
+      li.appendChild(document.createTextNode(f.name + (f.size != null ? " (" + f.size + " B)" : "")));
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Get";
+      btn.addEventListener("click", function () {
+        sendFileJson({ type: "file", action: "get", name: f.name });
+      });
+      li.appendChild(btn);
+      ul.appendChild(li);
+    });
+  }
+  function handleFileMsg(msg) {
+    var out = document.getElementById("file-out");
+    if (msg.action === "list") { renderFileList(msg.files || []); return; }
+    if (msg.action === "ok") {
+      if (out) out.textContent = "saved " + (msg.name || "");
+      sendFileJson({ type: "file", action: "list" });
+      return;
+    }
+    if (msg.action === "error" && out) { out.textContent = "error: " + (msg.error || "file"); return; }
+    if (msg.action === "blob" && msg.data) {
+      triggerDownload(msg.name, b64ToBytes(msg.data));
+      return;
+    }
+    if (msg.action === "blob-begin") { incomingFiles[msg.name] = []; return; }
+    if (msg.action === "blob-chunk" && incomingFiles[msg.name]) incomingFiles[msg.name].push(msg.data);
+    if (msg.action === "blob-end" && incomingFiles[msg.name]) {
+      var parts = incomingFiles[msg.name].map(b64ToBytes);
+      var total = 0;
+      parts.forEach(function (p) { total += p.length; });
+      var u8 = new Uint8Array(total), off = 0;
+      parts.forEach(function (p) { u8.set(p, off); off += p.length; });
+      delete incomingFiles[msg.name];
+      triggerDownload(msg.name, u8);
+    }
+  }
+  function uploadFileBytes(name, u8) {
+    var out = document.getElementById("file-out");
+    if (u8.length > FILE_MAX) { if (out) out.textContent = "file too large (8 MB max)"; return; }
+    if (out) out.textContent = "sending " + name + "…";
+    sendFileJson({ type: "file", action: "put", name: name, data: bytesToB64(u8) });
+  }
+  function uploadDroppedFiles(fileList) {
+    if (!controlOn) return;
+    Array.prototype.forEach.call(fileList || [], function (file) {
+      if (!file) return;
+      file.arrayBuffer().then(function (buf) { uploadFileBytes(file.name, new Uint8Array(buf)); }).catch(function () {});
+    });
+  }
+  function bindFileDrop(el) {
+    if (!el) return;
+    el.addEventListener("dragover", function (ev) {
+      if (!controlOn) return;
+      ev.preventDefault();
+      el.classList.add("drop-hover");
+    });
+    el.addEventListener("dragleave", function () { el.classList.remove("drop-hover"); });
+    el.addEventListener("drop", function (ev) {
+      el.classList.remove("drop-hover");
+      if (!controlOn) return;
+      ev.preventDefault();
+      uploadDroppedFiles(ev.dataTransfer && ev.dataTransfer.files);
+    });
+  }
+  bindFileDrop(document.getElementById("file-drop"));
+  bindFileDrop(video);
+  var fileInput = document.getElementById("file-input");
+  if (fileInput) {
+    fileInput.addEventListener("change", function () {
+      uploadDroppedFiles(fileInput.files);
+      fileInput.value = "";
+    });
+  }
   function enqueue(kind, chunk) {
     if (kind === TYPE_INIT) {
       pending = [{ kind: kind, chunk: chunk }];
@@ -293,6 +412,9 @@ export const PLAYER_HTML = `<!doctype html>
     aiOn = !!(ctl && (ctl.ai_enabled || ctl.ai));
     var cu = document.getElementById("cu-section");
     if (cu) cu.style.display = aiOn ? "block" : "none";
+    var files = document.getElementById("files-section");
+    if (files) files.style.display = controlOn ? "block" : "none";
+    if (controlOn) sendFileJson({ type: "file", action: "list" });
   }
   function handleText(text) {
     try {
@@ -308,6 +430,7 @@ export const PLAYER_HTML = `<!doctype html>
       if (msg && msg.type === "clipboard" && typeof msg.text === "string") {
         applyClipboardText(msg.text);
       }
+      if (msg && msg.type === "file") handleFileMsg(msg);
     } catch (e) {}
   }
 

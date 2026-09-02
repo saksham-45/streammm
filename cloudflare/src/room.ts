@@ -250,6 +250,9 @@ export class StreamRoom extends DurableObject<Env> {
       if (v.type === "clipboard") {
         this.broadcastViewers(JSON.stringify({ type: "clipboard", text: typeof v.text === "string" ? v.text : "" }));
       }
+      if (v.type === "file") {
+        this.broadcastViewers(raw);
+      }
       return;
     }
     if (att?.role !== "viewer") return;
@@ -260,6 +263,11 @@ export class StreamRoom extends DurableObject<Env> {
       if (this.controller && this.controller !== session) return;
       this.controller = session;
       this.sendPublisher(JSON.stringify({ ...v, session, type: "control" }));
+      return;
+    }
+    if (v.type === "file") {
+      if (!this.flags.control) return;
+      this.sendPublisher(JSON.stringify({ ...v, session, type: "file" }));
       return;
     }
     if (v.type === "computer-use") {

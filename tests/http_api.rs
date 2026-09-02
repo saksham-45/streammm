@@ -1042,3 +1042,142 @@ async fn computer_use_rejects_unauthorized_malformed_missing_task_and_ai_off() {
         assert_eq!(st, StatusCode::BAD_REQUEST, "body={body} err={err}");
     }
 }
+
+#[tokio::test]
+async fn files_put_list_download_and_reject_traversal() {
+    use streamaid::files::encode_b64;
+
+    let (_dir, app) = token_app();
+    let router = app.router();
+    let unauth = post_json(
+        router.clone(),
+        "/api/files",
+        Body::from(json!({"name": "a.txt", "data": encode_b64(b"hi")}).to_string()),
+    )
+    .await;
+    let (st, _) = json_error_body(unauth).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+    let put = router
+        .clone()
+        .oneshot(
+            Request::post("/api/files")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "hello.txt", "data": encode_b64(b"hello-inbox")}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::OK);
+    let body = body_json(put).await;
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["name"], "hello.txt");
+
+    let traversal = router
+        .clone()
+        .oneshot(
+            Request::post("/api/files")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "../evil.txt", "data": encode_b64(b"no")}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (st, _) = json_error_body(traversal).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    let list = router
+        .clone()
+        .oneshot(
+            Request::get("/api/files")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let listed = body_json(list).await;
+    let files = listed["files"].as_array().unwrap();
+    assert!(files.iter().any(|f| f["name"] == "hello.txt"));
+
+    let dl = router
+        .oneshot(
+            Request::get("/api/files/download?name=hello.txt")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dl.status(), StatusCode::OK);
+    let bytes = dl.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], b"hello-inbox");
+}
+
+#[tokio::test]
+async fn viewer_files_forbidden_until_control_enabled() {
+    use streamaid::files::encode_b64;
+
+    let (_dir, app) = token_app();
+    let router = app.clone().router();
+    let minted = router
+        .clone()
+        .oneshot(
+            Request::post("/api/otp")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pin = body_json(minted).await["pin"].as_str().unwrap().to_string();
+    let redeemed = post_json(
+        router.clone(),
+        "/api/otp/redeem",
+        Body::from(json!({"pin": pin}).to_string()),
+    )
+    .await;
+    let session = body_json(redeemed).await["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let cookie = format!("streamaid_session={session}");
+
+    let off = router
+        .clone()
+        .oneshot(
+            Request::post("/api/files")
+                .header("Cookie", cookie.clone())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "x.txt", "data": encode_b64(b"x")}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (st, _) = json_error_body(off).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+
+    app.cfg.lock().control.enabled = true;
+    let on = router
+        .oneshot(
+            Request::post("/api/files")
+                .header("Cookie", cookie)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "x.txt", "data": encode_b64(b"x")}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(on.status(), StatusCode::OK);
+}
