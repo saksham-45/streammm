@@ -28,7 +28,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.streamaid.origin.pli
 launchctl bootout gui/$(id -u)/com.streamaid.origin
 ```
 
-Killing the process is not enough — `KeepAlive` will restart it. Logs: `logs/origin.out.log`. If capture is black after a reboot, allow **Streamaid** under System Settings → Privacy & Security → Screen Recording. The origin UI shows a **PERMISSION NEEDED** banner (with Screen Recording / Accessibility buttons) when those grants are missing.
+Killing the process is not enough — `KeepAlive` will restart it. Logs: `logs/origin.out.log`. If capture is black after a reboot, allow **Streamaid** under System Settings → Privacy & Security → Screen Recording. The origin UI shows a **PERMISSION NEEDED** banner (with Screen Recording / Accessibility / Input Monitoring buttons) when those grants are missing.
 
 `./config.json` is created with defaults if missing (gitignored).
 

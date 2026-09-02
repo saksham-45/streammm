@@ -1045,6 +1045,7 @@ impl App {
             "permissions": {
                 "screen": crate::perm::screen_ok(),
                 "accessibility": crate::perm::accessibility_ok(),
+                "input": crate::perm::input_ok(),
             }
         })
     }
@@ -2128,6 +2129,7 @@ mod tests {
         assert!(v.get("stream").is_some());
         assert!(v["permissions"]["screen"].is_boolean());
         assert!(v["permissions"]["accessibility"].is_boolean());
+        assert!(v["permissions"]["input"].is_boolean());
 
         let res = router
             .oneshot(

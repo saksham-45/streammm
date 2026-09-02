@@ -132,6 +132,7 @@ function syncFeatureUi() {
   setHidden($("voice-aec-hint"), !(f.voice && f.audio && !f.mjpeg));
   setHidden($("talk"), !f.voice);
   syncEncoderUi();
+  syncPermissionUi();
   if (f.ctl) refreshFiles();
   if (f.ctl && f.record) refreshRecordings();
 }
@@ -221,18 +222,24 @@ function renderStatus(s) {
   if (featureFlags().record) refreshRecordings();
 }
 
+let lastPerm = { screen: true, accessibility: true, input: true };
 function syncPermissionUi(p) {
-  p = p || {};
+  if (p) lastPerm = p;
+  p = lastPerm || {};
   const screenOk = p.screen !== false;
   const axOk = p.accessibility !== false;
-  setHidden($("perm-banner"), screenOk && axOk);
+  const inputOk = p.input !== false;
+  const needInput = !inputOk && !!featureFlags().block;
+  setHidden($("perm-banner"), screenOk && axOk && !needInput);
   setHidden($("perm-screen"), screenOk);
   setHidden($("perm-ax"), axOk);
+  setHidden($("perm-input"), !needInput);
   const lab = $("perm-banner-label");
   if (!lab) return;
   const bits = [];
   if (!screenOk) bits.push("Screen Recording");
   if (!axOk) bits.push("Accessibility");
+  if (needInput) bits.push("Input Monitoring");
   lab.textContent = bits.length
     ? ("Allow " + bits.join(" and ") + " in System Settings")
     : "PERMISSION NEEDED";
@@ -1968,6 +1975,10 @@ function onReady() {
   const permAx = $("perm-ax");
   if (permAx) {
     permAx.addEventListener("click", function () { openPrivacyPane("accessibility"); });
+  }
+  const permInput = $("perm-input");
+  if (permInput) {
+    permInput.addEventListener("click", function () { openPrivacyPane("input"); });
   }
   const cancelAi = $("cu-cancel");
   if (cancelAi) {

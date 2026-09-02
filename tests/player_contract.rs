@@ -125,9 +125,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         html.contains("id=\"perm-banner\"")
             && html.contains("id=\"perm-screen\"")
             && html.contains("id=\"perm-ax\"")
+            && html.contains("id=\"perm-input\"")
             && js.contains("function syncPermissionUi")
             && js.contains("/api/permissions/open"),
-        "missing Screen Recording or Accessibility must reveal a grant banner"
+        "missing Screen Recording, Accessibility, or Input Monitoring must reveal a grant banner"
     );
     assert!(
         html.contains("id=\"keys-bar\"")
@@ -712,6 +713,7 @@ const nodes = {{
   "perm-banner-label": el(false),
   "perm-screen": el(true),
   "perm-ax": el(true),
+  "perm-input": el(true),
   "jpeg-fields": el(true),
   "bitrate-fields": el(false),
   "gop-fields": el(false),
@@ -865,14 +867,21 @@ if (nodes["jpeg-fields"].classList.contains("hidden")) throw new Error("JPEG qua
 if (!nodes["bitrate-fields"].classList.contains("hidden")) throw new Error("bitrate still visible in MJPEG mode");
 if (!nodes["gop-fields"].classList.contains("hidden")) throw new Error("GOP still visible in MJPEG mode");
 if (typeof window.streamaidUi.syncPermissionUi !== "function") throw new Error("syncPermissionUi missing");
-window.streamaidUi.syncPermissionUi({{screen: true, accessibility: true}});
+window.streamaidUi.syncPermissionUi({{screen: true, accessibility: true, input: true}});
 if (!nodes["perm-banner"].classList.contains("hidden")) throw new Error("perm banner visible when granted");
-window.streamaidUi.syncPermissionUi({{screen: false, accessibility: true}});
+window.streamaidUi.syncPermissionUi({{screen: false, accessibility: true, input: true}});
 if (nodes["perm-banner"].classList.contains("hidden")) throw new Error("perm banner hidden when screen denied");
 if (nodes["perm-screen"].classList.contains("hidden")) throw new Error("Screen Recording button hidden when denied");
 if (!nodes["perm-ax"].classList.contains("hidden")) throw new Error("Accessibility button visible when granted");
-window.streamaidUi.syncPermissionUi({{screen: true, accessibility: false}});
+window.streamaidUi.syncPermissionUi({{screen: true, accessibility: false, input: true}});
 if (nodes["perm-ax"].classList.contains("hidden")) throw new Error("Accessibility button hidden when denied");
+nodes["cfg-block-local"].checked = false;
+window.streamaidUi.syncPermissionUi({{screen: true, accessibility: true, input: false}});
+if (!nodes["perm-input"].classList.contains("hidden")) throw new Error("Input Monitoring visible without block-local");
+nodes["cfg-block-local"].checked = true;
+window.streamaidUi.syncPermissionUi({{screen: true, accessibility: true, input: false}});
+if (nodes["perm-input"].classList.contains("hidden")) throw new Error("Input Monitoring button hidden when block-local needs it");
+if (nodes["perm-banner"].classList.contains("hidden")) throw new Error("perm banner hidden when input denied");
 nodes["cfg-control-enabled"].checked = false;
 nodes["cfg-keep-awake"].checked = false;
 nodes["cfg-unattended"].checked = true;
