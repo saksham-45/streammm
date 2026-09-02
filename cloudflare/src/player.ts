@@ -167,6 +167,7 @@ export const PLAYER_HTML = `<!doctype html>
     </div>
     <div id="file-path"></div>
     <button id="file-mkdir" type="button">New folder</button>
+    <button id="file-paste" type="button" style="display:none">Paste here</button>
     <div id="file-drop">Drop files into this folder or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
     <div id="file-out"></div>
     <ul id="file-list"></ul>
@@ -782,6 +783,7 @@ export const PLAYER_HTML = `<!doctype html>
   }
   var fileRoot = "inbox";
   var filePath = "";
+  var fileClip = null;
   function fileLocQuery() {
     return "root=" + encodeURIComponent(fileRoot) + "&path=" + encodeURIComponent(filePath);
   }
@@ -803,6 +805,7 @@ export const PLAYER_HTML = `<!doctype html>
     }
     var crumb = document.getElementById("file-path");
     if (crumb) crumb.textContent = filePath ? (fileRoot + " / " + filePath.replace(/\//g, " / ")) : fileRoot;
+    syncFilePaste();
     sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
     return { root: fileRoot, path: filePath };
   }
@@ -849,6 +852,55 @@ export const PLAYER_HTML = `<!doctype html>
     });
   }
   bindFileMkdir(document.getElementById("file-mkdir"));
+  function syncFilePaste() {
+    var btn = document.getElementById("file-paste");
+    if (!btn) return;
+    if (fileClip && fileClip.name) {
+      btn.style.display = "inline-block";
+      btn.textContent = (fileClip.op === "move" ? "Move" : "Paste") + " " + fileClip.name + " here";
+    } else {
+      btn.style.display = "none";
+      btn.textContent = "Paste here";
+    }
+  }
+  function clipFile(op, name) {
+    var n = String(name || "").trim();
+    if (!n || (op !== "copy" && op !== "move")) {
+      fileClip = null;
+      syncFilePaste();
+      return null;
+    }
+    fileClip = { op: op, root: fileRoot, path: filePath, name: n };
+    syncFilePaste();
+    var out = document.getElementById("file-out");
+    if (out) out.textContent = (op === "move" ? "cut " : "copied ") + n + " — browse to a folder and Paste here";
+    return fileClip;
+  }
+  function pasteHere() {
+    var out = document.getElementById("file-out");
+    if (!fileClip || !fileClip.name) return;
+    var clip = fileClip;
+    if (sendFileJson({
+      type: "file",
+      action: clip.op,
+      name: clip.name,
+      root: clip.root,
+      path: clip.path,
+      toRoot: fileRoot,
+      toPath: filePath
+    })) {
+      if (out) out.textContent = (clip.op === "move" ? "moving " : "copying ") + clip.name + "…";
+      if (clip.op === "move") fileClip = null;
+      syncFilePaste();
+    }
+  }
+  function bindFilePaste(el) {
+    if (!el || el.dataset.pasteBound) return;
+    el.dataset.pasteBound = "1";
+    el.addEventListener("click", function () { pasteHere(); });
+  }
+  bindFilePaste(document.getElementById("file-paste"));
+  syncFilePaste();
   function deleteInboxFile(name, isDir) {
     var out = document.getElementById("file-out");
     if (!name) return;
@@ -919,6 +971,16 @@ export const PLAYER_HTML = `<!doctype html>
         renDir.textContent = "Rename";
         renDir.addEventListener("click", function () { renameInboxFile(f.name); });
         li.appendChild(renDir);
+        var copyDir = document.createElement("button");
+        copyDir.type = "button";
+        copyDir.textContent = "Copy";
+        copyDir.addEventListener("click", function () { clipFile("copy", f.name); });
+        li.appendChild(copyDir);
+        var cutDir = document.createElement("button");
+        cutDir.type = "button";
+        cutDir.textContent = "Cut";
+        cutDir.addEventListener("click", function () { clipFile("move", f.name); });
+        li.appendChild(cutDir);
         var delDir = document.createElement("button");
         delDir.type = "button";
         delDir.textContent = "Delete";
@@ -940,6 +1002,16 @@ export const PLAYER_HTML = `<!doctype html>
       ren.textContent = "Rename";
       ren.addEventListener("click", function () { renameInboxFile(f.name); });
       li.appendChild(ren);
+      var copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.textContent = "Copy";
+      copyBtn.addEventListener("click", function () { clipFile("copy", f.name); });
+      li.appendChild(copyBtn);
+      var cutBtn = document.createElement("button");
+      cutBtn.type = "button";
+      cutBtn.textContent = "Cut";
+      cutBtn.addEventListener("click", function () { clipFile("move", f.name); });
+      li.appendChild(cutBtn);
       var del = document.createElement("button");
       del.type = "button";
       del.textContent = "Delete";
@@ -1008,6 +1080,11 @@ export const PLAYER_HTML = `<!doctype html>
     }
     if (msg.action === "renamed") {
       if (out) out.textContent = "renamed " + (msg.name || "");
+      sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
+      return;
+    }
+    if (msg.action === "copied" || msg.action === "moved") {
+      if (out) out.textContent = (msg.action === "moved" ? "moved " : "copied ") + (msg.name || "");
       sendFileJson({ type: "file", action: "list", root: fileRoot, path: filePath });
       return;
     }

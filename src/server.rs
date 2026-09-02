@@ -980,6 +980,8 @@ impl App {
             .route("/api/control/release", post(api_control_release))
             .route("/api/files/mkdir", post(api_files_mkdir))
             .route("/api/files/rename", post(api_files_rename))
+            .route("/api/files/copy", post(api_files_copy))
+            .route("/api/files/move", post(api_files_move))
             .route(
                 "/api/files",
                 get(api_files_list).post(api_files_put).delete(api_files_delete),
@@ -1774,6 +1776,58 @@ async fn api_files_rename(State(app): State<Arc<App>>, req: Request) -> Response
         Err(e) if e == "already exists" => json_err(StatusCode::CONFLICT, "already exists"),
         Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
     }
+}
+
+async fn api_files_transfer(app: Arc<App>, req: Request, moving: bool) -> Response {
+    if let Err(e) = files_ok(&app, req.headers(), req.uri()) {
+        return e;
+    }
+    let body = axum::body::to_bytes(req.into_body(), 4096)
+        .await
+        .unwrap_or_default();
+    let v: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid JSON body"),
+    };
+    if !v.is_object() {
+        return json_err(StatusCode::BAD_REQUEST, "expected JSON object");
+    }
+    let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("").trim();
+    if name.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "missing name");
+    }
+    let root = v.get("root").and_then(|n| n.as_str()).unwrap_or("inbox");
+    let path = v.get("path").and_then(|n| n.as_str()).unwrap_or("");
+    let to_root = v.get("toRoot").and_then(|n| n.as_str()).unwrap_or(root);
+    let to_path = v.get("toPath").and_then(|n| n.as_str()).unwrap_or("");
+    let result = if moving {
+        app.files.move_at(root, path, name, to_root, to_path)
+    } else {
+        app.files.copy_at(root, path, name, to_root, to_path)
+    };
+    match result {
+        Ok(ent) => Json(json!({
+            "ok": true,
+            "copied": !moving,
+            "moved": moving,
+            "name": ent.name,
+            "dir": ent.dir,
+            "root": crate::files::normalize_root(to_root).unwrap_or("inbox"),
+            "path": crate::files::sanitize_rel(to_path).unwrap_or_default()
+        }))
+        .into_response(),
+        Err(e) if e == "file not found" => json_err(StatusCode::NOT_FOUND, "file not found"),
+        Err(e) if e == "already exists" => json_err(StatusCode::CONFLICT, "already exists"),
+        Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+async fn api_files_copy(State(app): State<Arc<App>>, req: Request) -> Response {
+    api_files_transfer(app, req, false).await
+}
+
+async fn api_files_move(State(app): State<Arc<App>>, req: Request) -> Response {
+    api_files_transfer(app, req, true).await
 }
 
 async fn api_files_delete(State(app): State<Arc<App>>, req: Request) -> Response {

@@ -470,6 +470,94 @@ impl Inbox {
         })
     }
 
+    pub fn copy_at(
+        &self,
+        from_root: &str,
+        from_rel: &str,
+        name: &str,
+        to_root: &str,
+        to_rel: &str,
+    ) -> Result<FileEntry, String> {
+        self.transfer_at(from_root, from_rel, name, to_root, to_rel, false)
+    }
+
+    pub fn move_at(
+        &self,
+        from_root: &str,
+        from_rel: &str,
+        name: &str,
+        to_root: &str,
+        to_rel: &str,
+    ) -> Result<FileEntry, String> {
+        self.transfer_at(from_root, from_rel, name, to_root, to_rel, true)
+    }
+
+    fn transfer_at(
+        &self,
+        from_root: &str,
+        from_rel: &str,
+        name: &str,
+        to_root: &str,
+        to_rel: &str,
+        moving: bool,
+    ) -> Result<FileEntry, String> {
+        let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
+        let src = self.join_under(from_root, from_rel, &name)?;
+        if !src.exists() {
+            return Err("file not found".into());
+        }
+        self.ensure_root(to_root)?;
+        let dest_dir = self.join_under(to_root, to_rel, "")?;
+        if !dest_dir.exists() {
+            fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+        }
+        if !dest_dir.is_dir() {
+            return Err("not a directory".into());
+        }
+        let dest = if moving {
+            let p = dest_dir.join(&name);
+            if p.exists() {
+                return Err("already exists".into());
+            }
+            p
+        } else {
+            unique_dest(&dest_dir, &name).ok_or_else(|| "invalid file name".to_string())?
+        };
+        let src_can = src.canonicalize().map_err(|e| e.to_string())?;
+        if dest == src || dest.starts_with(&src_can) {
+            return Err("invalid path".into());
+        }
+        let meta = fs::metadata(&src).map_err(|_| "file not found".to_string())?;
+        if meta.is_dir() {
+            let _ = Self::dir_entry_count(&src)?;
+        }
+        if moving {
+            match fs::rename(&src, &dest) {
+                Ok(()) => {}
+                Err(_) => {
+                    copy_tree(&src, &dest)?;
+                    if src.is_dir() {
+                        fs::remove_dir_all(&src).map_err(|e| e.to_string())?;
+                    } else {
+                        fs::remove_file(&src).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+        } else {
+            copy_tree(&src, &dest)?;
+        }
+        let out_name = dest
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&name)
+            .to_string();
+        Ok(FileEntry {
+            name: out_name,
+            size: if meta.is_dir() { 0 } else { meta.len() },
+            dir: meta.is_dir(),
+        })
+    }
+
     pub fn get_bytes(&self, name: &str) -> Result<Vec<u8>, String> {
         let path = self.dest(name)?;
         let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
@@ -729,6 +817,27 @@ impl Inbox {
                     Err(e) => vec![err_json(&e)],
                 }
             }
+            "copy" | "move" => {
+                let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let to_root = v.get("toRoot").and_then(|n| n.as_str()).unwrap_or(root);
+                let to_rel = v.get("toPath").and_then(|n| n.as_str()).unwrap_or("");
+                let moving = action == "move";
+                match self.transfer_at(root, rel, name, to_root, to_rel, moving) {
+                    Ok(ent) => vec![
+                        json!({
+                            "type": "file",
+                            "action": if moving { "moved" } else { "copied" },
+                            "name": ent.name,
+                            "dir": ent.dir,
+                            "root": normalize_root(to_root).unwrap_or("inbox"),
+                            "path": sanitize_rel(to_rel).unwrap_or_default()
+                        })
+                        .to_string(),
+                        self.list_at_json(to_root, to_rel),
+                    ],
+                    Err(e) => vec![err_json(&e)],
+                }
+            }
             "rename" => {
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let to = v.get("to").and_then(|n| n.as_str()).unwrap_or("");
@@ -770,6 +879,32 @@ impl Inbox {
             _ => vec![err_json("unknown file action")],
         }
     }
+}
+
+fn copy_tree(src: &Path, dest: &Path) -> Result<(), String> {
+    if src.is_symlink() {
+        return Err("invalid path".into());
+    }
+    if src.is_file() {
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::copy(src, dest).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    if !src.is_dir() {
+        return Err("not a file".into());
+    }
+    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    for ent in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let ent = ent.map_err(|e| e.to_string())?;
+        let name = ent.file_name().to_string_lossy().to_string();
+        let Some(name) = sanitize_name(&name) else {
+            continue;
+        };
+        copy_tree(&ent.path(), &dest.join(name))?;
+    }
+    Ok(())
 }
 
 /// Unique path in `dir` for `name` (`a.txt`, then `a-1.txt`, …).
@@ -1067,6 +1202,32 @@ mod tests {
             "to": "z.txt"
         }));
         assert!(rn.iter().any(|m| m.contains("\"renamed\"") && m.contains("z.txt")));
+        fs::create_dir(home.path().join("Documents")).unwrap();
+        inbox
+            .copy_at("desktop", "Work", "z.txt", "documents", "")
+            .unwrap();
+        assert_eq!(
+            fs::read(home.path().join("Documents").join("z.txt")).unwrap(),
+            b"1"
+        );
+        assert!(desk.join("Work").join("z.txt").is_file());
+        inbox
+            .move_at("desktop", "Work", "z.txt", "inbox", "")
+            .unwrap();
+        assert!(!desk.join("Work").join("z.txt").exists());
+        assert_eq!(inbox.get_bytes("z.txt").unwrap(), b"1");
+        assert!(inbox
+            .copy_at("desktop", "", "Work", "desktop", "Work")
+            .is_err());
+        let cp = inbox.handle_message(&json!({
+            "action": "copy",
+            "root": "inbox",
+            "path": "",
+            "name": "z.txt",
+            "toRoot": "documents",
+            "toPath": ""
+        }));
+        assert!(cp.iter().any(|m| m.contains("\"copied\"")));
     }
 
     #[test]

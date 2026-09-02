@@ -313,6 +313,13 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must reveal Rename on files and folders"
     );
     assert!(
+        html.contains("id=\"file-paste\"")
+            && js.contains("function clipFile")
+            && js.contains("function pasteHere")
+            && js.contains("Paste here"),
+        "enabling remote control must reveal Copy/Cut and Paste here between folders"
+    );
+    assert!(
         html.contains("id=\"file-mkdir\"")
             && js.contains("function mkdirInboxFolder")
             && js.contains("action: \"mkdir\""),
@@ -477,6 +484,13 @@ fn worker_player_has_pin_unlock_and_ai_box() {
             && s.contains("action: \"rename\"")
             && s.contains("textContent = \"Rename\""),
         "watch page must reveal Rename on files and folders when remote control is on"
+    );
+    assert!(
+        s.contains("id=\"file-paste\"")
+            && s.contains("function clipFile")
+            && s.contains("function pasteHere")
+            && s.contains("Paste here"),
+        "watch page must reveal Copy/Cut and Paste here between folders"
     );
     assert!(
         s.contains("id=\"file-mkdir\"")

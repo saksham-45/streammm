@@ -1347,6 +1347,24 @@ async fn files_put_list_download_and_reject_traversal() {
         .unwrap();
     assert_eq!(clash.status(), StatusCode::CONFLICT);
 
+    let copied = router
+        .clone()
+        .oneshot(
+            Request::post("/api/files/copy")
+                .header("Authorization", "Bearer s3cret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "hello.txt", "root": "inbox", "toRoot": "inbox"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(copied.status(), StatusCode::OK);
+    let copied_body = body_json(copied).await;
+    assert_eq!(copied_body["copied"], true);
+    assert_eq!(copied_body["name"], "hello-1.txt");
+
     let del = router
         .clone()
         .oneshot(
