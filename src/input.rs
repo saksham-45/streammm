@@ -637,6 +637,7 @@ pub trait Injector: Send + Sync {
     }
     fn clipboard_set_files(&self, _paths: &[PathBuf]) {}
     fn set_block_local(&self, _on: bool) {}
+    fn set_blank_screen(&self, _on: bool) {}
     fn take_local_unlock(&self) -> bool {
         false
     }
@@ -718,6 +719,7 @@ pub struct FakeInjector {
     pub files: Arc<Mutex<Vec<PathBuf>>>,
     pub rect: Arc<Mutex<(i32, i32, u32, u32)>>,
     pub block_local: Arc<AtomicBool>,
+    pub blank_screen: Arc<AtomicBool>,
     pub unlock: Arc<AtomicBool>,
 }
 
@@ -742,6 +744,7 @@ impl Default for FakeInjector {
             files: Arc::new(Mutex::new(Vec::new())),
             rect: Arc::new(Mutex::new((0, 0, 0, 0))),
             block_local: Arc::new(AtomicBool::new(false)),
+            blank_screen: Arc::new(AtomicBool::new(false)),
             unlock: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -864,6 +867,9 @@ impl Injector for FakeInjector {
     fn set_block_local(&self, on: bool) {
         self.block_local.store(on, Ordering::SeqCst);
     }
+    fn set_blank_screen(&self, on: bool) {
+        self.blank_screen.store(on, Ordering::SeqCst);
+    }
     fn take_local_unlock(&self) -> bool {
         self.unlock.swap(false, Ordering::SeqCst)
     }
@@ -939,6 +945,7 @@ mod macos {
     const SESSION_TAP: u32 = 1;
 
     static BLOCK_LOCAL: AtomicBool = AtomicBool::new(false);
+    static BLANK_SCREEN: AtomicBool = AtomicBool::new(false);
     static UNLOCK: AtomicBool = AtomicBool::new(false);
 
     extern "C" fn block_tap(
@@ -947,7 +954,12 @@ mod macos {
         event: CGEventRef,
         _info: *mut std::ffi::c_void,
     ) -> CGEventRef {
-        if event.is_null() || !BLOCK_LOCAL.load(Ordering::SeqCst) {
+        if event.is_null() {
+            return event;
+        }
+        let blocking = BLOCK_LOCAL.load(Ordering::SeqCst);
+        let blanking = BLANK_SCREEN.load(Ordering::SeqCst);
+        if !blocking && !blanking {
             return event;
         }
         unsafe {
@@ -960,11 +972,16 @@ mod macos {
                 if code == ESC_KEY && flags & FLAG_CMD != 0 && flags & FLAG_SHIFT != 0 {
                     UNLOCK.store(true, Ordering::SeqCst);
                     BLOCK_LOCAL.store(false, Ordering::SeqCst);
+                    set_blank_desired(false);
                     return event;
                 }
             }
         }
-        std::ptr::null_mut()
+        if blocking {
+            std::ptr::null_mut()
+        } else {
+            event
+        }
     }
 
     fn start_block_tap() {
@@ -1049,6 +1066,130 @@ mod macos {
         fn CGMainDisplayID() -> u32;
         fn CGDisplayBounds(id: u32) -> CGRect;
         fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+        fn CGSetDisplayTransferByTable(
+            display: u32,
+            table_size: u32,
+            red: *const f32,
+            green: *const f32,
+            blue: *const f32,
+        ) -> i32;
+        fn CGGetDisplayTransferByTable(
+            display: u32,
+            capacity: u32,
+            red: *mut f32,
+            green: *mut f32,
+            blue: *mut f32,
+            sample_count: *mut u32,
+        ) -> i32;
+        fn CGDisplayRestoreColorSyncSettings();
+    }
+
+    extern "C" {
+        fn atexit(cb: extern "C" fn()) -> i32;
+    }
+
+    extern "C" fn restore_blank_on_exit() {
+        BLANK_SCREEN.store(false, Ordering::SeqCst);
+        unsafe {
+            CGDisplayRestoreColorSyncSettings();
+        }
+    }
+
+    fn restore_gamma() {
+        unsafe {
+            CGDisplayRestoreColorSyncSettings();
+        }
+    }
+
+    fn gamma_looks_blank(id: u32) -> bool {
+        let mut red = [0f32; 256];
+        let mut green = [0f32; 256];
+        let mut blue = [0f32; 256];
+        let mut count = 0u32;
+        let err = unsafe {
+            CGGetDisplayTransferByTable(
+                id,
+                256,
+                red.as_mut_ptr(),
+                green.as_mut_ptr(),
+                blue.as_mut_ptr(),
+                &mut count,
+            )
+        };
+        err == 0
+            && count > 0
+            && red.iter().take(count as usize).all(|v| *v < 0.02)
+            && green.iter().take(count as usize).all(|v| *v < 0.02)
+            && blue.iter().take(count as usize).all(|v| *v < 0.02)
+    }
+
+    fn apply_black_gamma() {
+        let zeros = [0f32; 256];
+        unsafe {
+            let mut ids = [0u32; 32];
+            let mut n = 0u32;
+            let err = CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut n);
+            if err != 0 || n == 0 {
+                let _ = CGSetDisplayTransferByTable(
+                    CGMainDisplayID(),
+                    256,
+                    zeros.as_ptr(),
+                    zeros.as_ptr(),
+                    zeros.as_ptr(),
+                );
+            } else {
+                for id in ids.iter().take(n as usize) {
+                    let _ = CGSetDisplayTransferByTable(
+                        *id,
+                        256,
+                        zeros.as_ptr(),
+                        zeros.as_ptr(),
+                        zeros.as_ptr(),
+                    );
+                }
+            }
+        }
+        if !BLANK_SCREEN.load(Ordering::SeqCst) {
+            restore_gamma();
+        }
+    }
+
+    fn set_blank_desired(on: bool) {
+        BLANK_SCREEN.store(on, Ordering::SeqCst);
+        if on {
+            ensure_blank_support();
+            apply_black_gamma();
+        } else {
+            restore_gamma();
+        }
+    }
+
+    fn ensure_blank_support() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            std::thread::Builder::new()
+                .name("streamaid-blank".into())
+                .spawn(|| loop {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    if BLANK_SCREEN.load(Ordering::SeqCst) {
+                        apply_black_gamma();
+                    }
+                })
+                .ok();
+            unsafe {
+                let _ = atexit(restore_blank_on_exit);
+            }
+        });
+    }
+
+    fn maybe_restore_leftover_blank() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let id = unsafe { CGMainDisplayID() };
+            if gamma_looks_blank(id) {
+                restore_gamma();
+            }
+        });
     }
 
     pub fn display_size() -> Option<(u32, u32)> {
@@ -1386,6 +1527,7 @@ else {
                 flags: AtomicU64::new(0),
             };
             s.refresh_display_size();
+            maybe_restore_leftover_blank();
             start_block_tap();
             s
         }
@@ -1529,6 +1671,9 @@ else {
         fn set_block_local(&self, on: bool) {
             BLOCK_LOCAL.store(on, Ordering::SeqCst);
         }
+        fn set_blank_screen(&self, on: bool) {
+            set_blank_desired(on);
+        }
         fn take_local_unlock(&self) -> bool {
             UNLOCK.swap(false, Ordering::SeqCst)
         }
@@ -1665,6 +1810,16 @@ mod tests {
         0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x05, 0xFE, 0xD4, 0xEF, 0x00, 0x00,
         0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
+
+    #[test]
+    fn fake_blank_screen_flag() {
+        let inj = FakeInjector::new();
+        assert!(!inj.blank_screen.load(Ordering::SeqCst));
+        inj.set_blank_screen(true);
+        assert!(inj.blank_screen.load(Ordering::SeqCst));
+        inj.set_blank_screen(false);
+        assert!(!inj.blank_screen.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn fake_records_click_and_type_with_clamped_coords() {

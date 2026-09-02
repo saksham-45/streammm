@@ -145,6 +145,14 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "block-local must be a Settings control revealed when remote control is on"
     );
     assert!(
+        html.contains("id=\"cfg-blank-screen\"")
+            && html.contains("id=\"blank-screen-fields\"")
+            && html.contains("id=\"blank-screen-hint\"")
+            && js.contains("ctl.blanking")
+            && js.contains("SCREEN BLANKED"),
+        "blank-screen must be a Settings control revealed when remote control is on"
+    );
+    assert!(
         html.contains("id=\"cfg-lock-on-end\"")
             && html.contains("id=\"lock-on-end-fields\"")
             && html.contains("id=\"lock-on-end-hint\""),
@@ -656,6 +664,9 @@ const nodes = {{
   "block-local-fields": el(true),
   "cfg-block-local": el(false),
   "block-hint": el(true),
+  "blank-screen-fields": el(true),
+  "cfg-blank-screen": el(false),
+  "blank-screen-hint": el(true),
   "lock-on-end-fields": el(true),
   "cfg-lock-on-end": el(false),
   "lock-on-end-hint": el(true),
@@ -714,6 +725,7 @@ if (!nodes["analysis-pane"].classList.contains("hidden")) throw new Error("analy
 if (!nodes["cu-section"].classList.contains("hidden")) throw new Error("AI form visible while off");
 if (!nodes["unattended-fields"].classList.contains("hidden")) throw new Error("unattended password visible while off");
 if (!nodes["lock-on-end-fields"].classList.contains("hidden")) throw new Error("lock-on-end visible while off");
+if (!nodes["blank-screen-fields"].classList.contains("hidden")) throw new Error("blank-screen visible while off");
 if (!nodes["record-fields"].classList.contains("hidden")) throw new Error("record-sessions visible while off");
 if (!nodes["recordings-section"].classList.contains("hidden")) throw new Error("recordings list visible while off");
 if (!nodes["keys-bar"].classList.contains("hidden")) throw new Error("keys-bar visible while off");
@@ -743,6 +755,11 @@ if (nodes["chat-hint"].classList.contains("hidden")) throw new Error("chat hint 
 const chat = window.streamaidUi.chatPayload("  hello  ");
 if (chat.type !== "chat" || chat.text !== "hello") throw new Error("chatPayload");
 if (nodes["block-local-fields"].classList.contains("hidden")) throw new Error("block-local still hidden after control enable");
+if (nodes["blank-screen-fields"].classList.contains("hidden")) throw new Error("blank-screen still hidden after control enable");
+if (!nodes["blank-screen-hint"].classList.contains("hidden")) throw new Error("blank-screen hint visible while off");
+nodes["cfg-blank-screen"].checked = true;
+window.streamaidUi.syncFeatureUi();
+if (nodes["blank-screen-hint"].classList.contains("hidden")) throw new Error("blank-screen hint still hidden after enable");
 if (nodes["lock-on-end-fields"].classList.contains("hidden")) throw new Error("lock-on-end still hidden after control enable");
 if (!nodes["lock-on-end-hint"].classList.contains("hidden")) throw new Error("lock-on-end hint visible while off");
 nodes["cfg-lock-on-end"].checked = true;

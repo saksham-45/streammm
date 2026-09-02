@@ -163,6 +163,8 @@
   <p id="chat-hint" class="cfg-hint hidden">A session chat panel appears while remote control is on. Host and watchers can message each other without the browser stealing keystrokes into the remote machine.</p>
   <label id="block-local-fields" class="hidden"><input id="cfg-block-local" type="checkbox"> Block local input during remote session</label>
   <p id="block-hint" class="cfg-hint hidden">While a watcher is driving, this Mac's keyboard and mouse are locked (remote inject still works). Press ⌘⇧Esc to reclaim — the End button will not receive clicks. Requires Accessibility.</p>
+  <label id="blank-screen-fields" class="hidden"><input id="cfg-blank-screen" type="checkbox"> Blank the host screen during remote session</label>
+  <p id="blank-screen-hint" class="cfg-hint hidden">While a watcher is driving, this Mac's displays go black so people nearby cannot see the desktop. The stream still captures the real framebuffer. Press ⌘⇧Esc to unblank and reclaim. Combine with Block local input so the keyboard is locked too.</p>
   <label id="lock-on-end-fields" class="hidden"><input id="cfg-lock-on-end" type="checkbox"> Lock this Mac when the remote session ends</label>
   <p id="lock-on-end-hint" class="cfg-hint hidden">When the watcher disconnects or you press End, inject Control+Command+Q (lock screen). Reclaiming with ⌘⇧Esc does not lock.</p>
   <label id="record-fields" class="hidden"><input id="cfg-record-sessions" type="checkbox"> Record remote sessions</label>

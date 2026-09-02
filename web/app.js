@@ -77,6 +77,7 @@ function featureFlags() {
     ai: aiEl ? !!aiEl.checked : !!(cfg && cfg.control && cfg.control.ai_enabled),
     ctl: ctlEl ? !!ctlEl.checked : !!(cfg && cfg.control && cfg.control.enabled),
     block: ($("cfg-block-local") ? !!$("cfg-block-local").checked : !!(cfg && cfg.control && cfg.control.block_local)),
+    blankScreen: ($("cfg-blank-screen") ? !!$("cfg-blank-screen").checked : !!(cfg && cfg.control && cfg.control.blank_screen)),
     lockOnEnd: ($("cfg-lock-on-end") ? !!$("cfg-lock-on-end").checked : !!(cfg && cfg.control && cfg.control.lock_on_end)),
     record: ($("cfg-record-sessions") ? !!$("cfg-record-sessions").checked : !!(cfg && cfg.control && cfg.control.record_sessions)),
     unattended: ($("cfg-unattended") ? !!$("cfg-unattended").checked : !!(cfg && cfg.access && cfg.access.unattended)),
@@ -103,6 +104,8 @@ function syncFeatureUi() {
   setHidden($("keys-bar"), !f.ctl);
   setHidden($("block-local-fields"), !f.ctl);
   setHidden($("block-hint"), !(f.ctl && f.block));
+  setHidden($("blank-screen-fields"), !f.ctl);
+  setHidden($("blank-screen-hint"), !(f.ctl && f.blankScreen));
   setHidden($("lock-on-end-fields"), !f.ctl);
   setHidden($("lock-on-end-hint"), !(f.ctl && f.lockOnEnd));
   setHidden($("record-fields"), !f.ctl);
@@ -205,6 +208,7 @@ function renderStatus(s) {
   const lab = $("session-banner-label");
   if (lab) {
     let t = ctl.blocking ? "REMOTE SESSION · LOCAL INPUT LOCKED" : "REMOTE SESSION";
+    if (ctl.blanking) t += " · SCREEN BLANKED";
     if (ctl.recording) t += " · RECORDING";
     lab.textContent = t;
   }
@@ -1501,6 +1505,8 @@ function fillConfigForm(c) {
   if (ctl) ctl.checked = !!(c.control && c.control.enabled);
   const blk = $("cfg-block-local");
   if (blk) blk.checked = !!(c.control && c.control.block_local);
+  const blank = $("cfg-blank-screen");
+  if (blank) blank.checked = !!(c.control && c.control.blank_screen);
   const lockEnd = $("cfg-lock-on-end");
   if (lockEnd) lockEnd.checked = !!(c.control && c.control.lock_on_end);
   const rec = $("cfg-record-sessions");
@@ -1536,6 +1542,7 @@ function readConfigForm() {
       enabled: !!(ctlEn && ctlEn.checked),
       ai_enabled: !!(aiEn && aiEn.checked),
       block_local: !!( $("cfg-block-local") && $("cfg-block-local").checked ),
+      blank_screen: !!( $("cfg-blank-screen") && $("cfg-blank-screen").checked ),
       lock_on_end: !!( $("cfg-lock-on-end") && $("cfg-lock-on-end").checked ),
       record_sessions: !!( $("cfg-record-sessions") && $("cfg-record-sessions").checked ),
       voice: !!( $("cfg-voice") && $("cfg-voice").checked ),
@@ -1718,7 +1725,7 @@ function onReady() {
       if (jv) jv.textContent = jpeg.value;
     });
   }
-  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-voice", "cfg-block-local", "cfg-lock-on-end", "cfg-record-sessions", "cfg-unattended"].forEach(function (id) {
+  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-voice", "cfg-block-local", "cfg-blank-screen", "cfg-lock-on-end", "cfg-record-sessions", "cfg-unattended"].forEach(function (id) {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", function () { syncFeatureUi(); });

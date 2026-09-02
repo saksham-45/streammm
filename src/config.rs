@@ -234,6 +234,9 @@ pub struct ControlConfig {
     /// Swallow host HID while a remote controller is driving. ⌘⇧Esc unlocks.
     #[serde(default)]
     pub block_local: bool,
+    /// Black the host displays while a remote controller is driving. ⌘⇧Esc unblanks.
+    #[serde(default)]
+    pub blank_screen: bool,
     /// Inject Control+Command+Q when the remote session ends (not ⌘⇧Esc reclaim).
     #[serde(default)]
     pub lock_on_end: bool,
@@ -464,6 +467,7 @@ mod tests {
         assert!(!cfg.access.unattended);
         assert!(cfg.access.password_hash.is_empty());
         assert!(!cfg.control.lock_on_end);
+        assert!(!cfg.control.blank_screen);
         assert!(!cfg.control.record_sessions);
         assert!(!cfg.control.voice);
         assert_eq!(quality_preset(&cfg), "quality");
@@ -559,6 +563,18 @@ mod tests {
         let new = Config::default();
         assert!(cloudflare_endpoint_changed(&old, &new));
         assert!(!cloudflare_endpoint_changed(&new, &new));
+    }
+
+    #[test]
+    fn blank_screen_patch_roundtrips() {
+        let cfg = Config::default();
+        assert!(!cfg.control.blank_screen);
+        let cfg = cfg.merge_patch(serde_json::json!({"control": {"blank_screen": true, "enabled": true}}));
+        assert!(cfg.control.blank_screen);
+        assert!(cfg.control.enabled);
+        let cfg = cfg.merge_patch(serde_json::json!({"control": {"blank_screen": false}}));
+        assert!(!cfg.control.blank_screen);
+        assert!(cfg.control.enabled, "other control flags must survive the patch");
     }
 
     #[test]

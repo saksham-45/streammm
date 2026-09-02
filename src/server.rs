@@ -127,6 +127,9 @@ impl Injector for DisplaySwitchInjector {
     fn set_block_local(&self, on: bool) {
         self.inner.set_block_local(on);
     }
+    fn set_blank_screen(&self, on: bool) {
+        self.inner.set_blank_screen(on);
+    }
     fn take_local_unlock(&self) -> bool {
         self.inner.take_local_unlock()
     }
@@ -706,7 +709,7 @@ impl App {
         };
         drop(g);
         if ok && was_none {
-            self.sync_block_local();
+            self.sync_session_privacy();
             self.maybe_start_recording();
             self.bump_status();
         }
@@ -723,9 +726,17 @@ impl App {
         }
     }
 
-    fn sync_block_local(&self) {
-        let on = self.cfg.lock().control.block_local && self.controller.lock().is_some();
-        self.injector.set_block_local(on);
+    fn sync_session_privacy(&self) {
+        let (block, blank) = {
+            let cfg = self.cfg.lock();
+            let driving = self.controller.lock().is_some();
+            (
+                cfg.control.block_local && driving,
+                cfg.control.blank_screen && driving,
+            )
+        };
+        self.injector.set_block_local(block);
+        self.injector.set_blank_screen(blank);
     }
 
     fn bump_status(&self) {
@@ -751,7 +762,7 @@ impl App {
         if had {
             self.recorder.stop();
         }
-        self.sync_block_local();
+        self.sync_session_privacy();
         self.bump_status();
         if lock && had && self.cfg.lock().control.lock_on_end {
             self.lock_screen();
@@ -941,11 +952,13 @@ impl App {
                 "ai_enabled": cfg.control.ai_enabled,
                 "controller": self.controller.lock().is_some(),
                 "block_local": cfg.control.block_local,
+                "blank_screen": cfg.control.blank_screen,
                 "lock_on_end": cfg.control.lock_on_end,
                 "record_sessions": cfg.control.record_sessions,
                 "recording": self.recorder.is_active(),
                 "voice": cfg.control.voice,
                 "blocking": cfg.control.block_local && self.controller.lock().is_some(),
+                "blanking": cfg.control.blank_screen && self.controller.lock().is_some(),
                 "files": self.files.list().len(),
             },
             "otp": {
@@ -1188,7 +1201,7 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
         app.publisher.start();
     }
     app.apply_display(&new_cfg.capture.input);
-    app.sync_block_local();
+    app.sync_session_privacy();
     let unattended = if new_cfg.access.unattended {
         new_cfg.access.password_hash.clone()
     } else {
@@ -2838,6 +2851,55 @@ mod tests {
         app.end_remote_session();
         let n = fake.recorded().iter().filter(|e| matches!(e, Injected::Key { key, .. } if key == "q")).count();
         assert_eq!(n, 1, "a second End with no controller must not lock again");
+    }
+
+    #[tokio::test]
+    async fn blanks_host_screen_while_remote_session_active() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        cfg.control.blank_screen = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        assert!(!fake.blank_screen.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(app.status_json()["control"]["blanking"], false);
+        app.handle_inbound_json(
+            r#"{"type":"control","session":"abc","action":"click","x":0.1,"y":0.2}"#,
+        );
+        assert_eq!(app.status_json()["control"]["controller"], true);
+        assert_eq!(app.status_json()["control"]["blanking"], true);
+        assert!(fake.blank_screen.load(std::sync::atomic::Ordering::SeqCst));
+        app.end_remote_session();
+        assert_eq!(app.status_json()["control"]["blanking"], false);
+        assert!(!fake.blank_screen.load(std::sync::atomic::Ordering::SeqCst));
+
+        app.handle_inbound_json(
+            r#"{"type":"control","session":"abc","action":"click","x":0.1,"y":0.2}"#,
+        );
+        assert!(fake.blank_screen.load(std::sync::atomic::Ordering::SeqCst));
+        app.cfg.lock().control.blank_screen = false;
+        app.sync_session_privacy();
+        assert!(
+            !fake.blank_screen.load(std::sync::atomic::Ordering::SeqCst),
+            "turning the setting off mid-session must unblank"
+        );
+        assert_eq!(app.status_json()["control"]["controller"], true);
+        fake.unlock.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(app.injector.take_local_unlock());
+        app.release_controller();
+        assert!(!fake.blank_screen.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[tokio::test]
