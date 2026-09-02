@@ -50,6 +50,7 @@ pub fn sanitize_name(name: &str) -> Option<String> {
 pub fn normalize_root(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "" | "inbox" => Some("inbox"),
+        "home" => Some("home"),
         "desktop" => Some("desktop"),
         "documents" => Some("documents"),
         "downloads" => Some("downloads"),
@@ -142,6 +143,7 @@ impl Inbox {
         let root = normalize_root(root).ok_or_else(|| "unknown folder".to_string())?;
         match root {
             "inbox" => Ok(self.dir.clone()),
+            "home" => self.home_dir().ok_or_else(|| "no home directory".into()),
             "desktop" => self
                 .home_dir()
                 .map(|h| h.join("Desktop"))
@@ -851,6 +853,16 @@ mod tests {
         let listed = inbox.handle_message(&json!({"action":"list","root":"desktop"}));
         assert!(listed[0].contains("shot.png"));
         assert!(listed[0].contains("\"root\":\"desktop\""));
+        let home_files = inbox.list_at("home", "").unwrap().2;
+        assert!(home_files.iter().any(|f| f.name == "Desktop" && f.dir));
+        assert!(inbox.list_at("home", "../").is_err());
+        inbox
+            .put_bytes_at("home", "", "from-home.txt", b"ok")
+            .unwrap();
+        assert_eq!(
+            fs::read(home.path().join("from-home.txt")).unwrap(),
+            b"ok"
+        );
         inbox
             .put_bytes_at("desktop", "Work", "drop.txt", b"zz")
             .unwrap();

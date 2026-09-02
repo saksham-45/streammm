@@ -160,6 +160,7 @@ export const PLAYER_HTML = `<!doctype html>
     <div id="file-offer">Incoming file <span id="file-offer-name"></span><button type="button" id="file-offer-save">Save</button></div>
     <div id="file-roots" role="tablist" aria-label="Host folders">
       <button type="button" data-root="inbox" class="on">Inbox</button>
+      <button type="button" data-root="home">Home</button>
       <button type="button" data-root="desktop">Desktop</button>
       <button type="button" data-root="documents">Documents</button>
       <button type="button" data-root="downloads">Downloads</button>

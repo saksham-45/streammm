@@ -266,12 +266,13 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     );
     assert!(
         html.contains("id=\"file-roots\"")
+            && html.contains("data-root=\"home\"")
             && html.contains("data-root=\"desktop\"")
             && html.contains("data-root=\"documents\"")
             && html.contains("data-root=\"downloads\"")
             && js.contains("function browseFiles")
             && js.contains("root: fileRoot"),
-        "enabling remote control must reveal Inbox/Desktop/Documents/Downloads browse"
+        "enabling remote control must reveal Inbox/Home/Desktop/Documents/Downloads browse"
     );
     assert!(
         js.contains("action: \"begin\"") && js.contains("action: \"chunk\""),
@@ -389,6 +390,7 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     );
     assert!(
         s.contains("id=\"file-roots\"")
+            && s.contains("data-root=\"home\"")
             && s.contains("data-root=\"desktop\"")
             && s.contains("function browseFiles")
             && s.contains("root: fileRoot"),

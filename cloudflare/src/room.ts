@@ -96,7 +96,7 @@ function safeDownloadName(name: string): string | null {
 
 function cleanRoot(raw: string): string {
   const s = raw.trim().toLowerCase();
-  if (s === "desktop" || s === "documents" || s === "downloads") return s;
+  if (s === "home" || s === "desktop" || s === "documents" || s === "downloads") return s;
   return "inbox";
 }
 
