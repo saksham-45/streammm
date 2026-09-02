@@ -1016,6 +1016,7 @@ mod macos {
 
     #[link(name = "CoreGraphics", kind = "framework")]
     #[link(name = "CoreFoundation", kind = "framework")]
+    #[link(name = "IOKit", kind = "framework")]
     extern "C" {
         fn CGEventCreateMouseEvent(
             source: CGEventSourceRef,
@@ -1082,10 +1083,208 @@ mod macos {
             sample_count: *mut u32,
         ) -> i32;
         fn CGDisplayRestoreColorSyncSettings();
+        fn CFStringCreateWithCString(
+            alloc: *mut std::ffi::c_void,
+            c_str: *const i8,
+            encoding: u32,
+        ) -> *mut std::ffi::c_void;
+        fn IOServiceGetMatchingServices(
+            port: u32,
+            matching: *mut std::ffi::c_void,
+            iter: *mut u32,
+        ) -> i32;
+        fn IOServiceMatching(name: *const i8) -> *mut std::ffi::c_void;
+        fn IOIteratorNext(iter: u32) -> u32;
+        fn IOObjectRelease(obj: u32) -> i32;
+        fn IODisplaySetFloatParameter(
+            service: u32,
+            options: u32,
+            name: *mut std::ffi::c_void,
+            value: f32,
+        ) -> i32;
+        fn IODisplayGetFloatParameter(
+            service: u32,
+            options: u32,
+            name: *mut std::ffi::c_void,
+            value: *mut f32,
+        ) -> i32;
+        fn dlopen(path: *const i8, mode: i32) -> *mut std::ffi::c_void;
+        fn dlsym(handle: *mut std::ffi::c_void, name: *const i8) -> *mut std::ffi::c_void;
     }
 
     extern "C" {
         fn atexit(cb: extern "C" fn()) -> i32;
+    }
+
+    const UTF8: u32 = 0x0800_0100;
+    const RTLD_LAZY: i32 = 1;
+    const BRIGHT_FALLBACK: f32 = 0.75;
+
+    static SAVED_DS: std::sync::Mutex<Vec<(u32, f32)>> = std::sync::Mutex::new(Vec::new());
+    static SAVED_IO: std::sync::Mutex<Vec<f32>> = std::sync::Mutex::new(Vec::new());
+
+    type DsGet = unsafe extern "C" fn(u32, *mut f32) -> i32;
+    type DsSet = unsafe extern "C" fn(u32, f32) -> i32;
+
+    fn ds_fns() -> (Option<DsGet>, Option<DsSet>) {
+        static INIT: std::sync::OnceLock<(Option<DsGet>, Option<DsSet>)> = std::sync::OnceLock::new();
+        *INIT.get_or_init(|| unsafe {
+            let path = b"/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices\0";
+            let h = dlopen(path.as_ptr() as *const i8, RTLD_LAZY);
+            if h.is_null() {
+                return (None, None);
+            }
+            let g = dlsym(h, b"DisplayServicesGetBrightness\0".as_ptr() as *const i8);
+            let s = dlsym(h, b"DisplayServicesSetBrightness\0".as_ptr() as *const i8);
+            (
+                if g.is_null() {
+                    None
+                } else {
+                    Some(std::mem::transmute::<_, DsGet>(g))
+                },
+                if s.is_null() {
+                    None
+                } else {
+                    Some(std::mem::transmute::<_, DsSet>(s))
+                },
+            )
+        })
+    }
+
+    fn cg_display_ids() -> Vec<u32> {
+        unsafe {
+            let mut ids = [0u32; 32];
+            let mut n = 0u32;
+            let err = CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut n);
+            if err != 0 || n == 0 {
+                vec![CGMainDisplayID()]
+            } else {
+                ids.iter().take(n as usize).copied().collect()
+            }
+        }
+    }
+
+    fn ds_get(id: u32) -> Option<f32> {
+        let (get, _) = ds_fns();
+        let get = get?;
+        let mut v = 0f32;
+        if unsafe { get(id, &mut v) } == 0 {
+            Some(v.clamp(0.0, 1.0))
+        } else {
+            None
+        }
+    }
+
+    fn ds_set(id: u32, v: f32) -> bool {
+        let (_, set) = ds_fns();
+        let Some(set) = set else {
+            return false;
+        };
+        unsafe { set(id, v.clamp(0.0, 1.0)) == 0 }
+    }
+
+    fn brightness_cfstr() -> *mut std::ffi::c_void {
+        unsafe { CFStringCreateWithCString(std::ptr::null_mut(), b"brightness\0".as_ptr() as *const i8, UTF8) }
+    }
+
+    fn io_brightness_list() -> Vec<(u32, f32)> {
+        let matching = unsafe { IOServiceMatching(b"IODisplayConnect\0".as_ptr() as *const i8) };
+        if matching.is_null() {
+            return Vec::new();
+        }
+        let mut iter = 0u32;
+        let err = unsafe { IOServiceGetMatchingServices(0, matching, &mut iter) };
+        if err != 0 || iter == 0 {
+            return Vec::new();
+        }
+        let name = brightness_cfstr();
+        let mut out = Vec::new();
+        if !name.is_null() {
+            loop {
+                let svc = unsafe { IOIteratorNext(iter) };
+                if svc == 0 {
+                    break;
+                }
+                let mut v = 0f32;
+                let ok = unsafe { IODisplayGetFloatParameter(svc, 0, name, &mut v) } == 0;
+                if ok {
+                    out.push((svc, v.clamp(0.0, 1.0)));
+                } else {
+                    unsafe { let _ = IOObjectRelease(svc); }
+                }
+            }
+            unsafe { CFRelease(name) };
+        }
+        unsafe { let _ = IOObjectRelease(iter); }
+        out
+    }
+
+    fn io_set_all(value: f32) {
+        for (svc, _) in io_brightness_list() {
+            let name = brightness_cfstr();
+            if !name.is_null() {
+                unsafe {
+                    let _ = IODisplaySetFloatParameter(svc, 0, name, value);
+                    CFRelease(name);
+                    let _ = IOObjectRelease(svc);
+                }
+            } else {
+                unsafe { let _ = IOObjectRelease(svc); }
+            }
+        }
+    }
+
+    fn snapshot_brightness() {
+        if let Ok(mut ds) = SAVED_DS.lock() {
+            if ds.is_empty() {
+                *ds = cg_display_ids()
+                    .into_iter()
+                    .filter_map(|id| ds_get(id).map(|v| (id, v)))
+                    .collect();
+            }
+        }
+        if let Ok(mut io) = SAVED_IO.lock() {
+            if io.is_empty() {
+                let list = io_brightness_list();
+                *io = list.iter().map(|(_, v)| *v).collect();
+                for (svc, _) in list {
+                    unsafe { let _ = IOObjectRelease(svc); }
+                }
+            }
+        }
+    }
+
+    fn apply_black_brightness() {
+        snapshot_brightness();
+        for id in cg_display_ids() {
+            let _ = ds_set(id, 0.0);
+        }
+        io_set_all(0.0);
+    }
+
+    fn restore_brightness() {
+        if let Ok(mut ds) = SAVED_DS.lock() {
+            for (id, v) in ds.drain(..) {
+                let _ = ds_set(id, v);
+            }
+        }
+        if let Ok(mut io) = SAVED_IO.lock() {
+            let saved: Vec<f32> = io.drain(..).collect();
+            if !saved.is_empty() {
+                let list = io_brightness_list();
+                for (i, (svc, _)) in list.into_iter().enumerate() {
+                    let v = saved.get(i).copied().unwrap_or(BRIGHT_FALLBACK);
+                    let name = brightness_cfstr();
+                    if !name.is_null() {
+                        unsafe {
+                            let _ = IODisplaySetFloatParameter(svc, 0, name, v);
+                            CFRelease(name);
+                        }
+                    }
+                    unsafe { let _ = IOObjectRelease(svc); }
+                }
+            }
+        }
     }
 
     extern "C" fn restore_blank_on_exit() {
@@ -1093,12 +1292,14 @@ mod macos {
         unsafe {
             CGDisplayRestoreColorSyncSettings();
         }
+        restore_brightness();
     }
 
     fn restore_gamma() {
         unsafe {
             CGDisplayRestoreColorSyncSettings();
         }
+        restore_brightness();
     }
 
     fn gamma_looks_blank(id: u32) -> bool {
@@ -1149,6 +1350,7 @@ mod macos {
                 }
             }
         }
+        apply_black_brightness();
         if !BLANK_SCREEN.load(Ordering::SeqCst) {
             restore_gamma();
         }
@@ -1188,6 +1390,11 @@ mod macos {
             let id = unsafe { CGMainDisplayID() };
             if gamma_looks_blank(id) {
                 restore_gamma();
+                for did in cg_display_ids() {
+                    if ds_get(did).is_some_and(|v| v < 0.02) {
+                        let _ = ds_set(did, BRIGHT_FALLBACK);
+                    }
+                }
             }
         });
     }

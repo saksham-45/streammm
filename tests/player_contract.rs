@@ -148,6 +148,7 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         html.contains("id=\"cfg-blank-screen\"")
             && html.contains("id=\"blank-screen-fields\"")
             && html.contains("id=\"blank-screen-hint\"")
+            && html.contains("brightness")
             && js.contains("ctl.blanking")
             && js.contains("SCREEN BLANKED"),
         "blank-screen must be a Settings control revealed when remote control is on"
