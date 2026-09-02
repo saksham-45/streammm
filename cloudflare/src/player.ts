@@ -165,7 +165,7 @@ export const PLAYER_HTML = `<!doctype html>
       <button type="button" data-root="downloads">Downloads</button>
     </div>
     <div id="file-path"></div>
-    <div id="file-drop">Drop files here or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
+    <div id="file-drop">Drop files into this folder or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
     <div id="file-out"></div>
     <ul id="file-list"></ul>
     </div>
@@ -1005,7 +1005,7 @@ export const PLAYER_HTML = `<!doctype html>
     if (out) out.textContent = "sending " + file.name + "…";
     var id = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     pendingUploads[id] = { name: file.name, file: file };
-    sendFileJson({ type: "file", action: "begin", id: id, name: file.name, size: file.size });
+    sendFileJson({ type: "file", action: "begin", id: id, name: file.name, size: file.size, root: fileRoot, path: filePath });
   }
   function uploadDroppedFiles(fileList) {
     if (!controlOn) return;

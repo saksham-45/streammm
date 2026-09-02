@@ -696,10 +696,22 @@ impl App {
     /// Put a just-received inbox file on the Desktop (when not a temp path)
     /// and on the host pasteboard as a Finder file so Cmd-V still works.
     pub fn offer_incoming_file(&self, name: &str) {
-        let Ok((path, _)) = self.files.readable_path(name) else {
+        self.offer_incoming_file_at("inbox", "", name);
+    }
+
+    pub fn offer_incoming_file_at(&self, root: &str, rel: &str, name: &str) {
+        let Ok((path, _)) = self.files.readable_path_at(root, rel, name) else {
             return;
         };
-        let dest = crate::files::deliver_to_desktop(&path).unwrap_or(path);
+        let inbox_root = crate::files::normalize_root(root) == Some("inbox")
+            && crate::files::sanitize_rel(rel)
+                .unwrap_or_default()
+                .is_empty();
+        let dest = if inbox_root {
+            crate::files::deliver_to_desktop(&path).unwrap_or(path)
+        } else {
+            path
+        };
         let paths = vec![dest];
         *self.last_clip.lock() = input::file_clip_key(&paths);
         self.injector.clipboard_set_files(&paths);
@@ -711,7 +723,9 @@ impl App {
                 && v.get("action").and_then(|a| a.as_str()) == Some("ok")
             {
                 if let Some(name) = v.get("name").and_then(|n| n.as_str()) {
-                    self.offer_incoming_file(name);
+                    let root = v.get("root").and_then(|n| n.as_str()).unwrap_or("inbox");
+                    let path = v.get("path").and_then(|n| n.as_str()).unwrap_or("");
+                    self.offer_incoming_file_at(root, path, name);
                 }
             }
         }
@@ -1669,10 +1683,19 @@ async fn api_files_put(State(app): State<Arc<App>>, req: Request) -> Response {
             "file too large for HTTP; drop it on the live session instead",
         );
     }
-    match app.files.put_bytes(name, &data) {
+    let root = v.get("root").and_then(|n| n.as_str()).unwrap_or("inbox");
+    let path = v.get("path").and_then(|n| n.as_str()).unwrap_or("");
+    match app.files.put_bytes_at(root, path, name, &data) {
         Ok(ent) => {
-            app.offer_incoming_file(&ent.name);
-            Json(json!({"ok": true, "name": ent.name, "size": ent.size})).into_response()
+            app.offer_incoming_file_at(root, path, &ent.name);
+            Json(json!({
+                "ok": true,
+                "name": ent.name,
+                "size": ent.size,
+                "root": crate::files::normalize_root(root).unwrap_or("inbox"),
+                "path": crate::files::sanitize_rel(path).unwrap_or_default()
+            }))
+            .into_response()
         }
         Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
     }

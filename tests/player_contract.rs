@@ -278,6 +278,12 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "origin UI must send large inbox files in chunks"
     );
     assert!(
+        js.contains("action: \"begin\"")
+            && js.contains("root: fileRoot")
+            && js.contains("path: filePath"),
+        "origin UI must drop files into the browsed host folder, not always Inbox"
+    );
+    assert!(
         js.contains("offset") && js.contains("accept"),
         "origin UI must resume inbox uploads from accept.offset"
     );
@@ -415,6 +421,12 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("action: \"begin\"") && s.contains("action: \"chunk\""),
         "watch page must send large inbox files in chunks"
+    );
+    assert!(
+        s.contains("action: \"begin\"")
+            && s.contains("root: fileRoot")
+            && s.contains("path: filePath"),
+        "watch page must drop files into the browsed host folder, not always Inbox"
     );
     assert!(
         s.contains("offset") && s.contains("accept"),

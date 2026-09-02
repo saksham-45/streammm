@@ -949,7 +949,7 @@ function uploadFile(file) {
     if (out) out.textContent = "sending " + file.name + "…";
     const id = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     pendingUploads[id] = { name: file.name, file: file };
-    sendFileJson({ type: "file", action: "begin", id: id, name: file.name, size: file.size });
+    sendFileJson({ type: "file", action: "begin", id: id, name: file.name, size: file.size, root: fileRoot, path: filePath });
     return;
   }
   if (file.size > 8 * 1024 * 1024) {
@@ -962,7 +962,7 @@ function uploadFile(file) {
     return fetch(url("/api/files"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: file.name, data: bytesToB64(u8) }),
+      body: JSON.stringify({ name: file.name, data: bytesToB64(u8), root: fileRoot, path: filePath }),
     });
   }).then(function (r) { return r && r.json(); }).then(function (body) {
     if (!body) return;

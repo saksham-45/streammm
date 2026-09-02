@@ -106,6 +106,8 @@ struct Incoming {
     name: String,
     written: usize,
     size: usize,
+    root: String,
+    rel: String,
 }
 
 pub struct Inbox {
@@ -213,6 +215,26 @@ impl Inbox {
         self.dir.join(format!("{name}.part"))
     }
 
+    fn part_path_at(&self, root: &str, rel: &str, name: &str) -> Result<PathBuf, String> {
+        let dest = self.join_under(root, rel, name)?;
+        let fname = dest
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| "invalid file name".to_string())?;
+        Ok(dest.with_file_name(format!("{fname}.part")))
+    }
+
+    fn ensure_root(&self, root: &str) -> Result<(), String> {
+        if normalize_root(root) == Some("inbox") {
+            return self.ensure_dir();
+        }
+        let base = self.root_dir(root)?;
+        if !base.exists() {
+            fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     pub fn list(&self) -> Vec<FileEntry> {
         self.list_at("inbox", "")
             .map(|(_, _, files)| files)
@@ -260,23 +282,32 @@ impl Inbox {
     }
 
     pub fn put_bytes(&self, name: &str, data: &[u8]) -> Result<FileEntry, String> {
+        self.put_bytes_at("inbox", "", name, data)
+    }
+
+    pub fn put_bytes_at(
+        &self,
+        root: &str,
+        rel: &str,
+        name: &str,
+        data: &[u8],
+    ) -> Result<FileEntry, String> {
         if data.len() > MAX_FILE {
             return Err("file too large".into());
         }
-        self.ensure_dir()?;
-        let path = self.dest(name)?;
-        let tmp = self
-            .dir
-            .join(format!("{}.part", path.file_name().unwrap().to_string_lossy()));
+        let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
+        self.ensure_root(root)?;
+        let path = self.join_under(root, rel, &name)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let tmp = path.with_file_name(format!("{name}.part"));
         fs::write(&tmp, data).map_err(|e| e.to_string())?;
         fs::rename(&tmp, &path).map_err(|e| {
             let _ = fs::remove_file(&tmp);
             e.to_string()
         })?;
-        Ok(FileEntry::file(
-            path.file_name().unwrap().to_string_lossy().into(),
-            data.len() as u64,
-        ))
+        Ok(FileEntry::file(name, data.len() as u64))
     }
 
     /// Copy a host-side file into the inbox without loading it into RAM.
@@ -440,13 +471,31 @@ impl Inbox {
     }
 
     pub fn begin(&self, id: &str, name: &str, size: usize) -> Result<usize, String> {
+        self.begin_at(id, name, size, "inbox", "")
+    }
+
+    pub fn begin_at(
+        &self,
+        id: &str,
+        name: &str,
+        size: usize,
+        root: &str,
+        rel: &str,
+    ) -> Result<usize, String> {
         let id = sanitize_id(id).ok_or_else(|| "invalid transfer id".to_string())?;
         let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
+        let root = normalize_root(root)
+            .ok_or_else(|| "unknown folder".to_string())?
+            .to_string();
+        let rel = sanitize_rel(rel).ok_or_else(|| "invalid path".to_string())?;
         if size == 0 || size > MAX_FILE {
             return Err("invalid file size".into());
         }
-        self.ensure_dir()?;
-        let part = self.part_path(&name);
+        self.ensure_root(&root)?;
+        let part = self.part_path_at(&root, &rel, &name)?;
+        if let Some(parent) = part.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
         let mut written = 0usize;
         if let Ok(meta) = fs::metadata(&part) {
             let n = meta.len() as usize;
@@ -457,7 +506,9 @@ impl Inbox {
             }
         }
         let mut g = self.incoming.lock();
-        g.retain(|k, inc| k == &id || inc.name != name);
+        g.retain(|k, inc| {
+            k == &id || !(inc.name == name && inc.root == root && inc.rel == rel)
+        });
         if g.len() >= 4 && !g.contains_key(&id) {
             return Err("too many transfers".into());
         }
@@ -467,6 +518,8 @@ impl Inbox {
                 name,
                 written,
                 size,
+                root,
+                rel,
             },
         );
         Ok(written)
@@ -483,7 +536,7 @@ impl Inbox {
         if next > inc.size || next > MAX_FILE {
             return Err("file too large".into());
         }
-        let part = self.part_path(&inc.name);
+        let part = self.part_path_at(&inc.root, &inc.rel, &inc.name)?;
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -494,21 +547,21 @@ impl Inbox {
         Ok(())
     }
 
-    pub fn end(&self, id: &str) -> Result<FileEntry, String> {
+    pub fn end(&self, id: &str) -> Result<(FileEntry, String, String), String> {
         let id = sanitize_id(id).ok_or_else(|| "invalid transfer id".to_string())?;
         let inc = self
             .incoming
             .lock()
             .remove(&id)
             .ok_or_else(|| "unknown transfer".to_string())?;
-        let part = self.part_path(&inc.name);
+        let part = self.part_path_at(&inc.root, &inc.rel, &inc.name)?;
         let on_disk = fs::metadata(&part).map(|m| m.len() as usize).unwrap_or(0);
         if inc.written != inc.size || on_disk != inc.size {
             return Err("incomplete file".into());
         }
-        let dest = self.dest(&inc.name)?;
+        let dest = self.join_under(&inc.root, &inc.rel, &inc.name)?;
         fs::rename(&part, &dest).map_err(|e| e.to_string())?;
-        Ok(FileEntry::file(inc.name, inc.size as u64))
+        Ok((FileEntry::file(inc.name, inc.size as u64), inc.root, inc.rel))
     }
 
     pub fn handle_message(&self, v: &Value) -> Vec<String> {
@@ -520,8 +573,8 @@ impl Inbox {
             "put" => {
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let data = v.get("data").and_then(|d| d.as_str()).unwrap_or("");
-                match decode_b64(data).and_then(|b| self.put_bytes(name, &b)) {
-                    Ok(ent) => vec![ok_json(&ent)],
+                match decode_b64(data).and_then(|b| self.put_bytes_at(root, rel, name, &b)) {
+                    Ok(ent) => vec![ok_json_at(&ent, root, rel)],
                     Err(e) => vec![err_json(&e)],
                 }
             }
@@ -529,7 +582,7 @@ impl Inbox {
                 let id = v.get("id").and_then(|n| n.as_str()).unwrap_or("");
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let size = v.get("size").and_then(|n| n.as_u64()).unwrap_or(0) as usize;
-                match self.begin(id, name, size) {
+                match self.begin_at(id, name, size, root, rel) {
                     Ok(offset) => vec![json!({
                         "type":"file",
                         "action":"accept",
@@ -552,7 +605,7 @@ impl Inbox {
             "end" => {
                 let id = v.get("id").and_then(|n| n.as_str()).unwrap_or("");
                 match self.end(id) {
-                    Ok(ent) => vec![ok_json(&ent)],
+                    Ok((ent, root, rel)) => vec![ok_json_at(&ent, &root, &rel)],
                     Err(e) => vec![err_json(&e)],
                 }
             }
@@ -631,18 +684,22 @@ pub fn copy_into_dir(src: &Path, dir: &Path) -> Result<PathBuf, String> {
 
 /// Copy an inbox file onto ~/Desktop. Skips temp-dir sources so tests do not
 /// pollute the real Desktop; production inbox sits next to config.json.
+fn is_temp_path(src: &Path) -> bool {
+    let tmp = std::env::temp_dir();
+    if src.starts_with(&tmp) {
+        return true;
+    }
+    let tmp_can = tmp.canonicalize().unwrap_or_else(|_| tmp.clone());
+    let src_can = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+    src_can.starts_with(&tmp_can)
+}
+
 pub fn deliver_to_desktop(src: &Path) -> Option<PathBuf> {
     if !src.is_file() {
         return None;
     }
-    let tmp = std::env::temp_dir();
-    if src.starts_with(&tmp) {
+    if is_temp_path(src) {
         return None;
-    }
-    if let Ok(canon) = src.canonicalize() {
-        if canon.starts_with(&tmp) {
-            return None;
-        }
     }
     let home = std::env::var_os("HOME")?;
     let desk = PathBuf::from(home).join("Desktop");
@@ -666,8 +723,16 @@ fn sanitize_id(id: &str) -> Option<String> {
     Some(id.to_string())
 }
 
-fn ok_json(ent: &FileEntry) -> String {
-    json!({"type":"file","action":"ok","name":ent.name,"size":ent.size}).to_string()
+fn ok_json_at(ent: &FileEntry, root: &str, rel: &str) -> String {
+    json!({
+        "type": "file",
+        "action": "ok",
+        "name": ent.name,
+        "size": ent.size,
+        "root": normalize_root(root).unwrap_or("inbox"),
+        "path": sanitize_rel(rel).unwrap_or_default()
+    })
+    .to_string()
 }
 
 fn err_json(msg: &str) -> String {
@@ -786,6 +851,27 @@ mod tests {
         let listed = inbox.handle_message(&json!({"action":"list","root":"desktop"}));
         assert!(listed[0].contains("shot.png"));
         assert!(listed[0].contains("\"root\":\"desktop\""));
+        inbox
+            .put_bytes_at("desktop", "Work", "drop.txt", b"zz")
+            .unwrap();
+        assert_eq!(fs::read(desk.join("Work").join("drop.txt")).unwrap(), b"zz");
+        assert!(inbox.get_bytes("drop.txt").is_err());
+        assert_eq!(inbox.begin_at("d1", "c.bin", 4, "desktop", "Work").unwrap(), 0);
+        inbox.chunk("d1", b"abcd").unwrap();
+        let (ent, root, rel) = inbox.end("d1").unwrap();
+        assert_eq!(ent.name, "c.bin");
+        assert_eq!(root, "desktop");
+        assert_eq!(rel, "Work");
+        assert_eq!(fs::read(desk.join("Work").join("c.bin")).unwrap(), b"abcd");
+        let put = inbox.handle_message(&json!({
+            "action": "put",
+            "root": "desktop",
+            "path": "Work",
+            "name": "via.json",
+            "data": encode_b64(b"ok")
+        }));
+        assert!(put[0].contains("\"root\":\"desktop\""));
+        assert!(put[0].contains("via.json"));
     }
 
     #[test]
@@ -820,6 +906,10 @@ mod tests {
             deliver_to_desktop(&src).is_none(),
             "temp-dir inbox files must not land on the real Desktop"
         );
+        assert!(
+            deliver_to_desktop(&src.canonicalize().unwrap()).is_none(),
+            "canonical temp paths must also skip Desktop"
+        );
     }
 
     #[test]
@@ -828,8 +918,10 @@ mod tests {
         inbox.begin("t1", "chunk.bin", 8).unwrap();
         inbox.chunk("t1", b"abcd").unwrap();
         inbox.chunk("t1", b"efgh").unwrap();
-        let ent = inbox.end("t1").unwrap();
+        let (ent, root, rel) = inbox.end("t1").unwrap();
         assert_eq!(ent.size, 8);
+        assert_eq!(root, "inbox");
+        assert_eq!(rel, "");
         assert_eq!(inbox.get_bytes("chunk.bin").unwrap(), b"abcdefgh");
     }
 
@@ -845,7 +937,7 @@ mod tests {
         );
         assert_eq!(inbox.begin("b", "r.bin", 8).unwrap(), 4);
         inbox.chunk("b", b"BBBB").unwrap();
-        let ent = inbox.end("b").unwrap();
+        let (ent, _, _) = inbox.end("b").unwrap();
         assert_eq!(ent.size, 8);
         assert_eq!(inbox.get_bytes("r.bin").unwrap(), b"AAAABBBB");
     }
@@ -907,7 +999,7 @@ mod tests {
         assert_eq!(fs::metadata(&part).unwrap().len(), 4);
         inbox.chunk("t1", b"efgh").unwrap();
         assert_eq!(fs::metadata(&part).unwrap().len(), 8);
-        let ent = inbox.end("t1").unwrap();
+        let (ent, _, _) = inbox.end("t1").unwrap();
         assert_eq!(ent.size, 8);
         assert!(!part.exists());
         assert_eq!(inbox.get_bytes("a.bin").unwrap(), b"abcdefgh");
