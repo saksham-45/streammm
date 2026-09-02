@@ -1795,7 +1795,7 @@ async fn api_files_delete(State(app): State<Arc<App>>, req: Request) -> Response
         }))
         .into_response(),
         Err(e) if e == "file not found" => json_err(StatusCode::NOT_FOUND, "file not found"),
-        Err(e) if e == "not empty" => json_err(StatusCode::CONFLICT, "not empty"),
+        Err(e) if e == "folder too large" => json_err(StatusCode::CONFLICT, "folder too large"),
         Err(e) if e == "invalid file name" => json_err(StatusCode::BAD_REQUEST, "invalid file name"),
         Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
     }

@@ -874,7 +874,7 @@ function renderFileList(files, root, path) {
       const delDir = document.createElement("button");
       delDir.type = "button";
       delDir.textContent = "Delete";
-      delDir.addEventListener("click", function () { deleteInboxFile(f.name); });
+      delDir.addEventListener("click", function () { deleteInboxFile(f.name, true); });
       li.appendChild(delDir);
       ul.appendChild(li);
       return;
@@ -957,9 +957,13 @@ function bindFileMkdir(el) {
   });
 }
 
-function deleteInboxFile(name) {
+function deleteInboxFile(name, isDir) {
   const out = $("file-out");
   if (!name) return;
+  if (isDir && typeof window.confirm === "function"
+      && !window.confirm("Delete “" + name + "” and everything inside?")) {
+    return;
+  }
   if (sendFileJson({ type: "file", action: "delete", name: name, root: fileRoot, path: filePath })) {
     if (out) out.textContent = "deleting " + name + "…";
     return;

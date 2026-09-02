@@ -303,6 +303,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must reveal Delete on empty folders as well as files"
     );
     assert!(
+        js.contains("everything inside") && js.contains("deleteInboxFile(f.name, true)"),
+        "folder Delete must confirm before removing a non-empty tree"
+    );
+    assert!(
         js.contains("function renameInboxFile")
             && js.contains("action: \"rename\"")
             && js.contains("textContent = \"Rename\""),
@@ -463,6 +467,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("f.dir") && s.contains("deleteInboxFile(f.name)"),
         "watch page must reveal Delete on empty folders as well as files"
+    );
+    assert!(
+        s.contains("everything inside") && s.contains("deleteInboxFile(f.name, true)"),
+        "watch page folder Delete must confirm before removing a non-empty tree"
     );
     assert!(
         s.contains("function renameInboxFile")

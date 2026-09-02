@@ -12,6 +12,7 @@ pub const MAX_FILE: usize = 2 * 1024 * 1024 * 1024usize;
 pub const HTTP_PUT_MAX: usize = 8 * 1024 * 1024;
 pub const MAX_CHUNK: usize = 24 * 1024;
 pub const MAX_NAME: usize = 128;
+pub const RM_MAX: usize = 2000;
 
 fn b64_engine() -> &'static base64::engine::GeneralPurpose {
     &base64::engine::general_purpose::STANDARD
@@ -380,16 +381,36 @@ impl Inbox {
         self.remove_at("inbox", "", name)
     }
 
+    fn dir_entry_count(path: &Path) -> Result<usize, String> {
+        let mut n = 0usize;
+        fn walk(path: &Path, n: &mut usize) -> Result<(), String> {
+            if *n >= RM_MAX {
+                return Err("folder too large".into());
+            }
+            let rd = fs::read_dir(path).map_err(|e| e.to_string())?;
+            for ent in rd {
+                *n += 1;
+                if *n >= RM_MAX {
+                    return Err("folder too large".into());
+                }
+                let p = ent.map_err(|e| e.to_string())?.path();
+                if p.is_dir() && !p.is_symlink() {
+                    walk(&p, n)?;
+                }
+            }
+            Ok(())
+        }
+        walk(path, &mut n)?;
+        Ok(n)
+    }
+
     pub fn remove_at(&self, root: &str, rel: &str, name: &str) -> Result<FileEntry, String> {
         let name = sanitize_name(name).ok_or_else(|| "invalid file name".to_string())?;
         let path = self.join_under(root, rel, &name)?;
         let meta = fs::metadata(&path).map_err(|_| "file not found".to_string())?;
         if meta.is_dir() {
-            let mut rd = fs::read_dir(&path).map_err(|e| e.to_string())?;
-            if rd.next().is_some() {
-                return Err("not empty".into());
-            }
-            fs::remove_dir(&path).map_err(|e| e.to_string())?;
+            let _ = Self::dir_entry_count(&path)?;
+            fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
             return Ok(FileEntry {
                 name,
                 size: 0,
@@ -1008,14 +1029,18 @@ mod tests {
         assert!(home.path().join("NewFolder").is_dir());
         inbox.remove_at("home", "", "NewFolder").unwrap();
         assert!(!home.path().join("NewFolder").exists());
-        assert_eq!(
-            inbox.remove_at("desktop", "", "Work").unwrap_err(),
-            "not empty"
-        );
         inbox.mkdir_at("desktop", "", "Empty").unwrap();
         let gone = inbox.remove_at("desktop", "", "Empty").unwrap();
         assert!(gone.dir);
         assert!(!desk.join("Empty").exists());
+        inbox.mkdir_at("desktop", "", "Tree").unwrap();
+        inbox.put_bytes_at("desktop", "Tree", "a.txt", b"x").unwrap();
+        inbox.mkdir_at("desktop", "Tree", "Sub").unwrap();
+        inbox
+            .put_bytes_at("desktop", "Tree/Sub", "b.txt", b"y")
+            .unwrap();
+        inbox.remove_at("desktop", "", "Tree").unwrap();
+        assert!(!desk.join("Tree").exists());
         inbox.mkdir_at("desktop", "", "Old").unwrap();
         let renamed = inbox.rename_at("desktop", "", "Old", "Renamed").unwrap();
         assert!(renamed.dir);

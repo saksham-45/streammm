@@ -1297,6 +1297,23 @@ async fn files_put_list_download_and_reject_traversal() {
     assert_eq!(del_dir_body["deleted"], true);
     assert_eq!(del_dir_body["dir"], true);
 
+    app.files.mkdir_at("inbox", "", "Nested").unwrap();
+    app.files
+        .put_bytes_at("inbox", "Nested", "x.txt", b"z")
+        .unwrap();
+    let del_tree = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/files?name=Nested")
+                .header("Authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(del_tree.status(), StatusCode::OK);
+    assert!(!app.files.join_under("inbox", "", "Nested").unwrap().exists());
+
     app.files.put_bytes("rename-me.txt", b"hi").unwrap();
     let renamed = router
         .clone()

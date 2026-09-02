@@ -849,9 +849,13 @@ export const PLAYER_HTML = `<!doctype html>
     });
   }
   bindFileMkdir(document.getElementById("file-mkdir"));
-  function deleteInboxFile(name) {
+  function deleteInboxFile(name, isDir) {
     var out = document.getElementById("file-out");
     if (!name) return;
+    if (isDir && typeof window.confirm === "function"
+        && !window.confirm("Delete “" + name + "” and everything inside?")) {
+      return;
+    }
     if (sendFileJson({ type: "file", action: "delete", name: name, root: fileRoot, path: filePath })) {
       if (out) out.textContent = "deleting " + name + "…";
     }
@@ -918,7 +922,7 @@ export const PLAYER_HTML = `<!doctype html>
         var delDir = document.createElement("button");
         delDir.type = "button";
         delDir.textContent = "Delete";
-        delDir.addEventListener("click", function () { deleteInboxFile(f.name); });
+        delDir.addEventListener("click", function () { deleteInboxFile(f.name, true); });
         li.appendChild(delDir);
         ul.appendChild(li);
         return;
