@@ -151,6 +151,15 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "lock-on-end must be a Settings control revealed when remote control is on"
     );
     assert!(
+        html.contains("id=\"cfg-record-sessions\"")
+            && html.contains("id=\"record-fields\"")
+            && html.contains("id=\"record-hint\"")
+            && html.contains("id=\"recordings-section\"")
+            && js.contains("/api/recordings")
+            && js.contains("refreshRecordings"),
+        "record sessions must be a Settings control that reveals the recordings list"
+    );
+    assert!(
         html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
         "origin analysis/AI/Ask chrome must not sit on the live stream"
     );
@@ -587,6 +596,10 @@ const nodes = {{
   "lock-on-end-fields": el(true),
   "cfg-lock-on-end": el(false),
   "lock-on-end-hint": el(true),
+  "record-fields": el(true),
+  "cfg-record-sessions": el(false),
+  "record-hint": el(true),
+  "recordings-section": el(true),
   "ai-hint": el(true),
   "cu-cancel": el(true),
   "cu-section": el(true),
@@ -635,6 +648,8 @@ if (!nodes["analysis-pane"].classList.contains("hidden")) throw new Error("analy
 if (!nodes["cu-section"].classList.contains("hidden")) throw new Error("AI form visible while off");
 if (!nodes["unattended-fields"].classList.contains("hidden")) throw new Error("unattended password visible while off");
 if (!nodes["lock-on-end-fields"].classList.contains("hidden")) throw new Error("lock-on-end visible while off");
+if (!nodes["record-fields"].classList.contains("hidden")) throw new Error("record-sessions visible while off");
+if (!nodes["recordings-section"].classList.contains("hidden")) throw new Error("recordings list visible while off");
 if (!nodes["keys-bar"].classList.contains("hidden")) throw new Error("keys-bar visible while off");
 if (!nodes["keys-hint"].classList.contains("hidden")) throw new Error("keys-hint visible while off");
 if (!nodes["chat-section"].classList.contains("hidden")) throw new Error("chat visible while off");
@@ -667,6 +682,13 @@ if (!nodes["lock-on-end-hint"].classList.contains("hidden")) throw new Error("lo
 nodes["cfg-lock-on-end"].checked = true;
 window.streamaidUi.syncFeatureUi();
 if (nodes["lock-on-end-hint"].classList.contains("hidden")) throw new Error("lock-on-end hint still hidden after enable");
+if (nodes["record-fields"].classList.contains("hidden")) throw new Error("record-sessions still hidden after control enable");
+if (!nodes["record-hint"].classList.contains("hidden")) throw new Error("record hint visible while off");
+if (!nodes["recordings-section"].classList.contains("hidden")) throw new Error("recordings list visible while record off");
+nodes["cfg-record-sessions"].checked = true;
+window.streamaidUi.syncFeatureUi();
+if (nodes["record-hint"].classList.contains("hidden")) throw new Error("record hint still hidden after enable");
+if (nodes["recordings-section"].classList.contains("hidden")) throw new Error("recordings list still hidden after enable");
 const combo = window.streamaidUi.comboPayload("Tab", ["Meta"]);
 if (combo.action !== "key" || combo.key !== "Tab" || combo.modifiers[0] !== "Meta") throw new Error("comboPayload Cmd+Tab");
 const cad = window.streamaidUi.comboPayload("Delete", ["Control", "Alt"]);

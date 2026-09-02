@@ -206,6 +206,9 @@ pub struct ControlConfig {
     /// Inject Control+Command+Q when the remote session ends (not ⌘⇧Esc reclaim).
     #[serde(default)]
     pub lock_on_end: bool,
+    /// Write the live fMP4 to recordings/ while a watcher is driving.
+    #[serde(default)]
+    pub record_sessions: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -427,6 +430,7 @@ mod tests {
         assert!(!cfg.access.unattended);
         assert!(cfg.access.password_hash.is_empty());
         assert!(!cfg.control.lock_on_end);
+        assert!(!cfg.control.record_sessions);
     }
 
     #[test]

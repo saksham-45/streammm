@@ -13,6 +13,7 @@ pub mod input;
 pub mod otp;
 pub mod protocol;
 pub mod publisher;
+pub mod record;
 pub mod server;
 pub mod snapshot;
 pub mod thumbs;

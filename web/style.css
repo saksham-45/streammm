@@ -265,6 +265,11 @@ summary { cursor: pointer; }
 .file-pick input { display: none; }
 #file-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
 #file-list li { border-top: 1px solid #333; padding: 6px 0; }
+#recordings-section { margin-bottom: 16px; }
+#recordings-out { font-size: 12px; color: #9a9a9a; min-height: 1.2em; }
+#recordings-list { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
+#recordings-list li { border-top: 1px solid #333; padding: 6px 0; }
+#recordings-list a { color: #7eb8ff; }
 #file-list a { color: #7eb8ff; }
 #file-out { font-size: 12px; color: #9a9a9a; min-height: 1.2em; }
 

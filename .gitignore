@@ -9,4 +9,5 @@ config.json
 web/.watch-url
 /logs
 /inbox
+/recordings
 macos/Streamaid.app/Contents/_CodeSignature/

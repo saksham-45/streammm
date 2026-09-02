@@ -11,6 +11,7 @@ use crate::input::{self, FakeInjector, Injector};
 use crate::otp::{hex_encode, Clock, OtpGate, RealClock, RedeemError, SESSION_TTL};
 use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};
 use crate::publisher::Publisher;
+use crate::record::Recorder;
 use crate::ws::{
     accept_key, decode_frame, encode_frame, OP_BIN, OP_CLOSE, OP_PING, OP_PONG, OP_TEXT,
 };
@@ -69,6 +70,7 @@ pub struct App {
     pub last_clip: Mutex<String>,
     incoming_png: Mutex<Option<(usize, Vec<u8>)>>,
     pub chat_log: Mutex<Vec<String>>,
+    pub recorder: Recorder,
 }
 
 struct DisplaySwitchInjector {
@@ -168,6 +170,10 @@ impl App {
             .parent()
             .map(|p| p.join("inbox"))
             .unwrap_or_else(|| PathBuf::from("inbox"));
+        let rec_dir = cfg_path
+            .parent()
+            .map(|p| p.join("recordings"))
+            .unwrap_or_else(|| PathBuf::from("recordings"));
         let unattended = if cfg.access.unattended {
             cfg.access.password_hash.clone()
         } else {
@@ -193,8 +199,18 @@ impl App {
             last_clip: Mutex::new(String::new()),
             incoming_png: Mutex::new(None),
             chat_log: Mutex::new(Vec::new()),
+            recorder: Recorder::new(rec_dir),
         });
         app.otp.set_unattended(unattended);
+        let rec = app.recorder.clone();
+        let rec_hub = app.hub.clone();
+        tokio::spawn(async move {
+            let sub = rec_hub.subscribe(48);
+            loop {
+                let Some(m) = sub.recv().await else { break };
+                rec.write_unit(m.kind, &m.data);
+            }
+        });
         let app2 = app.clone();
         tokio::spawn(async move {
             let mut rx = inbound_rx;
@@ -632,9 +648,20 @@ impl App {
         drop(g);
         if ok && was_none {
             self.sync_block_local();
+            self.maybe_start_recording();
             self.bump_status();
         }
         ok
+    }
+
+    fn maybe_start_recording(&self) {
+        if !self.cfg.lock().control.record_sessions {
+            return;
+        }
+        let init = self.hub.init_segment();
+        if let Err(e) = self.recorder.start(init.as_deref()) {
+            tracing::warn!("session record: {e}");
+        }
     }
 
     fn sync_block_local(&self) {
@@ -662,6 +689,9 @@ impl App {
             *g = None;
             had
         };
+        if had {
+            self.recorder.stop();
+        }
         self.sync_block_local();
         self.bump_status();
         if lock && had && self.cfg.lock().control.lock_on_end {
@@ -793,6 +823,8 @@ impl App {
             .route("/api/control/release", post(api_control_release))
             .route("/api/files", get(api_files_list).post(api_files_put))
             .route("/api/files/download", get(api_files_download))
+            .route("/api/recordings", get(api_recordings_list))
+            .route("/api/recordings/download", get(api_recordings_download))
             .with_state(self)
     }
 
@@ -850,6 +882,8 @@ impl App {
                 "controller": self.controller.lock().is_some(),
                 "block_local": cfg.control.block_local,
                 "lock_on_end": cfg.control.lock_on_end,
+                "record_sessions": cfg.control.record_sessions,
+                "recording": self.recorder.is_active(),
                 "blocking": cfg.control.block_local && self.controller.lock().is_some(),
                 "files": self.files.list().len(),
             },
@@ -1100,6 +1134,11 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
         String::new()
     };
     app.otp.set_unattended(unattended);
+    if !new_cfg.control.record_sessions {
+        app.recorder.stop();
+    } else if app.controller.lock().is_some() {
+        app.maybe_start_recording();
+    }
     app.push_otp_wire();
     if recapture {
         app.capture.restart(new_cfg);
@@ -1449,6 +1488,76 @@ async fn api_files_download(State(app): State<Arc<App>>, req: Request) -> Respon
             res.headers_mut().insert(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/octet-stream"),
+            );
+            if let Ok(v) = HeaderValue::from_str(&disp) {
+                res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+            }
+            if let Ok(v) = HeaderValue::from_str(&len.to_string()) {
+                res.headers_mut().insert(header::CONTENT_LENGTH, v);
+            }
+            res
+        }
+        Err(e) => json_err(StatusCode::NOT_FOUND, &e),
+    }
+}
+
+async fn api_recordings_list(State(app): State<Arc<App>>, req: Request) -> Response {
+    if !host_ok(&app, req.headers(), req.uri()) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    let files: Vec<Value> = app.recorder.list().iter().map(|e| e.to_json()).collect();
+    Json(json!({
+        "files": files,
+        "recording": app.recorder.is_active(),
+        "name": app.recorder.active_name(),
+        "dir": app.recorder.dir().display().to_string()
+    }))
+    .into_response()
+}
+
+async fn api_recordings_download(State(app): State<Arc<App>>, req: Request) -> Response {
+    if !host_ok(&app, req.headers(), req.uri()) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    let query = req.uri().query().unwrap_or("");
+    let mut name = String::new();
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        if k == "name" {
+            name = v.into_owned();
+        }
+    }
+    if name.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "missing name");
+    }
+    match app.recorder.readable_path(&name) {
+        Ok((path, len)) => {
+            let mut file = match tokio::fs::File::open(&path).await {
+                Ok(f) => f,
+                Err(_) => return json_err(StatusCode::NOT_FOUND, "file not found"),
+            };
+            let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    match file.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if tx.send(Ok(Bytes::copy_from_slice(&buf[..n]))).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e)).await;
+                            break;
+                        }
+                    }
+                }
+            });
+            let disp = format!("attachment; filename=\"{}\"", name.replace('"', ""));
+            let mut res = Response::new(Body::from_stream(ReceiverStream::new(rx)));
+            res.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("video/mp4"),
             );
             if let Ok(v) = HeaderValue::from_str(&disp) {
                 res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
@@ -2668,6 +2777,55 @@ mod tests {
         app.end_remote_session();
         let n = fake.recorded().iter().filter(|e| matches!(e, Injected::Key { key, .. } if key == "q")).count();
         assert_eq!(n, 1, "a second End with no controller must not lock again");
+    }
+
+    #[tokio::test]
+    async fn records_live_fmp4_during_remote_session() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+        use crate::protocol::TYPE_FRAG;
+        use bytes::Bytes;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        cfg.control.record_sessions = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            FakeInjector::new(),
+            Arc::new(DoneModel),
+        );
+        app.hub
+            .publish_init(Bytes::from_static(b"ftyp-init"), 64, 64);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(app.status_json()["control"]["recording"], false);
+        app.handle_inbound_json(
+            r#"{"type":"control","session":"rec","action":"click","x":0.1,"y":0.2}"#,
+        );
+        assert_eq!(app.status_json()["control"]["recording"], true);
+        app.hub
+            .publish_unit(TYPE_FRAG, Bytes::from_static(b"mdat-frag"), 64, 64);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        app.end_remote_session();
+        assert_eq!(app.status_json()["control"]["recording"], false);
+        let list = app.recorder.list();
+        assert_eq!(list.len(), 1, "one session file, got {list:?}");
+        let (path, _) = app.recorder.readable_path(&list[0].name).unwrap();
+        let data = std::fs::read(path).unwrap();
+        assert!(
+            data.starts_with(b"ftyp-init"),
+            "recording must start with the fMP4 init, got {} bytes",
+            data.len()
+        );
+        assert!(
+            data.windows(9).any(|w| w == b"mdat-frag"),
+            "recording must append live fragments, got {data:?}"
+        );
     }
 
     #[tokio::test]

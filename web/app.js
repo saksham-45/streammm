@@ -78,6 +78,7 @@ function featureFlags() {
     ctl: ctlEl ? !!ctlEl.checked : !!(cfg && cfg.control && cfg.control.enabled),
     block: ($("cfg-block-local") ? !!$("cfg-block-local").checked : !!(cfg && cfg.control && cfg.control.block_local)),
     lockOnEnd: ($("cfg-lock-on-end") ? !!$("cfg-lock-on-end").checked : !!(cfg && cfg.control && cfg.control.lock_on_end)),
+    record: ($("cfg-record-sessions") ? !!$("cfg-record-sessions").checked : !!(cfg && cfg.control && cfg.control.record_sessions)),
     unattended: ($("cfg-unattended") ? !!$("cfg-unattended").checked : !!(cfg && cfg.access && cfg.access.unattended)),
     audio: audioEl ? !!audioEl.checked : !!(cfg && cfg.capture && cfg.capture.audio),
     mjpeg: mode === "mjpeg",
@@ -103,6 +104,9 @@ function syncFeatureUi() {
   setHidden($("block-hint"), !(f.ctl && f.block));
   setHidden($("lock-on-end-fields"), !f.ctl);
   setHidden($("lock-on-end-hint"), !(f.ctl && f.lockOnEnd));
+  setHidden($("record-fields"), !f.ctl);
+  setHidden($("record-hint"), !(f.ctl && f.record));
+  setHidden($("recordings-section"), !(f.ctl && f.record));
   setHidden($("ai-hint"), !f.ai);
   setHidden($("cu-cancel"), !f.ai);
   setHidden($("cu-section"), !f.ai);
@@ -119,6 +123,7 @@ function syncFeatureUi() {
   setHidden($("unmute"), !(f.audio && !f.mjpeg));
   syncEncoderUi();
   if (f.ctl) refreshFiles();
+  if (f.ctl && f.record) refreshRecordings();
 }
 
 function setDrawerOpen(open) {
@@ -193,7 +198,12 @@ function renderStatus(s) {
   const ctl = (s && s.control) || {};
   setHidden($("session-banner"), !ctl.controller);
   const lab = $("session-banner-label");
-  if (lab) lab.textContent = ctl.blocking ? "REMOTE SESSION · LOCAL INPUT LOCKED" : "REMOTE SESSION";
+  if (lab) {
+    let t = ctl.blocking ? "REMOTE SESSION · LOCAL INPUT LOCKED" : "REMOTE SESSION";
+    if (ctl.recording) t += " · RECORDING";
+    lab.textContent = t;
+  }
+  if (featureFlags().record) refreshRecordings();
 }
 
 function wsUrl() {
@@ -464,6 +474,32 @@ function renderFileList(files) {
     li.appendChild(a);
     ul.appendChild(li);
   });
+}
+
+function renderRecordingsList(files, recording, name) {
+  const ul = $("recordings-list");
+  const out = $("recordings-out");
+  if (out) out.textContent = recording ? ("recording " + (name || "…")) : "";
+  if (!ul) return;
+  ul.innerHTML = "";
+  (files || []).forEach(function (f) {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = url("/api/recordings/download?name=" + encodeURIComponent(f.name));
+    a.textContent = f.name + (f.size != null ? " (" + f.size + " B)" : "");
+    a.download = f.name;
+    li.appendChild(a);
+    ul.appendChild(li);
+  });
+}
+
+function refreshRecordings() {
+  if (!featureFlags().record) return;
+  if (typeof fetch !== "function") return;
+  fetch(url("/api/recordings")).then(function (r) { return r.json(); }).then(function (body) {
+    if (!body) return;
+    renderRecordingsList(body.files, body.recording, body.name);
+  }).catch(function () {});
 }
 
 function refreshFiles() {
@@ -1249,6 +1285,8 @@ function fillConfigForm(c) {
   if (blk) blk.checked = !!(c.control && c.control.block_local);
   const lockEnd = $("cfg-lock-on-end");
   if (lockEnd) lockEnd.checked = !!(c.control && c.control.lock_on_end);
+  const rec = $("cfg-record-sessions");
+  if (rec) rec.checked = !!(c.control && c.control.record_sessions);
   const ai = $("cfg-ai-enabled");
   if (ai) ai.checked = !!(c.control && c.control.ai_enabled);
   const en = $("cfg-llm-enabled");
@@ -1279,6 +1317,7 @@ function readConfigForm() {
       ai_enabled: !!(aiEn && aiEn.checked),
       block_local: !!( $("cfg-block-local") && $("cfg-block-local").checked ),
       lock_on_end: !!( $("cfg-lock-on-end") && $("cfg-lock-on-end").checked ),
+      record_sessions: !!( $("cfg-record-sessions") && $("cfg-record-sessions").checked ),
     },
     capture: {
       driver: "ffmpeg",
@@ -1458,7 +1497,7 @@ function onReady() {
       if (jv) jv.textContent = jpeg.value;
     });
   }
-  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-block-local", "cfg-lock-on-end", "cfg-unattended"].forEach(function (id) {
+  ["cfg-llm-enabled", "cfg-ai-enabled", "cfg-control-enabled", "cfg-audio", "cfg-block-local", "cfg-lock-on-end", "cfg-record-sessions", "cfg-unattended"].forEach(function (id) {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", function () { syncFeatureUi(); });
