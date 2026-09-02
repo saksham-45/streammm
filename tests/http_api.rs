@@ -119,8 +119,7 @@ async fn mp4_stream_is_chunked_no_transform_and_starts_with_init() {
     init.extend_from_slice(&mp4_box(b"moov", b"trak"));
     let mut frag = mp4_box(b"moof", b"mfhd");
     frag.extend_from_slice(&mp4_box(b"mdat", b"mdat-bytes"));
-    app.hub
-        .publish_init(Bytes::from(init.clone()), 1920, 1080);
+    app.hub.publish_init(Bytes::from(init.clone()), 1920, 1080);
     app.hub
         .publish_unit(TYPE_FRAG, Bytes::from(frag.clone()), 0, 0);
 
@@ -397,7 +396,7 @@ async fn pin_rate_limit_and_expire() {
     use std::time::Duration;
     use streamaid::computer_use::DoneModel;
     use streamaid::input::FakeInjector;
-    use streamaid::otp::{FakeClock, PIN_TTL, FAIL_LIMIT, LOCKOUT};
+    use streamaid::otp::{FakeClock, FAIL_LIMIT, LOCKOUT, PIN_TTL};
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
@@ -474,7 +473,10 @@ async fn pin_rate_limit_and_expire() {
         )
         .await
         .unwrap();
-    let pin2 = body_json(minted2).await["pin"].as_str().unwrap().to_string();
+    let pin2 = body_json(minted2).await["pin"]
+        .as_str()
+        .unwrap()
+        .to_string();
     clock2.advance(PIN_TTL + Duration::from_secs(1));
     let expired = router2
         .oneshot(
@@ -531,7 +533,10 @@ async fn computer_use_forbidden_when_disabled_and_stub_when_enabled() {
         )
         .await
         .unwrap();
-    let session = body_json(redeemed).await["session"].as_str().unwrap().to_string();
+    let session = body_json(redeemed).await["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let off = router
         .clone()
@@ -565,7 +570,7 @@ async fn computer_use_forbidden_when_disabled_and_stub_when_enabled() {
     assert_eq!(
         fake.recorded(),
         vec![
-            Injected::Click { x: 0.5, y: 0.5 },
+            Injected::click(0.5, 0.5),
             Injected::Type {
                 text: "hello".into()
             }
@@ -575,12 +580,12 @@ async fn computer_use_forbidden_when_disabled_and_stub_when_enabled() {
 
 #[tokio::test]
 async fn computer_use_grabs_snap_jpeg_not_fragment() {
+    use bytes::Bytes;
     use std::sync::{Arc, Mutex};
     use streamaid::computer_use::ActionModel;
     use streamaid::input::{Action, FakeInjector};
     use streamaid::otp::FakeClock;
     use streamaid::protocol::{TYPE_FRAG, TYPE_SNAP};
-    use bytes::Bytes;
 
     struct RecordJpeg {
         got: Mutex<Vec<Vec<u8>>>,
@@ -608,8 +613,12 @@ async fn computer_use_grabs_snap_jpeg_not_fragment() {
         FakeInjector::new(),
         rec.clone(),
     );
-    app.hub
-        .publish_unit(TYPE_FRAG, Bytes::from_static(b"moof-not-a-jpeg"), 1920, 1080);
+    app.hub.publish_unit(
+        TYPE_FRAG,
+        Bytes::from_static(b"moof-not-a-jpeg"),
+        1920,
+        1080,
+    );
     app.hub
         .publish_unit(TYPE_SNAP, Bytes::from_static(b"\xff\xd8SNAP"), 0, 0);
     let applied = app.run_computer_use("do it").await;
@@ -631,7 +640,7 @@ async fn host_cancel_stops_running_ai_loop() {
         fn plan(&self, _task: &str, step: u32, _jpeg: &[u8]) -> Vec<Action> {
             match step {
                 0 => vec![Action::Wait { ms: 4000 }],
-                _ => vec![Action::Click { x: 0.1, y: 0.1 }],
+                _ => vec![Action::click(0.1, 0.1)],
             }
         }
     }
@@ -904,7 +913,12 @@ async fn computer_use_rejects_unauthorized_malformed_missing_task_and_ai_off() {
     let (st, _) = json_error_body(malformed).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
 
-    for body in [json!({}), json!({"task": ""}), json!({"task": "   "}), json!({"task": 1})] {
+    for body in [
+        json!({}),
+        json!({"task": ""}),
+        json!({"task": "   "}),
+        json!({"task": 1}),
+    ] {
         let res = router
             .clone()
             .oneshot(

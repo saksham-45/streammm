@@ -30,7 +30,7 @@ use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -54,6 +54,7 @@ pub struct App {
     pub model: Mutex<Arc<dyn ActionModel>>,
     pub controller: Mutex<Option<String>>,
     pub ai_cancel: Arc<AtomicBool>,
+    pub clip_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 impl App {
@@ -76,14 +77,7 @@ impl App {
         fake: FakeInjector,
         model: Arc<dyn ActionModel>,
     ) -> Arc<Self> {
-        Self::build(
-            cfg,
-            cfg_path,
-            clock,
-            Arc::new(fake.clone()),
-            fake,
-            model,
-        )
+        Self::build(cfg, cfg_path, clock, Arc::new(fake.clone()), fake, model)
     }
 
     fn build(
@@ -99,6 +93,7 @@ impl App {
         let (inbound_tx, inbound_rx) = mpsc::channel::<String>(64);
         let publisher = Publisher::new(hub.clone(), cfg.clone(), inbound_tx);
         let (events, _) = tokio::sync::broadcast::channel(128);
+        let (clip_tx, _) = tokio::sync::broadcast::channel(16);
         let app = Arc::new(Self {
             cfg: Mutex::new(cfg),
             cfg_path,
@@ -113,6 +108,7 @@ impl App {
             model: Mutex::new(model),
             controller: Mutex::new(None),
             ai_cancel: Arc::new(AtomicBool::new(false)),
+            clip_tx,
         });
         let app2 = app.clone();
         tokio::spawn(async move {
@@ -130,9 +126,8 @@ impl App {
 
     pub fn push_otp_wire(&self) {
         if let Some((hash, exp)) = self.otp.wire_payload() {
-            self.publisher.push_wire(
-                json!({"type": "otp", "hash": hash, "exp": exp}).to_string(),
-            );
+            self.publisher
+                .push_wire(json!({"type": "otp", "hash": hash, "exp": exp}).to_string());
         }
         let c = self.cfg.lock().control.clone();
         self.publisher.push_wire(
@@ -157,6 +152,10 @@ impl App {
                 }
                 if let Some(a) = input::parse_control_json(&v) {
                     self.injector.apply(&a);
+                    self.fanout_clipboard_action(&a);
+                    if a.requests_clipboard_read() {
+                        self.spawn_clipboard_push();
+                    }
                 }
             }
             "computer-use" => {
@@ -178,6 +177,36 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn fanout_clipboard_action(&self, action: &input::Action) {
+        let text = match action {
+            input::Action::Clipboard { text } | input::Action::Paste { text } => text.clone(),
+            _ => return,
+        };
+        if text.is_empty() {
+            return;
+        }
+        let msg = json!({"type": "clipboard", "text": text}).to_string();
+        self.publisher.push_wire(msg.clone());
+        let _ = self.clip_tx.send(msg);
+    }
+
+    fn spawn_clipboard_push(self: &Arc<Self>) {
+        let inj = self.injector.clone();
+        let publisher = self.publisher.clone();
+        let clip_tx = self.clip_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            if let Some(text) = inj.clipboard_get() {
+                if text.is_empty() {
+                    return;
+                }
+                let msg = json!({"type": "clipboard", "text": text}).to_string();
+                publisher.push_wire(msg.clone());
+                let _ = clip_tx.send(msg);
+            }
+        });
     }
 
     fn take_controller(&self, session: &str) -> bool {
@@ -231,9 +260,7 @@ impl App {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                let _ = app
-                    .events
-                    .send(sse_pack("status", &app.status_json()));
+                let _ = app.events.send(sse_pack("status", &app.status_json()));
             }
         });
         let app = self.clone();
@@ -345,7 +372,10 @@ pub fn token_ok(given: &str, expected: &str) -> bool {
 }
 
 fn request_token(headers: &HeaderMap, query: &str) -> String {
-    if let Some(a) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+    if let Some(a) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
         if let Some(rest) = a.strip_prefix("Bearer ") {
             return rest.to_string();
         }
@@ -367,10 +397,7 @@ fn request_token(headers: &HeaderMap, query: &str) -> String {
 }
 
 fn is_public(path: &str) -> bool {
-    matches!(
-        path,
-        "/" | "/app.js" | "/style.css" | "/api/otp/redeem"
-    )
+    matches!(path, "/" | "/app.js" | "/style.css" | "/api/otp/redeem")
 }
 
 fn authorize(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
@@ -446,10 +473,7 @@ fn json_err(code: StatusCode, msg: &str) -> Response {
 }
 
 async fn ui_index() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        INDEX,
-    )
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], INDEX)
 }
 async fn ui_js() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "application/javascript")], APP_JS)
@@ -489,7 +513,8 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
     }
     let old = app.cfg.lock().clone();
     let new_cfg = old.merge_patch(patch);
-    let restart_bind = old.host != new_cfg.host || old.port != new_cfg.port || old.token != new_cfg.token;
+    let restart_bind =
+        old.host != new_cfg.host || old.port != new_cfg.port || old.token != new_cfg.token;
     let recapture = old.capture != new_cfg.capture || old.encoder != new_cfg.encoder;
     if let Err(e) = config::save(&new_cfg, &app.cfg_path) {
         return json_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
@@ -717,7 +742,10 @@ async fn stream_mp4(State(app): State<Arc<App>>, req: Request) -> Response {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     if app.cfg.lock().encoder.mode == "mjpeg" {
-        return json_err(StatusCode::CONFLICT, "encoder mode is mjpeg; use /stream.mjpeg");
+        return json_err(
+            StatusCode::CONFLICT,
+            "encoder mode is mjpeg; use /stream.mjpeg",
+        );
     }
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
     let hub = app.hub.clone();
@@ -766,7 +794,10 @@ async fn stream_mjpeg(State(app): State<Arc<App>>, req: Request) -> Response {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     if app.cfg.lock().encoder.mode != "mjpeg" {
-        return json_err(StatusCode::CONFLICT, "encoder mode is not mjpeg; use /stream.mp4");
+        return json_err(
+            StatusCode::CONFLICT,
+            "encoder mode is not mjpeg; use /stream.mp4",
+        );
     }
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(4);
     let hub = app.hub.clone();
@@ -861,6 +892,14 @@ where
         stream.write_all(&frame).await?;
         stream.flush().await
     }
+    async fn send_txt<S: tokio::io::AsyncWrite + Unpin>(
+        stream: &mut S,
+        payload: &str,
+    ) -> std::io::Result<()> {
+        let frame = encode_frame(payload.as_bytes(), OP_TEXT, false);
+        stream.write_all(&frame).await?;
+        stream.flush().await
+    }
 
     if let Some(init) = app.hub.init_segment() {
         send_bin(&mut stream, &pack_media(TYPE_INIT, &init)).await?;
@@ -873,6 +912,7 @@ where
         }
     }
     let sub = app.hub.subscribe(8);
+    let mut clip_rx = app.clip_tx.subscribe();
     loop {
         tokio::select! {
             media = sub.recv() => {
@@ -881,6 +921,11 @@ where
                     continue;
                 }
                 send_bin(&mut stream, &pack_media(m.kind, &m.data)).await?;
+            }
+            clip = clip_rx.recv() => {
+                if let Ok(msg) = clip {
+                    send_txt(&mut stream, &msg).await?;
+                }
             }
             n = stream.read(&mut tmp) => {
                 let n = n?;
@@ -978,7 +1023,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let html = axum::body::to_bytes(res.into_body(), 200_000).await.unwrap();
+        let html = axum::body::to_bytes(res.into_body(), 200_000)
+            .await
+            .unwrap();
         let html = String::from_utf8_lossy(&html);
         assert!(html.contains("streamaid"));
         assert!(html.contains("app.js"));
@@ -1000,7 +1047,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let body = axum::body::to_bytes(res.into_body(), 200_000).await.unwrap();
+        let body = axum::body::to_bytes(res.into_body(), 200_000)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["encoder"]["mode"], "ffmpeg");
         assert_eq!(v["encoder"]["bitrate_kbps"], 20000);
@@ -1018,7 +1067,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let body = axum::body::to_bytes(res.into_body(), 200_000).await.unwrap();
+        let body = axum::body::to_bytes(res.into_body(), 200_000)
+            .await
+            .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert!(v.get("capture").is_some());
         assert!(v.get("stream").is_some());
@@ -1032,11 +1083,16 @@ mod tests {
             )
             .await
             .unwrap();
-        let js = axum::body::to_bytes(res.into_body(), 400_000).await.unwrap();
+        let js = axum::body::to_bytes(res.into_body(), 400_000)
+            .await
+            .unwrap();
         let js = String::from_utf8_lossy(&js);
         assert!(js.contains("WebSocket"));
         assert!(js.contains("/stream.ws"));
         assert!(js.contains("LIVE_EDGE_S"));
+        assert!(js.contains("mousedown"));
+        assert!(js.contains("contextmenu"));
+        assert!(js.contains("paste"));
         assert!(!js.contains("ftyp"));
     }
 
@@ -1146,9 +1202,109 @@ mod tests {
         assert_eq!(
             fake.recorded(),
             vec![
-                Injected::Click { x: 0.5, y: 0.25 },
+                Injected::click(0.5, 0.25),
                 Injected::Type { text: "hi".into() }
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn viewer_right_click_drag_paste_and_clipboard_sync() {
+        use crate::computer_use::DoneModel;
+        use crate::input::{FakeInjector, Injected, MouseButton};
+        use crate::otp::FakeClock;
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.token = "s3cret".into();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        app.hub
+            .publish_init(Bytes::from_static(b"ftyp-init"), 1920, 1080);
+        let pin = app.otp.mint().pin;
+        let sess = app.otp.redeem(&pin).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = app.router();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let url = format!("ws://{addr}/stream.ws?session={}", sess.token);
+        let (mut ws, _) = connect_async(&url).await.expect("ws");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await;
+
+        for payload in [
+            r#"{"type":"control","action":"click","x":0.2,"y":0.3,"button":"right"}"#,
+            r#"{"type":"control","action":"down","x":0.1,"y":0.1,"button":0}"#,
+            r#"{"type":"control","action":"move","x":0.8,"y":0.8,"button":0}"#,
+            r#"{"type":"control","action":"up","x":0.8,"y":0.8,"button":0}"#,
+            r#"{"type":"control","action":"keydown","key":"c","modifiers":["Meta"]}"#,
+            r#"{"type":"control","action":"paste","text":"from-viewer"}"#,
+        ] {
+            ws.send(Message::Text(payload.into())).await.unwrap();
+        }
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if fake.recorded().len() >= 6 || tokio::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let rec = fake.recorded();
+        assert!(
+            rec.iter().any(|e| matches!(
+                e,
+                Injected::Click {
+                    button: MouseButton::Right,
+                    ..
+                }
+            )),
+            "right-click must inject, got {rec:?}"
+        );
+        assert!(rec.iter().any(|e| matches!(e, Injected::Down { .. })));
+        assert!(rec.iter().any(|e| matches!(e, Injected::Move { .. })));
+        assert!(rec.iter().any(|e| matches!(e, Injected::Up { .. })));
+        assert!(rec.iter().any(|e| matches!(
+            e,
+            Injected::Key { key, modifiers, .. }
+                if key == "c" && modifiers.iter().any(|m| m == "Meta")
+        )));
+        assert!(rec.iter().any(|e| matches!(
+            e,
+            Injected::Paste { text } if text == "from-viewer"
+        )));
+        assert_eq!(fake.clipboard_get().as_deref(), Some("from-viewer"));
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut got_clip = false;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), ws.next()).await {
+                Ok(Some(Ok(Message::Text(t)))) => {
+                    if t.contains("from-viewer") && t.contains("clipboard") {
+                        got_clip = true;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            got_clip,
+            "origin must fan clipboard JSON back to the watcher"
         );
     }
 

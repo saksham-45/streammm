@@ -73,11 +73,7 @@ pub struct Publisher {
 }
 
 impl Publisher {
-    pub fn new(
-        hub: Hub,
-        cfg: Config,
-        inbound: mpsc::Sender<String>,
-    ) -> Self {
+    pub fn new(hub: Hub, cfg: Config, inbound: mpsc::Sender<String>) -> Self {
         let (wire_out, _) = broadcast::channel(64);
         Self {
             hub,
@@ -102,6 +98,9 @@ impl Publisher {
             }
             if msg.contains("\"flags\"") {
                 latest.retain(|m| !m.contains("\"flags\""));
+            }
+            if msg.contains("\"clipboard\"") {
+                latest.retain(|m| !m.contains("\"clipboard\""));
             }
             latest.push(msg.clone());
         }
@@ -155,11 +154,7 @@ async fn run_session(
     inbound: &mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
     let u = publish_url_with_token(url, token)?;
-    tracing::info!(
-        "publishing to {}{}",
-        u.host_str().unwrap_or("?"),
-        u.path()
-    );
+    tracing::info!("publishing to {}{}", u.host_str().unwrap_or("?"), u.path());
     let (mut ws, _) = tokio_tungstenite::connect_async(u.as_str()).await?;
     let sub = hub.subscribe(PUBLISH_QUEUE);
     if let Some(init) = hub.init_segment() {

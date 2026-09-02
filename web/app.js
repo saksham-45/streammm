@@ -165,20 +165,60 @@ function sendControl(action, extra) {
   try { ws.send(JSON.stringify(msg)); } catch (e) { /* ignore */ }
 }
 
+function mouseButtonName(ev) {
+  if (ev.button === 2) return "right";
+  if (ev.button === 1) return "middle";
+  return "left";
+}
+
+function eventMods(ev) {
+  const m = [];
+  if (ev.metaKey) m.push("Meta");
+  if (ev.ctrlKey) m.push("Control");
+  if (ev.altKey) m.push("Alt");
+  if (ev.shiftKey) m.push("Shift");
+  return m;
+}
+
+function pointerPayload(el, ev) {
+  const p = normEvent(el, ev);
+  return {
+    x: p.x,
+    y: p.y,
+    button: mouseButtonName(ev),
+    clicks: ev.detail || 1,
+    modifiers: eventMods(ev),
+  };
+}
+
+function applyClipboardText(text) {
+  if (!text || typeof navigator === "undefined" || !navigator.clipboard || !navigator.clipboard.writeText) return;
+  navigator.clipboard.writeText(text).catch(function () {});
+}
+
 function bindControl(el) {
   if (!el || el.dataset.ctlBound) return;
   el.dataset.ctlBound = "1";
-  el.addEventListener("click", function (ev) {
-    sendControl("click", normEvent(el, ev));
+  el.addEventListener("contextmenu", function (ev) {
+    ev.preventDefault();
+    sendControl("click", pointerPayload(el, ev));
+  });
+  el.addEventListener("mousedown", function (ev) {
+    ev.preventDefault();
+    try { if (el.setPointerCapture && ev.pointerId != null) el.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+    sendControl("down", pointerPayload(el, ev));
+  });
+  el.addEventListener("mouseup", function (ev) {
+    sendControl("up", pointerPayload(el, ev));
   });
   el.addEventListener("mousemove", function (ev) {
     if (!ev.buttons) return;
-    sendControl("move", normEvent(el, ev));
+    sendControl("move", pointerPayload(el, ev));
   });
   el.addEventListener("wheel", function (ev) {
     ev.preventDefault();
     const p = normEvent(el, ev);
-    sendControl("scroll", { x: p.x, y: p.y, dy: ev.deltaY });
+    sendControl("scroll", { x: p.x, y: p.y, dy: ev.deltaY, dx: ev.deltaX, modifiers: eventMods(ev) });
   }, { passive: false });
 }
 
@@ -338,6 +378,15 @@ function scheduleMseReconnect() {
 }
 
 function onWsMessage(ev) {
+  if (typeof ev.data === "string") {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg && msg.type === "clipboard" && typeof msg.text === "string") {
+        applyClipboardText(msg.text);
+      }
+    } catch (e) { /* ignore */ }
+    return;
+  }
   const buf = new Uint8Array(ev.data);
   if (!buf.length) return;
   const type = buf[0];
@@ -776,11 +825,29 @@ function onReady() {
   }
   bindControl($("stream-video"));
   bindControl($("stream-canvas"));
-  document.addEventListener("keydown", function (ev) {
+  function sendKeyEvent(ev, down) {
     if (isDrawerOpen()) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
-    if (ev.key.length === 1) sendControl("type", { text: ev.key });
-    else sendControl("key", { key: ev.key });
+    if (!featureFlags().ctl) return;
+    const mods = eventMods(ev);
+    const accel = ev.metaKey || ev.ctrlKey || ev.altKey;
+    if (down) ev.preventDefault();
+    if (!accel && ev.key.length === 1 && down) {
+      sendControl("type", { text: ev.key, modifiers: mods });
+      return;
+    }
+    sendControl(down ? "keydown" : "keyup", { key: ev.key, down: down, modifiers: mods });
+  }
+  document.addEventListener("keydown", function (ev) { sendKeyEvent(ev, true); });
+  document.addEventListener("keyup", function (ev) { sendKeyEvent(ev, false); });
+  document.addEventListener("paste", function (ev) {
+    if (isDrawerOpen()) return;
+    if (!featureFlags().ctl) return;
+    if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
+    const text = ev.clipboardData && ev.clipboardData.getData("text/plain");
+    if (!text) return;
+    ev.preventDefault();
+    sendControl("paste", { text: text });
   });
   const cancelAi = $("cu-cancel");
   if (cancelAi) {

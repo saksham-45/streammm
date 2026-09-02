@@ -255,6 +255,57 @@ describe("StreamRoom", () => {
     view.close();
   });
 
+  it("forwards right-click, drag, paste, and fans host clipboard to watchers", async () => {
+    const { pub, session } = await viewerSession("ctl-human");
+    pub.send(JSON.stringify({ type: "flags", control: true, ai: false }));
+    await new Promise((r) => setTimeout(r, 30));
+    const view = await openWatch(session, "ctl-human");
+    const got = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("right")) resolve(ev.data);
+      });
+    });
+    view.send(
+      JSON.stringify({
+        type: "control",
+        action: "click",
+        x: 0.2,
+        y: 0.3,
+        button: "right",
+        modifiers: ["Shift"],
+      }),
+    );
+    const raw = await Promise.race([
+      got,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no right-click")), 3000)),
+    ]);
+    const msg = JSON.parse(raw) as {
+      type: string;
+      action: string;
+      button?: string;
+      modifiers?: string[];
+    };
+    expect(msg.action).toBe("click");
+    expect(msg.button).toBe("right");
+    expect(msg.modifiers).toContain("Shift");
+
+    const clip = new Promise<string>((resolve) => {
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("clipboard")) resolve(ev.data);
+      });
+    });
+    pub.send(JSON.stringify({ type: "clipboard", text: "host-copy" }));
+    const clipRaw = await Promise.race([
+      clip,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no clipboard fan-out")), 3000)),
+    ]);
+    const clipMsg = JSON.parse(clipRaw) as { type: string; text: string };
+    expect(clipMsg.type).toBe("clipboard");
+    expect(clipMsg.text).toBe("host-copy");
+    pub.close();
+    view.close();
+  });
+
   it("does not forward control when host disabled", async () => {
     const { pub, session } = await viewerSession("ctl-off");
     pub.send(JSON.stringify({ type: "flags", control: false, ai: false }));

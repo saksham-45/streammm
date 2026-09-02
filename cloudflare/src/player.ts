@@ -135,27 +135,72 @@ export const PLAYER_HTML = `<!doctype html>
     var y = r.height ? (ev.clientY - r.top) / r.height : 0;
     return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
   }
+  function mouseButtonName(ev) {
+    if (ev.button === 2) return "right";
+    if (ev.button === 1) return "middle";
+    return "left";
+  }
+  function eventMods(ev) {
+    var m = [];
+    if (ev.metaKey) m.push("Meta");
+    if (ev.ctrlKey) m.push("Control");
+    if (ev.altKey) m.push("Alt");
+    if (ev.shiftKey) m.push("Shift");
+    return m;
+  }
+  function pointerPayload(el, ev) {
+    var p = normEvent(el, ev);
+    return { x: p.x, y: p.y, button: mouseButtonName(ev), clicks: ev.detail || 1, modifiers: eventMods(ev) };
+  }
+  function applyClipboardText(text) {
+    if (!text || !navigator.clipboard || !navigator.clipboard.writeText) return;
+    navigator.clipboard.writeText(text).catch(function () {});
+  }
   function bindControl(el) {
     if (!el) return;
-    el.addEventListener("click", function (ev) {
-      var p = normEvent(el, ev);
-      sendControl("click", p);
+    el.addEventListener("contextmenu", function (ev) {
+      ev.preventDefault();
+      sendControl("click", pointerPayload(el, ev));
+    });
+    el.addEventListener("mousedown", function (ev) {
+      ev.preventDefault();
+      try { if (el.setPointerCapture && ev.pointerId != null) el.setPointerCapture(ev.pointerId); } catch (e) {}
+      sendControl("down", pointerPayload(el, ev));
+    });
+    el.addEventListener("mouseup", function (ev) {
+      sendControl("up", pointerPayload(el, ev));
     });
     el.addEventListener("mousemove", function (ev) {
       if (!ev.buttons) return;
-      sendControl("move", normEvent(el, ev));
+      sendControl("move", pointerPayload(el, ev));
     });
     el.addEventListener("wheel", function (ev) {
       ev.preventDefault();
       var p = normEvent(el, ev);
-      sendControl("scroll", { x: p.x, y: p.y, dy: ev.deltaY });
+      sendControl("scroll", { x: p.x, y: p.y, dy: ev.deltaY, dx: ev.deltaX, modifiers: eventMods(ev) });
     }, { passive: false });
   }
-  document.addEventListener("keydown", function (ev) {
+  function sendKeyEvent(ev, down) {
     if (!controlOn) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
-    if (ev.key.length === 1) sendControl("type", { text: ev.key });
-    else sendControl("key", { key: ev.key });
+    var mods = eventMods(ev);
+    var accel = ev.metaKey || ev.ctrlKey || ev.altKey;
+    if (down) ev.preventDefault();
+    if (!accel && ev.key.length === 1 && down) {
+      sendControl("type", { text: ev.key, modifiers: mods });
+      return;
+    }
+    sendControl(down ? "keydown" : "keyup", { key: ev.key, down: down, modifiers: mods });
+  }
+  document.addEventListener("keydown", function (ev) { sendKeyEvent(ev, true); });
+  document.addEventListener("keyup", function (ev) { sendKeyEvent(ev, false); });
+  document.addEventListener("paste", function (ev) {
+    if (!controlOn) return;
+    if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
+    var text = ev.clipboardData && ev.clipboardData.getData("text/plain");
+    if (!text) return;
+    ev.preventDefault();
+    sendControl("paste", { text: text });
   });
   bindControl(video);
   bindControl(canvas);
@@ -259,6 +304,9 @@ export const PLAYER_HTML = `<!doctype html>
       if (msg && msg.type === "analysis") {
         renderAnalysis(msg.data);
         refreshLlm();
+      }
+      if (msg && msg.type === "clipboard" && typeof msg.text === "string") {
+        applyClipboardText(msg.text);
       }
     } catch (e) {}
   }

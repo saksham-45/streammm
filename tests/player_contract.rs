@@ -33,7 +33,13 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     let cap = js
         .split("PENDING_CAP = ")
         .nth(1)
-        .and_then(|s| s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<u32>().ok())
+        .and_then(|s| {
+            s.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u32>()
+                .ok()
+        })
         .unwrap_or(0);
     assert!(
         cap >= 16,
@@ -53,9 +59,25 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     );
     assert!(js.contains("normEvent"), "pointer mapping helper");
     assert!(js.contains("sendControl"), "control JSON sender");
+    assert!(js.contains("mousedown"), "drag starts on mouse down");
+    assert!(
+        js.contains("contextmenu"),
+        "right-click must reach the host"
+    );
+    assert!(
+        js.contains("paste"),
+        "viewer clipboard paste must inject on the host"
+    );
+    assert!(
+        js.contains("modifiers") || js.contains("metaKey"),
+        "modifier shortcuts must type-through"
+    );
     assert!(js.contains("streamaid_viewer") || js.contains("hasViewerSession"));
     assert!(js.contains("/api/computer-use/cancel"));
-    assert!(js.contains("function closeDrawer"), "Save/Escape must share a drawer closer");
+    assert!(
+        js.contains("function closeDrawer"),
+        "Save/Escape must share a drawer closer"
+    );
     assert!(
         js.contains("if (r.applied) closeDrawer()"),
         "successful Settings Save must hide the Configuration drawer"
@@ -64,10 +86,9 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         js.contains("Escape") && js.contains("closeDrawer()"),
         "Escape must dismiss Settings"
     );
-    let html = std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/index.html"),
-    )
-    .unwrap();
+    let html =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/index.html"))
+            .unwrap();
     assert!(
         html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
         "origin analysis/AI/Ask chrome must not sit on the live stream"
@@ -106,6 +127,18 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page must reveal AI chrome only after host enables AI computer use"
     );
     assert!(s.contains("normEvent"));
+    assert!(
+        s.contains("mousedown"),
+        "watch page must drag via mouse down/up"
+    );
+    assert!(
+        s.contains("contextmenu"),
+        "watch page must send right-click"
+    );
+    assert!(
+        s.contains("paste"),
+        "watch page must paste clipboard through"
+    );
     assert!(!s.contains("Add ?token="));
     assert!(
         s.contains("CAP = 24") || s.contains("pending.length >= 16"),
@@ -207,7 +240,10 @@ console.log("drawer-ok");
         ))
         .status()
         .expect("node");
-    assert!(status.success(), "drawer open/close must drive shipped helpers");
+    assert!(
+        status.success(),
+        "drawer open/close must drive shipped helpers"
+    );
 }
 
 #[test]

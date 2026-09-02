@@ -1,10 +1,10 @@
 //! Snapshot → model actions → injector loop. Tests stub the model.
 
-use base64::Engine;
 use crate::config::LlmConfig;
 use crate::hub::Hub;
 use crate::input::{parse_control_json, Action, Injector};
 use crate::snapshot::encode_snapshot;
+use base64::Engine;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -61,10 +61,7 @@ impl Default for StubClickTypeModel {
 impl ActionModel for StubClickTypeModel {
     fn plan(&self, _task: &str, step: u32, _jpeg: &[u8]) -> Vec<Action> {
         match step {
-            0 => vec![Action::Click {
-                x: self.x,
-                y: self.y,
-            }],
+            0 => vec![Action::click(self.x, self.y)],
             1 => vec![Action::Type {
                 text: self.text.clone(),
             }],
@@ -92,10 +89,17 @@ impl LlmActionModel {
 
     pub fn action_prompt(task: &str, step: u32) -> String {
         format!(
-            "You operate a computer from a screenshot. Task: {task}\nStep: {step}\n\
-             Click/move/scroll coordinates are normalized 0–1 relative to the image.\n\
+            "You operate a computer from a screenshot like a human at the keyboard and mouse. Task: {task}\nStep: {step}\n\
+             Coordinates are normalized 0–1 relative to the image.\n\
+             Use right-click, drag (down/move/up), modifier keys, and paste when a person would.\n\
              Respond ONLY with JSON: {{\"actions\":[{{\"action\":\"click\",\"x\":0.5,\"y\":0.5}},\
+{{\"action\":\"click\",\"x\":0.5,\"y\":0.5,\"button\":\"right\"}},\
+{{\"action\":\"dblclick\",\"x\":0.5,\"y\":0.5}},\
+{{\"action\":\"down\",\"x\":0.2,\"y\":0.2}},{{\"action\":\"move\",\"x\":0.8,\"y\":0.8}},\
+{{\"action\":\"up\",\"x\":0.8,\"y\":0.8}},\
 {{\"action\":\"type\",\"text\":\"hi\"}},{{\"action\":\"key\",\"key\":\"Enter\"}},\
+{{\"action\":\"key\",\"key\":\"c\",\"modifiers\":[\"Meta\"]}},\
+{{\"action\":\"paste\",\"text\":\"clipboard text\"}},\
 {{\"action\":\"scroll\",\"x\":0.5,\"y\":0.5,\"dy\":-1}},{{\"action\":\"wait\",\"ms\":200}},\
 {{\"action\":\"done\"}}]}}."
         )
@@ -106,10 +110,7 @@ impl LlmActionModel {
             return vec![Action::Done];
         }
         let b64 = base64::engine::general_purpose::STANDARD.encode(jpeg);
-        let url = format!(
-            "{}/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let body = serde_json::json!({
             "model": self.model,
             "temperature": 0.2,
@@ -351,7 +352,7 @@ mod tests {
         assert_eq!(
             applied,
             vec![
-                Action::Click { x: 0.5, y: 0.5 },
+                Action::click(0.5, 0.5),
                 Action::Type {
                     text: "hello".into()
                 },
@@ -361,7 +362,7 @@ mod tests {
         assert_eq!(
             inj.recorded(),
             vec![
-                Injected::Click { x: 0.5, y: 0.5 },
+                Injected::click(0.5, 0.5),
                 Injected::Type {
                     text: "hello".into()
                 }
@@ -387,6 +388,15 @@ mod tests {
     }
 
     #[test]
+    fn action_prompt_teaches_human_grade_input() {
+        let p = LlmActionModel::action_prompt("open notes", 0);
+        assert!(p.contains("button\":\"right\"") || p.contains("\"right\""));
+        assert!(p.contains("paste"));
+        assert!(p.contains("modifiers"));
+        assert!(p.contains("down"));
+    }
+
+    #[test]
     fn actions_from_model_json_click_type_done() {
         let v = serde_json::json!({
             "actions": [
@@ -398,11 +408,32 @@ mod tests {
         assert_eq!(
             actions_from_model_json(&v),
             vec![
-                Action::Click { x: 0.2, y: 0.3 },
+                Action::click(0.2, 0.3),
                 Action::Type { text: "hi".into() },
                 Action::Done
             ]
         );
+        let human = serde_json::json!({
+            "actions": [
+                {"action":"click","x":0.1,"y":0.1,"button":"right"},
+                {"action":"key","key":"c","modifiers":["Meta"]},
+                {"action":"paste","text":"hi"}
+            ]
+        });
+        let acts = actions_from_model_json(&human);
+        assert!(matches!(
+            acts[0],
+            Action::Click {
+                button: crate::input::MouseButton::Right,
+                ..
+            }
+        ));
+        assert!(matches!(
+            acts[1],
+            Action::Key { ref key, ref modifiers, .. }
+                if key == "c" && modifiers.iter().any(|m| m == "Meta")
+        ));
+        assert_eq!(acts[2], Action::Paste { text: "hi".into() });
     }
 
     #[tokio::test]
@@ -428,13 +459,21 @@ mod tests {
         )
         .await;
         assert_eq!(applied.last(), Some(&Action::Done));
-        assert!(grabs.load(Ordering::SeqCst) >= 3, "need a snapshot per step");
+        assert!(
+            grabs.load(Ordering::SeqCst) >= 3,
+            "need a snapshot per step"
+        );
     }
 
     #[tokio::test]
     async fn grab_jpeg_prefers_type_snap_over_fragment() {
         let hub = Hub::new();
-        hub.publish_unit(crate::protocol::TYPE_FRAG, Bytes::from_static(b"moof-not-jpeg"), 1920, 1080);
+        hub.publish_unit(
+            crate::protocol::TYPE_FRAG,
+            Bytes::from_static(b"moof-not-jpeg"),
+            1920,
+            1080,
+        );
         hub.publish_unit(TYPE_SNAP, Bytes::from_static(b"\xff\xd8SNAP"), 0, 0);
         let j = grab_jpeg(&hub).await;
         assert_eq!(j, b"\xff\xd8SNAP");
@@ -472,12 +511,6 @@ mod tests {
         let acts = model
             .plan_async("click the button", 0, b"\xff\xd8\xff\xd9")
             .await;
-        assert_eq!(
-            acts,
-            vec![
-                Action::Click { x: 0.2, y: 0.3 },
-                Action::Done
-            ]
-        );
+        assert_eq!(acts, vec![Action::click(0.2, 0.3), Action::Done]);
     }
 }

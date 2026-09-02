@@ -247,6 +247,9 @@ export class StreamRoom extends DurableObject<Env> {
         await this.ctx.storage.put("flags", this.flags);
         this.broadcastViewers(JSON.stringify({ type: "flags", control: this.flags.control, ai: this.flags.ai }));
       }
+      if (v.type === "clipboard") {
+        this.broadcastViewers(JSON.stringify({ type: "clipboard", text: typeof v.text === "string" ? v.text : "" }));
+      }
       return;
     }
     if (att?.role !== "viewer") return;
