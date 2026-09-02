@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::encoder::{build_ffmpeg_argv, have_videotoolbox, sysname};
 use crate::frame::{jpeg_size, MjpegFramer, Mp4Framer, Unit};
 use crate::hub::Hub;
+use crate::input::{list_cg_displays, DisplayInfo};
 use crate::protocol::{TYPE_FRAG, TYPE_JPEG};
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -144,22 +145,100 @@ pub fn default_input() -> String {
 pub struct Device {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default)]
+    pub main: bool,
+}
+
+impl From<DisplayInfo> for Device {
+    fn from(d: DisplayInfo) -> Self {
+        Self {
+            id: d.id,
+            name: d.name,
+            x: d.x,
+            y: d.y,
+            width: d.width,
+            height: d.height,
+            main: d.main,
+        }
+    }
+}
+
+impl Device {
+    pub fn as_info(&self) -> DisplayInfo {
+        DisplayInfo {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+            main: self.main,
+        }
+    }
 }
 
 pub fn enumerate_devices() -> Vec<Device> {
+    let cg = list_cg_displays();
     if sysname() != "Darwin" {
         let mut out = vec![Device {
             id: "desktop".into(),
             name: "Desktop".into(),
+            main: true,
+            ..Device::from(DisplayInfo::default())
         }];
+        if let Some(d) = cg.first() {
+            out[0].x = d.x;
+            out[0].y = d.y;
+            out[0].width = d.width;
+            out[0].height = d.height;
+        }
         if sysname() == "Linux" {
             out.push(Device {
                 id: ":0.0".into(),
                 name: "X11 :0.0".into(),
+                ..Device::from(DisplayInfo::default())
             });
         }
         return out;
     }
+    let ff = ffmpeg_avfoundation_screens();
+    if ff.is_empty() {
+        return cg.into_iter().map(Device::from).collect();
+    }
+    ff.into_iter()
+        .map(|(dev_id, screen_idx, label)| {
+            let bounds = cg.get(screen_idx).or_else(|| cg.first());
+            let (x, y, width, height, main) = match bounds {
+                Some(b) => (b.x, b.y, b.width, b.height, b.main),
+                None => (0, 0, 0, 0, screen_idx == 0),
+            };
+            let name = if width > 0 {
+                format!("{label} — {width}×{height}")
+            } else {
+                label
+            };
+            Device {
+                id: format!("{dev_id}:"),
+                name,
+                x,
+                y,
+                width,
+                height,
+                main,
+            }
+        })
+        .collect()
+}
+
+fn ffmpeg_avfoundation_screens() -> Vec<(String, usize, String)> {
     let out = std::process::Command::new("ffmpeg")
         .args([
             "-hide_banner",
@@ -175,11 +254,13 @@ pub fn enumerate_devices() -> Vec<Device> {
         return vec![];
     };
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let re = Regex::new(r"\[(\d+)\] (Capture screen \d+)").unwrap();
+    let re = Regex::new(r"\[(\d+)\] (Capture screen (\d+))").unwrap();
     re.captures_iter(&stderr)
-        .map(|c| Device {
-            id: format!("{}:", &c[1]),
-            name: c[2].to_string(),
+        .filter_map(|c| {
+            let dev = c.get(1)?.as_str().to_string();
+            let label = c.get(2)?.as_str().to_string();
+            let idx = c.get(3)?.as_str().parse::<usize>().ok()?;
+            Some((dev, idx, label))
         })
         .collect()
 }
@@ -336,5 +417,23 @@ mod tests {
         assert_eq!(after_stall, Duration::from_secs(1));
         let cold = next_capture_backoff(Duration::from_secs(2), false);
         assert_eq!(cold, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn avfoundation_screen_regex_captures_index() {
+        let re = Regex::new(r"\[(\d+)\] (Capture screen (\d+))").unwrap();
+        let sample = "[AVFoundation] [3] Capture screen 0\n[AVFoundation] [4] Capture screen 1";
+        let got: Vec<(String, usize)> = re
+            .captures_iter(sample)
+            .map(|c| (c[1].to_string(), c[3].parse().unwrap()))
+            .collect();
+        assert_eq!(got, vec![("3".into(), 0usize), ("4".into(), 1usize)]);
+    }
+
+    #[test]
+    fn enumerate_devices_returns_named_screens() {
+        let ds = enumerate_devices();
+        assert!(!ds.is_empty(), "must list at least one capture target");
+        assert!(ds.iter().any(|d| !d.id.is_empty() && !d.name.is_empty()));
     }
 }

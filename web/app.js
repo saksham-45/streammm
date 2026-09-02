@@ -701,6 +701,42 @@ function showH264() {
   startMse();
 }
 
+function fillDisplaySelect(sel, devices, current) {
+  if (!sel) return;
+  const list = devices || [];
+  sel.innerHTML = "";
+  if (!list.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "auto-detect";
+    sel.appendChild(opt);
+  }
+  list.forEach(function (d) {
+    const opt = document.createElement("option");
+    opt.value = d.id;
+    opt.textContent = d.name || d.id;
+    sel.appendChild(opt);
+  });
+  if (current) sel.value = current;
+  setHidden(sel, list.length === 0 && sel.id === "display-pill");
+}
+
+function loadDisplays() {
+  const current = (cfg && cfg.capture && cfg.capture.input) || ($("cfg-input") && $("cfg-input").value) || "";
+  const apply = function (devices) {
+    fillDisplaySelect($("cfg-display"), devices, current);
+    fillDisplaySelect($("display-pill"), devices, current);
+    const input = $("cfg-input");
+    if (input && $("cfg-display") && $("cfg-display").value) input.value = $("cfg-display").value;
+  };
+  if (typeof fetch !== "function") return;
+  fetch(url("/api/capture-devices")).then(function (r) { return r.json(); }).then(apply).catch(function () {
+    fetch(url("/api/status")).then(function (r) { return r.json(); }).then(function (s) {
+      apply((s && s.capture && s.capture.displays) || []);
+    }).catch(function () {});
+  });
+}
+
 function fillConfigForm(c) {
   if (!c) return;
   function set(id, val) { const el = $(id); if (el) el.value = val; }
@@ -708,6 +744,7 @@ function fillConfigForm(c) {
   set("cfg-port", c.port);
   set("cfg-token", c.token);
   set("cfg-input", c.capture && c.capture.input || "");
+  loadDisplays();
   set("cfg-fps", c.capture && c.capture.fps);
   set("cfg-scale", String(c.capture && c.capture.scale));
   set("cfg-jpeg", c.capture && c.capture.jpeg_quality);
@@ -957,22 +994,26 @@ function onReady() {
   }
   const detect = $("detect");
   if (detect) {
-    detect.addEventListener("click", async function () {
-      try {
-        const res = await api("/api/capture-devices");
-        const devices = await res.json();
-        const sel = $("device-select");
-        if (!sel) return;
-        sel.innerHTML = "";
-        devices.forEach(function (d) {
-          const opt = document.createElement("option");
-          opt.value = d.id;
-          opt.textContent = d.name + " (" + d.id + ")";
-          sel.appendChild(opt);
-        });
-        sel.classList.toggle("hidden", devices.length === 0);
-        sel.onchange = function () { $("cfg-input").value = sel.value; };
-      } catch (err) { /* ignore */ }
+    detect.addEventListener("click", function () { loadDisplays(); });
+  }
+  const disp = $("cfg-display");
+  if (disp) {
+    disp.addEventListener("change", function () {
+      const input = $("cfg-input");
+      if (input) input.value = disp.value;
+    });
+  }
+  const pill = $("display-pill");
+  if (pill) {
+    pill.addEventListener("change", function () {
+      const input = $("cfg-input");
+      if (input) input.value = pill.value;
+      if (typeof fetch !== "function") return;
+      api("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ capture: { input: pill.value } }),
+      }).catch(function () {});
     });
   }
   bindControl($("stream-video"));

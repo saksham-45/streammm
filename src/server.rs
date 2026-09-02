@@ -1,6 +1,6 @@
 //! HTTP + WebSocket origin.
 
-use crate::capture::{enumerate_devices, Capture};
+use crate::capture::{enumerate_devices, Capture, Device};
 use crate::computer_use::{self, ActionModel};
 use crate::config::{self, Config};
 use crate::files::Inbox;
@@ -57,6 +57,7 @@ pub struct App {
     pub ai_cancel: Arc<AtomicBool>,
     pub clip_tx: tokio::sync::broadcast::Sender<String>,
     pub files: Inbox,
+    pub displays: Mutex<Vec<Device>>,
 }
 
 impl App {
@@ -116,6 +117,7 @@ impl App {
             ai_cancel: Arc::new(AtomicBool::new(false)),
             clip_tx,
             files: Inbox::new(inbox_dir),
+            displays: Mutex::new(enumerate_devices()),
         });
         let app2 = app.clone();
         tokio::spawn(async move {
@@ -131,14 +133,57 @@ impl App {
         *self.model.lock() = model;
     }
 
+    pub fn refresh_displays(&self) -> Vec<Device> {
+        let devices = enumerate_devices();
+        *self.displays.lock() = devices.clone();
+        devices
+    }
+
+    pub fn apply_display(&self, input: &str) {
+        let devices = self.refresh_displays();
+        let infos: Vec<input::DisplayInfo> = devices.iter().map(Device::as_info).collect();
+        if let Some(d) = input::pick_display(input, &infos) {
+            self.injector
+                .set_display_rect(d.x, d.y, d.width, d.height);
+        }
+    }
+
+    pub fn select_display(self: &Arc<Self>, id: &str) {
+        let id = id.trim();
+        if id.is_empty() {
+            return;
+        }
+        let mut cfg = self.cfg.lock().clone();
+        if cfg.capture.input == id {
+            self.apply_display(id);
+            self.push_otp_wire();
+            return;
+        }
+        cfg.capture.input = id.to_string();
+        let _ = config::save(&cfg, &self.cfg_path);
+        *self.cfg.lock() = cfg.clone();
+        self.apply_display(id);
+        self.capture.restart(cfg);
+        self.push_otp_wire();
+    }
+
     pub fn push_otp_wire(&self) {
         if let Some((hash, exp)) = self.otp.wire_payload() {
             self.publisher
                 .push_wire(json!({"type": "otp", "hash": hash, "exp": exp}).to_string());
         }
         let c = self.cfg.lock().control.clone();
+        let input = self.cfg.lock().capture.input.clone();
+        let devices = self.displays.lock().clone();
         self.publisher.push_wire(
-            json!({"type": "flags", "control": c.enabled, "ai": c.ai_enabled}).to_string(),
+            json!({
+                "type": "flags",
+                "control": c.enabled,
+                "ai": c.ai_enabled,
+                "display": input,
+                "displays": devices
+            })
+            .to_string(),
         );
     }
 
@@ -187,6 +232,17 @@ impl App {
                     self.publisher.push_wire(msg.clone());
                     let _ = self.clip_tx.send(msg);
                 }
+            }
+            "display" => {
+                if !self.cfg.lock().control.enabled {
+                    return;
+                }
+                let id = v
+                    .get("id")
+                    .and_then(|s| s.as_str())
+                    .or_else(|| v.get("input").and_then(|s| s.as_str()))
+                    .unwrap_or("");
+                self.select_display(id);
             }
             "revoke" => {
                 *self.controller.lock() = None;
@@ -268,6 +324,7 @@ impl App {
     pub fn start_background(self: &Arc<Self>) {
         let cfg = self.cfg.lock().clone();
         self.capture.start(cfg.clone());
+        self.apply_display(&cfg.capture.input);
         let _ = self.otp.ensure_current();
         self.push_otp_wire();
         self.publisher.start();
@@ -329,7 +386,8 @@ impl App {
             "version": env!("CARGO_PKG_VERSION"),
             "uptime_s": self.started.elapsed().as_secs_f64(),
             "capture": {
-                "input": if cap.input.is_empty() { cfg.capture.input } else { cap.input },
+                "input": if cap.input.is_empty() { cfg.capture.input.clone() } else { cap.input },
+                "displays": self.displays.lock().clone(),
                 "width": width,
                 "height": height,
                 "fps_target": cfg.capture.fps,
@@ -601,6 +659,7 @@ async fn api_config_post(State(app): State<Arc<App>>, req: Request) -> Response 
     if config::cloudflare_endpoint_changed(&old, &new_cfg) {
         app.publisher.start();
     }
+    app.apply_display(&new_cfg.capture.input);
     app.push_otp_wire();
     if recapture {
         app.capture.restart(new_cfg);
@@ -640,7 +699,7 @@ async fn api_devices(State(app): State<Arc<App>>, req: Request) -> Response {
     if !authorize(&app, req.headers(), req.uri()) {
         return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    Json(enumerate_devices()).into_response()
+    Json(app.refresh_displays()).into_response()
 }
 
 async fn api_analysis(State(app): State<Arc<App>>, req: Request) -> Response {
@@ -1234,6 +1293,8 @@ mod tests {
         assert!(html.contains("id=\"llm-fields\""));
         assert!(html.contains("Have AI use this computer"));
         assert!(html.contains("cu-cancel"));
+        assert!(html.contains("id=\"cfg-display\""));
+        assert!(html.contains("id=\"display-pill\""));
         assert!(html.contains("id=\"login-overlay\""));
         assert!(html.contains("id=\"login-token\""));
         assert!(html.contains("id=\"login-error\""));
@@ -1638,5 +1699,53 @@ mod tests {
         .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         assert!(fake.recorded().is_empty());
+    }
+
+    #[tokio::test]
+    async fn viewer_display_switch_updates_injector_rect() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.token = "s3cret".into();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        let pin = app.otp.mint().pin;
+        let sess = app.otp.redeem(&pin).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = app.clone().router();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let url = format!("ws://{addr}/stream.ws?session={}", sess.token);
+        let (mut ws, _) = connect_async(&url).await.expect("ws");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await;
+        ws.send(Message::Text(r#"{"type":"display","id":"9:"}"#.into()))
+            .await
+            .unwrap();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if app.cfg.lock().capture.input == "9:" || tokio::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(app.cfg.lock().capture.input, "9:");
     }
 }

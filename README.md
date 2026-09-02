@@ -38,6 +38,7 @@ Killing the process is not enough — `KeepAlive` will restart it. Logs: `logs/o
 | Bitrate | 20 Mbps CBR, 0.5 s VBV (up to 50 Mbps in Settings) |
 | GOP | 15 frames (~0.5 s join / live edge) |
 | Size | cap **3840×4320**, **never upscale**, lanczos only if the display is larger |
+| Displays | Settings **Display** picker + in-session switcher; clicks map to that screen's global bounds |
 | fps | 30 |
 
 ## Global watch link (OTP PIN)

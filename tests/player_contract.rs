@@ -110,6 +110,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         "enabling remote control must have a files drop target to reveal"
     );
     assert!(
+        html.contains("id=\"cfg-display\""),
+        "Display picker must be a visible Settings control, not hidden behind Detect"
+    );
+    assert!(
         js.contains("function syncFeatureUi") && js.contains("syncFeatureUi()"),
         "enabling LLM/AI/control must drive a UI reveal helper"
     );
@@ -154,6 +158,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("files-section") && s.contains("file-drop"),
         "watch page must reveal file transfer when remote control is on"
+    );
+    assert!(
+        s.contains("displays") && s.contains("type: \"display\""),
+        "watch page must switch host displays over the control channel"
     );
     assert!(!s.contains("Add ?token="));
     assert!(

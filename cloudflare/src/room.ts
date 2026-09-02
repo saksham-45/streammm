@@ -124,6 +124,8 @@ export class StreamRoom extends DurableObject<Env> {
   private flags = { control: false, ai: false };
   private flagsHydrated = false;
   private controller: string | null = null;
+  private display = "";
+  private displays: unknown[] = [];
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -181,7 +183,13 @@ export class StreamRoom extends DurableObject<Env> {
         }
       }
       try {
-        server.send(JSON.stringify({ type: "flags", control: this.flags.control, ai: this.flags.ai }));
+        server.send(JSON.stringify({
+          type: "flags",
+          control: this.flags.control,
+          ai: this.flags.ai,
+          display: this.display,
+          displays: this.displays,
+        }));
       } catch {
         /* ignore */
       }
@@ -244,8 +252,17 @@ export class StreamRoom extends DurableObject<Env> {
         this.flags.control = !!v.control;
         this.flags.ai = !!v.ai;
         this.flagsHydrated = true;
+        const rec = v as { display?: string; displays?: unknown[] };
+        if (typeof rec.display === "string") this.display = rec.display;
+        if (Array.isArray(rec.displays)) this.displays = rec.displays;
         await this.ctx.storage.put("flags", this.flags);
-        this.broadcastViewers(JSON.stringify({ type: "flags", control: this.flags.control, ai: this.flags.ai }));
+        this.broadcastViewers(JSON.stringify({
+          type: "flags",
+          control: this.flags.control,
+          ai: this.flags.ai,
+          display: this.display,
+          displays: this.displays,
+        }));
       }
       if (v.type === "clipboard") {
         this.broadcastViewers(JSON.stringify({ type: "clipboard", text: typeof v.text === "string" ? v.text : "" }));
@@ -268,6 +285,11 @@ export class StreamRoom extends DurableObject<Env> {
     if (v.type === "file") {
       if (!this.flags.control) return;
       this.sendPublisher(JSON.stringify({ ...v, session, type: "file" }));
+      return;
+    }
+    if (v.type === "display") {
+      if (!this.flags.control) return;
+      this.sendPublisher(JSON.stringify({ ...v, session, type: "display" }));
       return;
     }
     if (v.type === "computer-use") {
@@ -438,7 +460,12 @@ export class StreamRoom extends DurableObject<Env> {
           last: this.lastAnalysis,
           history: this.history,
           llm: this.llmStatus(),
-          control: { enabled: this.flags.control, ai_enabled: this.flags.ai },
+          control: {
+            enabled: this.flags.control,
+            ai_enabled: this.flags.ai,
+            display: this.display,
+            displays: this.displays,
+          },
         },
         { headers },
       );

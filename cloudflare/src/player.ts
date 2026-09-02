@@ -10,7 +10,10 @@ export const PLAYER_HTML = `<!doctype html>
   :root { color-scheme: dark; --bg:#0d0d0d; --panel:#161616; --line:#2c2c2c; --text:#e8e8e8; --muted:#9a9a9a; --accent:#7eb8ff; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, sans-serif; }
-  header { padding: 10px 16px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); }
+  header { padding: 10px 16px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  #displays { display: none; gap: 6px; align-items: center; }
+  #displays button { padding: 4px 8px; font-size: 12px; border-radius: 999px; }
+  #displays button.on { border-color: var(--accent); color: var(--accent); }
   h1 { font-size: 15px; margin: 0; letter-spacing: 0.14em; font-weight: 650; text-transform: uppercase; }
   #pill { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); }
   main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr); gap: 12px; padding: 12px; }
@@ -61,6 +64,7 @@ export const PLAYER_HTML = `<!doctype html>
 <header>
   <h1>streamaid</h1>
   <div id="pill">enter PIN</div>
+  <div id="displays"></div>
 </header>
 <div id="gate">
   <form id="pin-form">
@@ -415,12 +419,37 @@ export const PLAYER_HTML = `<!doctype html>
     var files = document.getElementById("files-section");
     if (files) files.style.display = controlOn ? "block" : "none";
     if (controlOn) sendFileJson({ type: "file", action: "list" });
+    renderDisplays(ctl && ctl.displays, ctl && (ctl.display || ctl.input));
+  }
+  function renderDisplays(list, current) {
+    var wrap = document.getElementById("displays");
+    if (!wrap) return;
+    var devices = list || [];
+    wrap.innerHTML = "";
+    if (devices.length < 2) { wrap.style.display = "none"; return; }
+    wrap.style.display = "flex";
+    devices.forEach(function (d, i) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = d.name ? d.name.replace(/ — .*/, "") : ("Display " + (i + 1));
+      if (d.id === current || (!current && d.main)) b.className = "on";
+      b.addEventListener("click", function () {
+        if (!controlOn || !ws || ws.readyState !== 1) return;
+        try { ws.send(JSON.stringify({ type: "display", id: d.id })); } catch (e) {}
+      });
+      wrap.appendChild(b);
+    });
   }
   function handleText(text) {
     try {
       var msg = JSON.parse(text);
       if (msg && msg.type === "flags") {
-        applyFlags({ enabled: !!msg.control, ai_enabled: !!msg.ai });
+        applyFlags({
+          enabled: !!msg.control,
+          ai_enabled: !!msg.ai,
+          display: msg.display,
+          displays: msg.displays,
+        });
         return;
       }
       if (msg && msg.type === "analysis") {

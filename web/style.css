@@ -38,6 +38,24 @@ h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
   white-space: nowrap;
 }
 #quality-pill { margin-left: auto; }
+#display-pill {
+  font-size: 13px;
+  background: #222;
+  color: #ddd;
+  border: 1px solid #444;
+  border-radius: 999px;
+  padding: 4px 10px;
+  max-width: 14em;
+}
+#cfg-display {
+  width: 100%;
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+}
 #status-pill.error,
 #quality-pill.error { border-color: #a33; color: #f88; }
 #gear {

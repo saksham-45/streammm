@@ -11,6 +11,7 @@
   <h1>streamaid</h1>
   <div id="pin-pill" title="Share this 6-digit PIN with the remote watcher">PIN —</div>
   <div id="quality-pill" title="">quality —</div>
+  <select id="display-pill" class="hidden" title="Switch captured display"></select>
   <div id="status-pill" title="">—</div>
   <button id="gear" type="button">Settings</button>
 </header>
@@ -62,7 +63,10 @@
   <label>Host <input id="cfg-host" type="text"></label>
   <label>Port <input id="cfg-port" type="number" min="1" max="65535"></label>
   <label>Token <input id="cfg-token" type="password" autocomplete="off"></label>
-  <label>Capture input
+  <label>Display
+    <select id="cfg-display"></select>
+  </label>
+  <label class="hidden">Capture input
     <div class="row">
       <input id="cfg-input" type="text" placeholder="auto-detect">
       <button id="detect" type="button">Detect</button>

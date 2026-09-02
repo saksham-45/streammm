@@ -318,6 +318,48 @@ pub fn map_norm_to_px(x: f64, y: f64, w: u32, h: u32) -> (f64, f64) {
     )
 }
 
+/// Global CGEvent point for a normalized click on a display rect (origin may not be 0,0).
+pub fn map_norm_to_global(nx: f64, ny: f64, x: i32, y: i32, w: u32, h: u32) -> (f64, f64) {
+    let (px, py) = map_norm_to_px(nx, ny, w, h);
+    (x as f64 + px, y as f64 + py)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DisplayInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default)]
+    pub main: bool,
+}
+
+pub fn pick_display<'a>(input: &str, displays: &'a [DisplayInfo]) -> Option<&'a DisplayInfo> {
+    let want = input.trim();
+    if !want.is_empty() {
+        if let Some(d) = displays.iter().find(|d| d.id == want) {
+            return Some(d);
+        }
+        let stripped = want.trim_end_matches(':');
+        if let Some(d) = displays
+            .iter()
+            .find(|d| d.id.trim_end_matches(':') == stripped)
+        {
+            return Some(d);
+        }
+    }
+    displays
+        .iter()
+        .find(|d| d.main)
+        .or_else(|| displays.first())
+}
+
 /// macOS virtual keycodes. `None` for unknown names — never map those to 0 ('a').
 pub fn mac_keycode(key: &str) -> Option<u16> {
     let k = key.trim();
@@ -448,6 +490,10 @@ pub trait Injector: Send + Sync {
     fn screen_size(&self) -> (u32, u32) {
         (0, 0)
     }
+    fn set_display_rect(&self, _x: i32, _y: i32, _w: u32, _h: u32) {}
+    fn display_rect(&self) -> (i32, i32, u32, u32) {
+        (0, 0, 0, 0)
+    }
     fn clipboard_set(&self, _text: &str) {}
     fn clipboard_get(&self) -> Option<String> {
         None
@@ -512,10 +558,11 @@ impl Injected {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct FakeInjector {
     pub events: Arc<Mutex<Vec<Injected>>>,
     pub clip: Arc<Mutex<String>>,
+    pub rect: Arc<Mutex<(i32, i32, u32, u32)>>,
 }
 
 impl FakeInjector {
@@ -524,6 +571,16 @@ impl FakeInjector {
     }
     pub fn recorded(&self) -> Vec<Injected> {
         self.events.lock().clone()
+    }
+}
+
+impl Default for FakeInjector {
+    fn default() -> Self {
+        Self {
+            events: Arc::new(Mutex::new(Vec::new())),
+            clip: Arc::new(Mutex::new(String::new())),
+            rect: Arc::new(Mutex::new((0, 0, 0, 0))),
+        }
     }
 }
 
@@ -599,6 +656,13 @@ impl Injector for FakeInjector {
         self.events.lock().push(ev);
     }
 
+    fn set_display_rect(&self, x: i32, y: i32, w: u32, h: u32) {
+        *self.rect.lock() = (x, y, w, h);
+    }
+    fn display_rect(&self) -> (i32, i32, u32, u32) {
+        *self.rect.lock()
+    }
+
     fn clipboard_set(&self, text: &str) {
         *self.clip.lock() = clip_limit(text.to_string());
     }
@@ -626,7 +690,7 @@ mod macos {
     };
     use std::io::Write;
     use std::process::{Command, Stdio};
-    use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -704,25 +768,64 @@ mod macos {
         fn CFRelease(cf: *mut std::ffi::c_void);
         fn CGMainDisplayID() -> u32;
         fn CGDisplayBounds(id: u32) -> CGRect;
+        fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     }
 
     pub fn display_size() -> Option<(u32, u32)> {
-        unsafe {
-            let id = CGMainDisplayID();
-            let r = CGDisplayBounds(id);
-            let w = r.size.width.round() as u32;
-            let h = r.size.height.round() as u32;
-            if w > 0 && h > 0 {
-                Some((w, h))
-            } else {
-                None
-            }
-        }
+        list_cg_displays()
+            .into_iter()
+            .find(|d| d.main)
+            .or_else(|| list_cg_displays().into_iter().next())
+            .map(|d| (d.width, d.height))
+            .filter(|(w, h)| *w > 0 && *h > 0)
     }
 
-    fn screen_px(x: f64, y: f64, w: f64, h: f64) -> CGPoint {
-        let (px, py) = super::map_norm_to_px(x, y, w as u32, h as u32);
-        CGPoint { x: px, y: py }
+    pub fn list_cg_displays() -> Vec<super::DisplayInfo> {
+        unsafe {
+            let mut ids = [0u32; 16];
+            let mut n = 0u32;
+            let err = CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut n);
+            if err != 0 || n == 0 {
+                let id = CGMainDisplayID();
+                let r = CGDisplayBounds(id);
+                let w = r.size.width.round() as u32;
+                let h = r.size.height.round() as u32;
+                if w == 0 || h == 0 {
+                    return Vec::new();
+                }
+                return vec![super::DisplayInfo {
+                    id: "0:".into(),
+                    name: "Display 1 (main)".into(),
+                    x: r.origin.x.round() as i32,
+                    y: r.origin.y.round() as i32,
+                    width: w,
+                    height: h,
+                    main: true,
+                }];
+            }
+            let main_id = CGMainDisplayID();
+            (0..n as usize)
+                .map(|i| {
+                    let id = ids[i];
+                    let r = CGDisplayBounds(id);
+                    let main = id == main_id;
+                    super::DisplayInfo {
+                        id: format!("{i}:"),
+                        name: if main {
+                            format!("Display {} (main)", i + 1)
+                        } else {
+                            format!("Display {}", i + 1)
+                        },
+                        x: r.origin.x.round() as i32,
+                        y: r.origin.y.round() as i32,
+                        width: r.size.width.round() as u32,
+                        height: r.size.height.round() as u32,
+                        main,
+                    }
+                })
+                .filter(|d| d.width > 0 && d.height > 0)
+                .collect()
+        }
     }
 
     fn cg_button(button: MouseButton) -> CGMouseButton {
@@ -862,8 +965,10 @@ mod macos {
     }
 
     pub struct MacInjector {
-        pub width: std::sync::atomic::AtomicU32,
-        pub height: std::sync::atomic::AtomicU32,
+        pub width: AtomicU32,
+        pub height: AtomicU32,
+        origin_x: AtomicI32,
+        origin_y: AtomicI32,
         buttons: AtomicU8,
         flags: AtomicU64,
     }
@@ -871,8 +976,10 @@ mod macos {
     impl MacInjector {
         pub fn new() -> Self {
             let s = Self {
-                width: std::sync::atomic::AtomicU32::new(0),
-                height: std::sync::atomic::AtomicU32::new(0),
+                width: AtomicU32::new(0),
+                height: AtomicU32::new(0),
+                origin_x: AtomicI32::new(0),
+                origin_y: AtomicI32::new(0),
                 buttons: AtomicU8::new(0),
                 flags: AtomicU64::new(0),
             };
@@ -880,24 +987,35 @@ mod macos {
             s
         }
         pub fn refresh_display_size(&self) {
-            if let Some((w, h)) = display_size() {
-                self.width.store(w, Ordering::Relaxed);
-                self.height.store(h, Ordering::Relaxed);
+            if let Some(d) = list_cg_displays().into_iter().find(|d| d.main) {
+                self.origin_x.store(d.x, Ordering::Relaxed);
+                self.origin_y.store(d.y, Ordering::Relaxed);
+                self.width.store(d.width, Ordering::Relaxed);
+                self.height.store(d.height, Ordering::Relaxed);
             }
         }
-        /// CGEvent mapping size: live display bounds. Encoder/hub size is ignored.
+        /// CGEvent mapping size of the selected display. Encoder/hub size is ignored.
         pub fn mapping_size(&self) -> (u32, u32) {
-            if let Some(d) = display_size() {
-                return d;
+            let w = self.width.load(Ordering::Relaxed);
+            let h = self.height.load(Ordering::Relaxed);
+            if w > 0 && h > 0 {
+                return (w, h);
             }
+            display_size().unwrap_or((1, 1))
+        }
+        pub fn mapping_rect(&self) -> (i32, i32, u32, u32) {
+            let (w, h) = self.mapping_size();
             (
-                self.width.load(Ordering::Relaxed).max(1),
-                self.height.load(Ordering::Relaxed).max(1),
+                self.origin_x.load(Ordering::Relaxed),
+                self.origin_y.load(Ordering::Relaxed),
+                w,
+                h,
             )
         }
-        fn size(&self) -> (f64, f64) {
-            let (w, h) = self.mapping_size();
-            (w as f64, h as f64)
+        fn point(&self, nx: f64, ny: f64) -> CGPoint {
+            let (ox, oy, w, h) = self.mapping_rect();
+            let (x, y) = super::map_norm_to_global(nx, ny, ox, oy, w, h);
+            CGPoint { x, y }
         }
 
         fn current_flags(&self, extra: &[String]) -> u64 {
@@ -974,6 +1092,19 @@ mod macos {
         fn screen_size(&self) -> (u32, u32) {
             self.mapping_size()
         }
+        fn set_display_rect(&self, x: i32, y: i32, w: u32, h: u32) {
+            self.origin_x.store(x, Ordering::Relaxed);
+            self.origin_y.store(y, Ordering::Relaxed);
+            if w > 0 {
+                self.width.store(w, Ordering::Relaxed);
+            }
+            if h > 0 {
+                self.height.store(h, Ordering::Relaxed);
+            }
+        }
+        fn display_rect(&self) -> (i32, i32, u32, u32) {
+            self.mapping_rect()
+        }
         fn clipboard_set(&self, text: &str) {
             let _ = clipboard_set_os(text);
         }
@@ -981,12 +1112,11 @@ mod macos {
             clipboard_get_os()
         }
         fn apply(&self, action: &Action) {
-            let (w, h) = self.size();
             let held = self.flags.load(Ordering::SeqCst);
             unsafe {
                 match action {
                     Action::Move { x, y, button } => {
-                        let pos = screen_px(*x, *y, w, h);
+                        let pos = self.point(*x, *y);
                         let pressed = self.buttons.load(Ordering::SeqCst);
                         let btn = button.unwrap_or_else(|| {
                             if pressed & 2 != 0 {
@@ -1006,7 +1136,7 @@ mod macos {
                         button,
                         clicks,
                     } => {
-                        let pos = screen_px(*x, *y, w, h);
+                        let pos = self.point(*x, *y);
                         post_mouse(MOVED, pos, cg_button(*button), *clicks, held);
                         post_mouse(down_ty(*button), pos, cg_button(*button), *clicks, held);
                         post_mouse(up_ty(*button), pos, cg_button(*button), *clicks, held);
@@ -1018,7 +1148,7 @@ mod macos {
                         clicks,
                     } => {
                         self.buttons.fetch_or(button_bit(*button), Ordering::SeqCst);
-                        let pos = screen_px(*x, *y, w, h);
+                        let pos = self.point(*x, *y);
                         post_mouse(down_ty(*button), pos, cg_button(*button), *clicks, held);
                     }
                     Action::Up {
@@ -1027,13 +1157,13 @@ mod macos {
                         button,
                         clicks,
                     } => {
-                        let pos = screen_px(*x, *y, w, h);
+                        let pos = self.point(*x, *y);
                         post_mouse(up_ty(*button), pos, cg_button(*button), *clicks, held);
                         self.buttons
                             .fetch_and(!button_bit(*button), Ordering::SeqCst);
                     }
                     Action::Scroll { x, y, dy, dx } => {
-                        post_mouse(MOVED, screen_px(*x, *y, w, h), LEFT_BUTTON, 1, held);
+                        post_mouse(MOVED, self.point(*x, *y), LEFT_BUTTON, 1, held);
                         let wheel = if dy.abs() >= dx.abs() {
                             (*dy * 5.0) as i32
                         } else {
@@ -1077,7 +1207,12 @@ mod macos {
 }
 
 #[cfg(target_os = "macos")]
-pub use macos::{display_size, MacInjector};
+pub use macos::{display_size, list_cg_displays, MacInjector};
+
+#[cfg(not(target_os = "macos"))]
+pub fn list_cg_displays() -> Vec<DisplayInfo> {
+    Vec::new()
+}
 
 pub fn production_injector() -> Arc<dyn Injector> {
     #[cfg(target_os = "macos")]
@@ -1269,6 +1404,51 @@ mod tests {
         assert_eq!(map_norm_to_px(0.0, 1.0, 800, 600), (0.0, 600.0));
     }
 
+    #[test]
+    fn map_norm_to_global_offsets_secondary_display() {
+        assert_eq!(
+            map_norm_to_global(0.0, 0.0, 1920, 0, 1920, 1080),
+            (1920.0, 0.0)
+        );
+        assert_eq!(
+            map_norm_to_global(0.5, 0.5, 1920, 0, 1920, 1080),
+            (2880.0, 540.0)
+        );
+    }
+
+    #[test]
+    fn pick_display_matches_id_or_main() {
+        let ds = vec![
+            DisplayInfo {
+                id: "3:".into(),
+                name: "Display 1 (main)".into(),
+                width: 1440,
+                height: 900,
+                main: true,
+                ..Default::default()
+            },
+            DisplayInfo {
+                id: "4:".into(),
+                name: "Display 2".into(),
+                x: 1440,
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            },
+        ];
+        assert_eq!(pick_display("4:", &ds).unwrap().x, 1440);
+        assert_eq!(pick_display("4", &ds).unwrap().id, "4:");
+        assert_eq!(pick_display("", &ds).unwrap().main, true);
+        assert_eq!(pick_display("missing", &ds).unwrap().main, true);
+    }
+
+    #[test]
+    fn fake_injector_stores_display_rect() {
+        let inj = FakeInjector::new();
+        inj.set_display_rect(1920, 0, 1920, 1080);
+        assert_eq!(inj.display_rect(), (1920, 0, 1920, 1080));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn mac_injector_maps_through_display_bounds_not_encoder_hub_size() {
@@ -1288,6 +1468,12 @@ mod tests {
         let (px, py) = map_norm_to_px(0.5, 0.5, expected.0, expected.1);
         assert_eq!(px, expected.0 as f64 * 0.5);
         assert_eq!(py, expected.1 as f64 * 0.5);
+        m.set_display_rect(1920, 0, 1920, 1080);
+        assert_eq!(m.mapping_rect(), (1920, 0, 1920, 1080));
+        assert_eq!(
+            map_norm_to_global(0.0, 0.0, 1920, 0, 1920, 1080),
+            (1920.0, 0.0)
+        );
     }
 
     #[cfg(target_os = "macos")]

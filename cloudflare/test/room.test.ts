@@ -352,6 +352,51 @@ describe("StreamRoom", () => {
     view.close();
   });
 
+  it("forwards display switch and fans display list on flags", async () => {
+    const { pub, session } = await viewerSession("disp");
+    const view = await openWatch(session, "disp");
+    const flagged = new Promise<string>((resolve) => {
+      view.addEventListener("message", (ev) => {
+        if (typeof ev.data !== "string") return;
+        try {
+          const m = JSON.parse(ev.data) as { type?: string; displays?: unknown[] };
+          if (m.type === "flags" && Array.isArray(m.displays) && m.displays.length >= 2) resolve(ev.data);
+        } catch {
+          /* ignore */
+        }
+      });
+    });
+    pub.send(JSON.stringify({
+      type: "flags",
+      control: true,
+      ai: false,
+      display: "3:",
+      displays: [{ id: "3:", name: "Display 1 (main)", main: true }, { id: "4:", name: "Display 2" }],
+    }));
+    const flagRaw = await Promise.race([
+      flagged,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no display flags")), 3000)),
+    ]);
+    const flagMsg = JSON.parse(flagRaw) as { displays?: { id: string }[] };
+    expect(flagMsg.displays && flagMsg.displays.length).toBeGreaterThanOrEqual(2);
+
+    const got = new Promise<string>((resolve) => {
+      pub.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string" && ev.data.includes("display")) resolve(ev.data);
+      });
+    });
+    view.send(JSON.stringify({ type: "display", id: "4:" }));
+    const raw = await Promise.race([
+      got,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("no display switch")), 3000)),
+    ]);
+    const msg = JSON.parse(raw) as { type: string; id?: string };
+    expect(msg.type).toBe("display");
+    expect(msg.id).toBe("4:");
+    pub.close();
+    view.close();
+  });
+
   it("does not forward control when host disabled", async () => {
     const { pub, session } = await viewerSession("ctl-off");
     pub.send(JSON.stringify({ type: "flags", control: false, ai: false }));
