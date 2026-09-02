@@ -334,7 +334,7 @@ impl App {
     }
 
     fn push_clipboard_png(&self, png: &[u8]) -> bool {
-        if !input::is_png(png) {
+        if !input::is_png(png) || png.len() > input::CLIP_PNG_MAX {
             return false;
         }
         let key = format!("png:{}", hex_encode(&Sha256::digest(png)));

@@ -188,6 +188,37 @@ export const PLAYER_HTML = `<!doctype html>
       navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]).catch(function () {});
     } catch (e) {}
   }
+  var CLIP_PNG_MAX = 16 * 1024 * 1024;
+  function sendClipboardPng(u8) {
+    if (!u8 || !u8.length || u8.length > CLIP_PNG_MAX) return;
+    sendControl("clipboard", { mime: "image/png", data: bytesToB64(u8) });
+  }
+  function pasteImageFile(file) {
+    if (!file) return;
+    function fromBuf(buf) { sendClipboardPng(new Uint8Array(buf)); }
+    if (file.type === "image/png") {
+      file.arrayBuffer().then(fromBuf).catch(function () {});
+      return;
+    }
+    if (typeof createImageBitmap !== "function") {
+      file.arrayBuffer().then(fromBuf).catch(function () {});
+      return;
+    }
+    createImageBitmap(file).then(function (bmp) {
+      var c = document.createElement("canvas");
+      c.width = bmp.width;
+      c.height = bmp.height;
+      var ctx = c.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(bmp, 0, 0);
+      c.toBlob(function (blob) {
+        if (!blob) return;
+        blob.arrayBuffer().then(fromBuf).catch(function () {});
+      }, "image/png");
+    }).catch(function () {
+      file.arrayBuffer().then(fromBuf).catch(function () {});
+    });
+  }
   function bindControl(el) {
     if (!el) return;
     el.addEventListener("contextmenu", function (ev) {
@@ -236,9 +267,7 @@ export const PLAYER_HTML = `<!doctype html>
           var f = items[i].getAsFile();
           if (!f) continue;
           ev.preventDefault();
-          f.arrayBuffer().then(function (buf) {
-            sendControl("clipboard", { mime: "image/png", data: bytesToB64(new Uint8Array(buf)) });
-          }).catch(function () {});
+          pasteImageFile(f);
           return;
         }
       }

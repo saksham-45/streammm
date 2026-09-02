@@ -228,6 +228,40 @@ function applyClipboardPng(b64) {
   } catch (e) { /* ignore */ }
 }
 
+const CLIP_PNG_MAX = 16 * 1024 * 1024;
+
+function sendClipboardPng(u8) {
+  if (!u8 || !u8.length || u8.length > CLIP_PNG_MAX) return;
+  sendControl("clipboard", { mime: "image/png", data: bytesToB64(u8) });
+}
+
+function pasteImageFile(file) {
+  if (!file) return;
+  function fromBuf(buf) { sendClipboardPng(new Uint8Array(buf)); }
+  if (file.type === "image/png") {
+    file.arrayBuffer().then(fromBuf).catch(function () {});
+    return;
+  }
+  if (typeof createImageBitmap !== "function") {
+    file.arrayBuffer().then(fromBuf).catch(function () {});
+    return;
+  }
+  createImageBitmap(file).then(function (bmp) {
+    const c = document.createElement("canvas");
+    c.width = bmp.width;
+    c.height = bmp.height;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(bmp, 0, 0);
+    c.toBlob(function (blob) {
+      if (!blob) return;
+      blob.arrayBuffer().then(fromBuf).catch(function () {});
+    }, "image/png");
+  }).catch(function () {
+    file.arrayBuffer().then(fromBuf).catch(function () {});
+  });
+}
+
 const FILE_MAX = 2 * 1024 * 1024 * 1024;
 const FILE_CHUNK = 24 * 1024;
 const pendingUploads = {};
@@ -1207,9 +1241,7 @@ function onReady() {
           const f = items[i].getAsFile();
           if (!f) continue;
           ev.preventDefault();
-          f.arrayBuffer().then(function (buf) {
-            sendControl("clipboard", { mime: "image/png", data: bytesToB64(new Uint8Array(buf)) });
-          }).catch(function () {});
+          pasteImageFile(f);
           return;
         }
       }

@@ -5,11 +5,19 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub const CLIP_MAX: usize = 512 * 1024;
-pub const CLIP_PNG_MAX: usize = 4 * 1024 * 1024;
+pub const CLIP_PNG_MAX: usize = 16 * 1024 * 1024;
 pub const PNG_SIG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 pub fn is_png(data: &[u8]) -> bool {
     data.len() >= 8 && data.starts_with(PNG_SIG)
+}
+
+pub fn accept_png(png: Vec<u8>) -> Option<Vec<u8>> {
+    if is_png(&png) && png.len() <= CLIP_PNG_MAX {
+        Some(png)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -155,11 +163,7 @@ impl Action {
                 text: clip_limit(text),
             },
             Action::ClipboardPng { png } => Action::ClipboardPng {
-                png: if png.len() > CLIP_PNG_MAX {
-                    png[..CLIP_PNG_MAX].to_vec()
-                } else {
-                    png
-                },
+                png: accept_png(png).unwrap_or_default(),
             },
             Action::Paste { text } => Action::Paste {
                 text: clip_limit(text),
@@ -331,9 +335,9 @@ pub fn parse_control_json(v: &serde_json::Value) -> Option<Action> {
                     .or_else(|| v.get("png"))
                     .and_then(|x| x.as_str())
                     .unwrap_or("");
-                match crate::files::decode_b64(b64) {
-                    Ok(png) if is_png(&png) => Action::ClipboardPng { png },
-                    _ => return None,
+                match crate::files::decode_b64(b64).ok().and_then(accept_png) {
+                    Some(png) => Action::ClipboardPng { png },
+                    None => return None,
                 }
             } else {
                 Action::Clipboard {
@@ -750,9 +754,8 @@ impl Injector for FakeInjector {
         }
     }
     fn clipboard_set_png(&self, png: &[u8]) {
-        if is_png(png) {
-            let n = png.len().min(CLIP_PNG_MAX);
-            *self.png.lock() = Some(png[..n].to_vec());
+        if let Some(png) = accept_png(png.to_vec()) {
+            *self.png.lock() = Some(png);
         }
     }
     fn clipboard_get_png(&self) -> Option<Vec<u8>> {
@@ -769,8 +772,8 @@ impl Injector for NullInjector {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{
-        flags_from_mods, is_png, mac_keycode, modifier_flag, Action, Injector, MouseButton,
-        CLIP_MAX, CLIP_PNG_MAX,
+        accept_png, flags_from_mods, is_png, mac_keycode, modifier_flag, Action, Injector,
+        MouseButton, CLIP_MAX, CLIP_PNG_MAX,
     };
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -1037,14 +1040,7 @@ end try"#
         let data = std::fs::read(&path).ok();
         let _ = std::fs::remove_file(&path);
         let data = data?;
-        if !is_png(&data) {
-            return None;
-        }
-        if data.len() > CLIP_PNG_MAX {
-            Some(data[..CLIP_PNG_MAX].to_vec())
-        } else {
-            Some(data)
-        }
+        accept_png(data)
     }
 
     unsafe fn post_mouse(
@@ -1495,6 +1491,31 @@ mod tests {
             Some(Action::ClipboardPng { png }) => assert!(is_png(&png)),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn clipboard_png_is_kept_whole_or_rejected() {
+        let mut padded = TINY_PNG.to_vec();
+        padded.extend_from_slice(&[0u8; 2048]);
+        let kept = Action::ClipboardPng {
+            png: padded.clone(),
+        }
+        .clamp_coords();
+        match kept {
+            Action::ClipboardPng { png } => assert_eq!(png, padded),
+            other => panic!("{other:?}"),
+        }
+        let inj = FakeInjector::new();
+        inj.clipboard_set_png(&padded);
+        assert_eq!(inj.clipboard_get_png().as_deref(), Some(padded.as_slice()));
+
+        let mut huge = TINY_PNG.to_vec();
+        huge.resize(CLIP_PNG_MAX + 1, 0);
+        match (Action::ClipboardPng { png: huge.clone() }).clamp_coords() {
+            Action::ClipboardPng { png } => assert!(png.is_empty(), "must not truncate a PNG"),
+            other => panic!("{other:?}"),
+        }
+        assert!(accept_png(huge).is_none());
     }
 
     #[test]
