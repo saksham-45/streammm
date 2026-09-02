@@ -63,6 +63,8 @@ export const PLAYER_HTML = `<!doctype html>
   #file-list li { border-top: 1px solid var(--line); padding: 6px 0; }
   #file-list button { padding: 2px 8px; margin-left: 8px; }
   #file-out { font-size: 12px; color: var(--muted); min-height: 1.2em; }
+  #file-offer { display: none; border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 13px; }
+  #file-offer-save { margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -95,6 +97,7 @@ export const PLAYER_HTML = `<!doctype html>
     </div>
     <div id="files-section" style="display:none">
     <h2>Files</h2>
+    <div id="file-offer">Incoming file <span id="file-offer-name"></span><button type="button" id="file-offer-save">Save</button></div>
     <div id="file-drop">Drop files here or <label class="file-pick">browse<input id="file-input" type="file" multiple></label></div>
     <div id="file-out"></div>
     <ul id="file-list"></ul>
@@ -451,6 +454,7 @@ export const PLAYER_HTML = `<!doctype html>
     if (msg.action === "ok") {
       if (out) out.textContent = "saved " + (msg.name || "");
       sendFileJson({ type: "file", action: "list" });
+      if (msg.offer && msg.name) showFileOffer(msg.name, msg.size);
       return;
     }
     if (msg.action === "error" && out) { out.textContent = "error: " + (msg.error || "file"); return; }
@@ -515,6 +519,27 @@ export const PLAYER_HTML = `<!doctype html>
     if (!controlOn) return;
     Array.prototype.forEach.call(fileList || [], function (file) {
       uploadFile(file);
+    });
+  }
+  var offerName = "";
+  var offerSize = 0;
+  function showFileOffer(name, size) {
+    offerName = name || "";
+    offerSize = size || 0;
+    var el = document.getElementById("file-offer");
+    var lab = document.getElementById("file-offer-name");
+    if (lab) lab.textContent = offerName + (offerSize ? " (" + offerSize + " B)" : "");
+    if (el) el.style.display = offerName ? "block" : "none";
+    var files = document.getElementById("files-section");
+    if (files && controlOn) files.style.display = "block";
+  }
+  var offerBtn = document.getElementById("file-offer-save");
+  if (offerBtn) {
+    offerBtn.addEventListener("click", function () {
+      if (!offerName) return;
+      var n = offerName, sz = offerSize;
+      showFileOffer("", 0);
+      startInboxGet(n, sz);
     });
   }
   function clipboardHasNonImageFiles(files) {

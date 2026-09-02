@@ -228,6 +228,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         "watch page must reveal file transfer when remote control is on"
     );
     assert!(
+        s.contains("file-offer") && s.contains("msg.offer") && s.contains("showFileOffer"),
+        "watch page must reveal a Save control when the host offers a Finder file"
+    );
+    assert!(
         s.contains("action: \"begin\"") && s.contains("action: \"chunk\""),
         "watch page must send large inbox files in chunks"
     );

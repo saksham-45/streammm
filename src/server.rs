@@ -507,7 +507,8 @@ impl App {
                         "type": "file",
                         "action": "ok",
                         "name": ent.name,
-                        "size": ent.size
+                        "size": ent.size,
+                        "offer": true
                     })
                     .to_string();
                     self.publisher.push_wire(msg.clone());
@@ -2366,7 +2367,10 @@ mod tests {
         while tokio::time::Instant::now() < deadline && (!saw_ok || !saw_list) {
             match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
                 Ok(Ok(m)) => {
-                    if m.contains("from-finder.txt") && m.contains("\"ok\"") {
+                    if m.contains("from-finder.txt")
+                        && m.contains("\"ok\"")
+                        && m.contains("\"offer\":true")
+                    {
                         saw_ok = true;
                     }
                     if m.contains("\"list\"") && m.contains("from-finder.txt") {
@@ -2376,7 +2380,7 @@ mod tests {
                 _ => break,
             }
         }
-        assert!(saw_ok, "origin must fan file ok to the watcher");
+        assert!(saw_ok, "origin must fan a Finder-file offer to the watcher");
         assert!(saw_list, "origin must refresh the inbox list");
         assert!(!app.poll_clipboard(), "unchanged Finder selection must not resend");
     }
