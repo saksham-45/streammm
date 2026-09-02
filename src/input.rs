@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub const CLIP_MAX: usize = 512 * 1024;
+pub const CLIP_PNG_MAX: usize = 4 * 1024 * 1024;
+pub const PNG_SIG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+pub fn is_png(data: &[u8]) -> bool {
+    data.len() >= 8 && data.starts_with(PNG_SIG)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -72,6 +78,9 @@ pub enum Action {
     },
     Clipboard {
         text: String,
+    },
+    ClipboardPng {
+        png: Vec<u8>,
     },
     Paste {
         text: String,
@@ -141,6 +150,13 @@ impl Action {
             },
             Action::Clipboard { text } => Action::Clipboard {
                 text: clip_limit(text),
+            },
+            Action::ClipboardPng { png } => Action::ClipboardPng {
+                png: if png.len() > CLIP_PNG_MAX {
+                    png[..CLIP_PNG_MAX].to_vec()
+                } else {
+                    png
+                },
             },
             Action::Paste { text } => Action::Paste {
                 text: clip_limit(text),
@@ -296,8 +312,23 @@ pub fn parse_control_json(v: &serde_json::Value) -> Option<Action> {
                 modifiers: parse_modifiers(v),
             }
         }
-        "clipboard" => Action::Clipboard {
-            text: v.get("text").and_then(|x| x.as_str()).unwrap_or("").into(),
+        "clipboard" => {
+            let mime = v.get("mime").and_then(|m| m.as_str()).unwrap_or("");
+            if mime.contains("png") || v.get("png").is_some() {
+                let b64 = v
+                    .get("data")
+                    .or_else(|| v.get("png"))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
+                match crate::files::decode_b64(b64) {
+                    Ok(png) if is_png(&png) => Action::ClipboardPng { png },
+                    _ => return None,
+                }
+            } else {
+                Action::Clipboard {
+                    text: v.get("text").and_then(|x| x.as_str()).unwrap_or("").into(),
+                }
+            }
         },
         "paste" => Action::Paste {
             text: v.get("text").and_then(|x| x.as_str()).unwrap_or("").into(),
@@ -513,6 +544,10 @@ pub trait Injector: Send + Sync {
     fn clipboard_get(&self) -> Option<String> {
         None
     }
+    fn clipboard_set_png(&self, _png: &[u8]) {}
+    fn clipboard_get_png(&self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -557,6 +592,9 @@ pub enum Injected {
     Clipboard {
         text: String,
     },
+    ClipboardPng {
+        png: Vec<u8>,
+    },
     Paste {
         text: String,
     },
@@ -577,6 +615,7 @@ impl Injected {
 pub struct FakeInjector {
     pub events: Arc<Mutex<Vec<Injected>>>,
     pub clip: Arc<Mutex<String>>,
+    pub png: Arc<Mutex<Option<Vec<u8>>>>,
     pub rect: Arc<Mutex<(i32, i32, u32, u32)>>,
 }
 
@@ -594,6 +633,7 @@ impl Default for FakeInjector {
         Self {
             events: Arc::new(Mutex::new(Vec::new())),
             clip: Arc::new(Mutex::new(String::new())),
+            png: Arc::new(Mutex::new(None)),
             rect: Arc::new(Mutex::new((0, 0, 0, 0))),
         }
     }
@@ -660,6 +700,10 @@ impl Injector for FakeInjector {
                 self.clipboard_set(text);
                 Injected::Clipboard { text: text.clone() }
             }
+            Action::ClipboardPng { png } => {
+                self.clipboard_set_png(png);
+                Injected::ClipboardPng { png: png.clone() }
+            }
             Action::Paste { text } => {
                 if !text.is_empty() {
                     self.clipboard_set(text);
@@ -690,6 +734,15 @@ impl Injector for FakeInjector {
             Some(s)
         }
     }
+    fn clipboard_set_png(&self, png: &[u8]) {
+        if is_png(png) {
+            let n = png.len().min(CLIP_PNG_MAX);
+            *self.png.lock() = Some(png[..n].to_vec());
+        }
+    }
+    fn clipboard_get_png(&self) -> Option<Vec<u8>> {
+        self.png.lock().clone()
+    }
 }
 
 pub struct NullInjector;
@@ -701,7 +754,8 @@ impl Injector for NullInjector {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{
-        flags_from_mods, mac_keycode, modifier_flag, Action, Injector, MouseButton, CLIP_MAX,
+        flags_from_mods, is_png, mac_keycode, modifier_flag, Action, Injector, MouseButton,
+        CLIP_MAX, CLIP_PNG_MAX,
     };
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -919,6 +973,65 @@ mod macos {
         }
     }
 
+    fn applescript_posix(path: &std::path::Path) -> String {
+        path.to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+    }
+
+    pub fn clipboard_set_png_os(png: &[u8]) -> bool {
+        if !is_png(png) || png.len() > CLIP_PNG_MAX {
+            return false;
+        }
+        let path = std::env::temp_dir().join(format!("streamaid-clip-in-{}.png", std::process::id()));
+        if std::fs::write(&path, png).is_err() {
+            return false;
+        }
+        let posix = applescript_posix(&path);
+        let ok = Command::new("osascript")
+            .arg("-e")
+            .arg(format!(
+                r#"set the clipboard to (read (POSIX file "{posix}") as «class PNGf»)"#
+            ))
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        let _ = std::fs::remove_file(&path);
+        ok
+    }
+
+    pub fn clipboard_get_png_os() -> Option<Vec<u8>> {
+        let path =
+            std::env::temp_dir().join(format!("streamaid-clip-out-{}.png", std::process::id()));
+        let posix = applescript_posix(&path);
+        let script = format!(
+            r#"try
+  set png_data to (the clipboard as «class PNGf»)
+  set f to open for access POSIX file "{posix}" with write permission
+  set eof of f to 0
+  write png_data to f
+  close access f
+end try"#
+        );
+        let _ = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let data = std::fs::read(&path).ok();
+        let _ = std::fs::remove_file(&path);
+        let data = data?;
+        if !is_png(&data) {
+            return None;
+        }
+        if data.len() > CLIP_PNG_MAX {
+            Some(data[..CLIP_PNG_MAX].to_vec())
+        } else {
+            Some(data)
+        }
+    }
+
     unsafe fn post_mouse(
         ty: CGEventType,
         pos: CGPoint,
@@ -1125,6 +1238,12 @@ mod macos {
         fn clipboard_get(&self) -> Option<String> {
             clipboard_get_os()
         }
+        fn clipboard_set_png(&self, png: &[u8]) {
+            let _ = clipboard_set_png_os(png);
+        }
+        fn clipboard_get_png(&self) -> Option<Vec<u8>> {
+            clipboard_get_png_os()
+        }
         fn apply(&self, action: &Action) {
             let held = self.flags.load(Ordering::SeqCst);
             unsafe {
@@ -1207,6 +1326,10 @@ mod macos {
                     Action::Clipboard { text } => {
                         let _ = clipboard_set_os(text);
                     }
+                    Action::ClipboardPng { png } => {
+                        let _ = clipboard_set_png_os(png);
+                        self.apply_key("v", None, &["Meta".into()]);
+                    }
                     Action::Paste { text } => {
                         if !text.is_empty() {
                             let _ = clipboard_set_os(text);
@@ -1242,6 +1365,15 @@ pub fn production_injector() -> Arc<dyn Injector> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1×1 PNG used for clipboard image tests.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x05, 0xFE, 0xD4, 0xEF, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
 
     #[test]
     fn fake_records_click_and_type_with_clamped_coords() {
@@ -1336,6 +1468,12 @@ mod tests {
             parse_control_json(&clip),
             Some(Action::Clipboard { text: "abc".into() })
         );
+        let png = crate::files::encode_b64(TINY_PNG);
+        let img = serde_json::json!({"action":"clipboard","mime":"image/png","data": png});
+        match parse_control_json(&img) {
+            Some(Action::ClipboardPng { png }) => assert!(is_png(&png)),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -1368,6 +1506,10 @@ mod tests {
             text: "pasted".into(),
         });
         assert_eq!(inj.clipboard_get().as_deref(), Some("pasted"));
+        inj.apply(&Action::ClipboardPng {
+            png: TINY_PNG.to_vec(),
+        });
+        assert_eq!(inj.clipboard_get_png().as_deref(), Some(TINY_PNG));
         let rec = inj.recorded();
         assert!(matches!(
             rec[0],

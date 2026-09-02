@@ -265,7 +265,7 @@ export class StreamRoom extends DurableObject<Env> {
         }));
       }
       if (v.type === "clipboard") {
-        this.broadcastViewers(JSON.stringify({ type: "clipboard", text: typeof v.text === "string" ? v.text : "" }));
+        this.broadcastViewers(raw);
       }
       if (v.type === "file") {
         this.broadcastViewers(raw);

@@ -174,6 +174,16 @@ export const PLAYER_HTML = `<!doctype html>
     if (!text || !navigator.clipboard || !navigator.clipboard.writeText) return;
     navigator.clipboard.writeText(text).catch(function () {});
   }
+  function applyClipboardPng(b64) {
+    if (!b64 || !navigator.clipboard || !window.ClipboardItem) return;
+    try {
+      var bin = atob(b64);
+      var u8 = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      var blob = new Blob([u8], { type: "image/png" });
+      navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]).catch(function () {});
+    } catch (e) {}
+  }
   function bindControl(el) {
     if (!el) return;
     el.addEventListener("contextmenu", function (ev) {
@@ -215,6 +225,20 @@ export const PLAYER_HTML = `<!doctype html>
   document.addEventListener("paste", function (ev) {
     if (!controlOn) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
+    var items = ev.clipboardData && ev.clipboardData.items;
+    if (items) {
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf("image/") === 0) {
+          var f = items[i].getAsFile();
+          if (!f) continue;
+          ev.preventDefault();
+          f.arrayBuffer().then(function (buf) {
+            sendControl("clipboard", { mime: "image/png", data: bytesToB64(new Uint8Array(buf)) });
+          }).catch(function () {});
+          return;
+        }
+      }
+    }
     var text = ev.clipboardData && ev.clipboardData.getData("text/plain");
     if (!text) return;
     ev.preventDefault();
@@ -475,8 +499,9 @@ export const PLAYER_HTML = `<!doctype html>
         renderAnalysis(msg.data);
         refreshLlm();
       }
-      if (msg && msg.type === "clipboard" && typeof msg.text === "string") {
-        applyClipboardText(msg.text);
+      if (msg && msg.type === "clipboard") {
+        if (msg.mime === "image/png" && msg.data) applyClipboardPng(msg.data);
+        else if (typeof msg.text === "string") applyClipboardText(msg.text);
       }
       if (msg && msg.type === "file") handleFileMsg(msg);
     } catch (e) {}

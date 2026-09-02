@@ -7,7 +7,7 @@ use crate::files::Inbox;
 use crate::headers::stream_header_map;
 use crate::hub::Hub;
 use crate::input::{self, FakeInjector, Injector};
-use crate::otp::{Clock, OtpGate, RealClock, RedeemError, SESSION_TTL};
+use crate::otp::{hex_encode, Clock, OtpGate, RealClock, RedeemError, SESSION_TTL};
 use crate::protocol::{pack_media, TYPE_FRAG, TYPE_INIT, TYPE_JPEG, TYPE_SNAP};
 use crate::publisher::Publisher;
 use crate::ws::{
@@ -254,11 +254,15 @@ impl App {
     }
 
     fn fanout_clipboard_action(&self, action: &input::Action) {
-        let text = match action {
-            input::Action::Clipboard { text } | input::Action::Paste { text } => text.clone(),
-            _ => return,
-        };
-        self.push_clipboard_text(&text);
+        match action {
+            input::Action::Clipboard { text } | input::Action::Paste { text } => {
+                self.push_clipboard_text(text);
+            }
+            input::Action::ClipboardPng { png } => {
+                self.push_clipboard_png(png);
+            }
+            _ => {}
+        }
     }
 
     fn push_clipboard_text(&self, text: &str) -> bool {
@@ -278,10 +282,38 @@ impl App {
         true
     }
 
+    fn push_clipboard_png(&self, png: &[u8]) -> bool {
+        if !input::is_png(png) {
+            return false;
+        }
+        let key = format!("png:{}", hex_encode(&Sha256::digest(png)));
+        {
+            let mut last = self.last_clip.lock();
+            if *last == key {
+                return false;
+            }
+            *last = key;
+        }
+        let msg = json!({
+            "type": "clipboard",
+            "mime": "image/png",
+            "data": crate::files::encode_b64(png)
+        })
+        .to_string();
+        self.publisher.push_wire(msg.clone());
+        let _ = self.clip_tx.send(msg);
+        true
+    }
+
     /// Push host pasteboard to watchers when it changes. No-op if control is off.
     pub fn poll_clipboard(&self) -> bool {
         if !self.cfg.lock().control.enabled {
             return false;
+        }
+        if let Some(png) = self.injector.clipboard_get_png() {
+            if self.push_clipboard_png(&png) {
+                return true;
+            }
         }
         match self.injector.clipboard_get() {
             Some(text) => self.push_clipboard_text(&text),
@@ -1894,5 +1926,44 @@ mod tests {
             .expect("second clipboard")
             .expect("clip channel");
         assert!(msg2.contains("second-copy"), "{msg2}");
+    }
+
+    #[tokio::test]
+    async fn poll_clipboard_fans_host_png() {
+        use crate::computer_use::DoneModel;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+
+        const TINY_PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x05, 0xFE,
+            0xD4, 0xEF, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let fake = FakeInjector::new();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            fake.clone(),
+            Arc::new(DoneModel),
+        );
+        let mut rx = app.clip_tx.subscribe();
+        fake.clipboard_set_png(TINY_PNG);
+        assert!(app.poll_clipboard());
+        let msg = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("png fan-out")
+            .expect("clip channel");
+        assert!(msg.contains("image/png"), "{msg}");
+        assert!(msg.contains(&crate::files::encode_b64(TINY_PNG)), "{msg}");
+        assert!(!app.poll_clipboard(), "same png must not resend");
     }
 }

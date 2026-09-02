@@ -217,6 +217,17 @@ function applyClipboardText(text) {
   navigator.clipboard.writeText(text).catch(function () {});
 }
 
+function applyClipboardPng(b64) {
+  if (!b64 || typeof navigator === "undefined" || !navigator.clipboard || !window.ClipboardItem) return;
+  try {
+    const bin = atob(b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const blob = new Blob([u8], { type: "image/png" });
+    navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]).catch(function () {});
+  } catch (e) { /* ignore */ }
+}
+
 const FILE_MAX = 64 * 1024 * 1024;
 const FILE_CHUNK = 24 * 1024;
 
@@ -517,8 +528,9 @@ function onWsMessage(ev) {
   if (typeof ev.data === "string") {
     try {
       const msg = JSON.parse(ev.data);
-      if (msg && msg.type === "clipboard" && typeof msg.text === "string") {
-        applyClipboardText(msg.text);
+      if (msg && msg.type === "clipboard") {
+        if (msg.mime === "image/png" && msg.data) applyClipboardPng(msg.data);
+        else if (typeof msg.text === "string") applyClipboardText(msg.text);
       }
       if (msg && msg.type === "file") {
         handleFileMsg(msg);
@@ -1089,6 +1101,20 @@ function onReady() {
     if (isDrawerOpen()) return;
     if (!featureFlags().ctl) return;
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) return;
+    const items = ev.clipboardData && ev.clipboardData.items;
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf("image/") === 0) {
+          const f = items[i].getAsFile();
+          if (!f) continue;
+          ev.preventDefault();
+          f.arrayBuffer().then(function (buf) {
+            sendControl("clipboard", { mime: "image/png", data: bytesToB64(new Uint8Array(buf)) });
+          }).catch(function () {});
+          return;
+        }
+      }
+    }
     const text = ev.clipboardData && ev.clipboardData.getData("text/plain");
     if (!text) return;
     ev.preventDefault();

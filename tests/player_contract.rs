@@ -72,6 +72,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
         js.contains("modifiers") || js.contains("metaKey"),
         "modifier shortcuts must type-through"
     );
+    assert!(
+        js.contains("image/png"),
+        "origin UI must paste PNG clipboard through"
+    );
     assert!(js.contains("streamaid_viewer") || js.contains("hasViewerSession"));
     assert!(js.contains("/api/computer-use/cancel"));
     assert!(
@@ -158,6 +162,10 @@ fn worker_player_has_pin_unlock_and_ai_box() {
     assert!(
         s.contains("paste"),
         "watch page must paste clipboard through"
+    );
+    assert!(
+        s.contains("image/png"),
+        "watch page must sync PNG clipboard"
     );
     assert!(
         s.contains("files-section") && s.contains("file-drop"),
