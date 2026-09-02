@@ -4,6 +4,7 @@ pub mod capture;
 pub mod computer_use;
 pub mod config;
 pub mod encoder;
+pub mod files;
 pub mod frame;
 pub mod headers;
 pub mod hub;

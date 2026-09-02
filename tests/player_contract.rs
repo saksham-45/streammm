@@ -75,6 +75,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     assert!(js.contains("streamaid_viewer") || js.contains("hasViewerSession"));
     assert!(js.contains("/api/computer-use/cancel"));
     assert!(
+        js.contains("function currentToken") && js.contains("/api/login"),
+        "host UI must read the live token and POST /api/login instead of blindly setting a cookie"
+    );
+    assert!(
         js.contains("function closeDrawer"),
         "Save/Escape must share a drawer closer"
     );
@@ -89,6 +93,10 @@ fn prefers_websocket_typed_frames_not_2s5_seek() {
     let html =
         std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/index.html"))
             .unwrap();
+    assert!(
+        html.contains("id=\"login-error\""),
+        "PIN/token unlock must surface an error instead of failing silently"
+    );
     assert!(
         html.contains("id=\"analysis-pane\"") && html.contains("class=\"hidden\""),
         "origin analysis/AI/Ask chrome must not sit on the live stream"
@@ -148,6 +156,44 @@ fn worker_player_has_pin_unlock_and_ai_box() {
         s.contains("Max-Age=86400") || s.contains("expires_in_s"),
         "watch page must keep the redeemed session for a day"
     );
+}
+
+#[test]
+fn current_token_prefers_query_then_cookie_and_url_attaches_it() {
+    let js_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/app.js");
+    let status = Command::new("node")
+        .arg("-e")
+        .arg(format!(
+            r#"
+globalThis.window = globalThis;
+globalThis.document = {{
+  readyState: "loading",
+  cookie: "streamaid_token=" + encodeURIComponent("from-cookie"),
+  addEventListener: function() {{}},
+  getElementById: function() {{ return null; }}
+}};
+globalThis.location = {{ href: "http://127.0.0.1:8080/?token=from-query", search: "?token=from-query", protocol: "http:", reload: function(){{}} }};
+globalThis.navigator = {{ userAgent: "test", platform: "MacIntel", maxTouchPoints: 0 }};
+globalThis.WebSocket = function() {{}};
+globalThis.MediaSource = undefined;
+globalThis.EventSource = undefined;
+globalThis.fetch = undefined;
+const fs = require("fs");
+const src = fs.readFileSync({:?}, "utf8");
+(0, eval)(src);
+if (!window.streamaidUi || typeof window.streamaidUi.currentToken !== "function") throw new Error("currentToken missing");
+if (window.streamaidUi.currentToken() !== "from-query") throw new Error("query token lost: " + window.streamaidUi.currentToken());
+location.search = "";
+if (window.streamaidUi.currentToken() !== "from-cookie") throw new Error("cookie token lost: " + window.streamaidUi.currentToken());
+const u = window.streamaidUi.url("/api/status");
+if (u.indexOf("token=from-cookie") < 0) throw new Error("url() must attach token, got " + u);
+console.log("token-ok");
+"#,
+            js_path
+        ))
+        .status()
+        .expect("node");
+    assert!(status.success(), "currentToken/url must drive live query+cookie token");
 }
 
 #[test]

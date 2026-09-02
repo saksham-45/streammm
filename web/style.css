@@ -246,7 +246,15 @@ button:disabled { opacity: 0.5; }
   border-radius: 10px;
   padding: 20px;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  max-width: 28rem;
+}
+#login-error {
+  flex: 1 0 100%;
+  min-height: 1.2em;
+  color: #f88;
+  font-size: 13px;
 }
 #login-form input {
   background: #1e1e1e;

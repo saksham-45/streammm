@@ -86,6 +86,7 @@ async fn token_rejects_unauthorized_and_accepts_bearer() {
     assert_eq!(res.status(), StatusCode::OK);
 
     let res = router
+        .clone()
         .oneshot(
             Request::get("/api/config?token=s3cret")
                 .body(Body::empty())
@@ -94,6 +95,31 @@ async fn token_rejects_unauthorized_and_accepts_bearer() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+
+    let res = router
+        .clone()
+        .oneshot(
+            Request::get("/api/config")
+                .header("Cookie", "streamaid_token=s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = router
+        .oneshot(
+            Request::get("/api/status")
+                .header("Cookie", "streamaid_token=s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let st = body_json(res).await;
+    assert!(st.get("capture").is_some());
 }
 
 #[tokio::test]
@@ -693,6 +719,88 @@ async fn host_cancel_stops_running_ai_loop() {
 async fn production_app_wires_llm_model() {
     let (_dir, app) = temp_app();
     assert_eq!(app.model.lock().kind(), "llm");
+}
+
+#[tokio::test]
+async fn percent_encoded_token_cookie_authorizes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let mut cfg = Config::default();
+    cfg.token = "p@ss/w d+".into();
+    streamaid::config::save(&cfg, &path).unwrap();
+    let app = App::new(cfg, path);
+    let router = app.router();
+    let res = router
+        .oneshot(
+            Request::get("/api/config")
+                .header("Cookie", "streamaid_token=p%40ss%2Fw%20d%2B")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn host_login_sets_token_cookie_and_rejects_bad_input() {
+    let (_dir, app) = token_app();
+    let router = app.router();
+
+    let malformed = post_json(router.clone(), "/api/login", Body::from("{")).await;
+    let (st, _) = json_error_body(malformed).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    for body in [
+        json!({}),
+        json!({"token": ""}),
+        json!({"token": "   "}),
+        json!({"token": 1}),
+    ] {
+        let res = post_json(router.clone(), "/api/login", Body::from(body.to_string())).await;
+        let (st, err) = json_error_body(res).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "body={body} err={err}");
+    }
+
+    let wrong = post_json(
+        router.clone(),
+        "/api/login",
+        Body::from(json!({"token": "nope"}).to_string()),
+    )
+    .await;
+    let (st, _) = json_error_body(wrong).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+    let ok = post_json(
+        router.clone(),
+        "/api/login",
+        Body::from(json!({"token": "s3cret"}).to_string()),
+    )
+    .await;
+    assert_eq!(ok.status(), StatusCode::OK);
+    let cookies: Vec<String> = ok
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        cookies.join("; ").contains("streamaid_token="),
+        "login must set host token cookie, got {cookies:?}"
+    );
+    let body = body_json(ok).await;
+    assert_eq!(body["ok"], true);
+
+    let authed = router
+        .oneshot(
+            Request::get("/api/config")
+                .header("Cookie", "streamaid_token=s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), StatusCode::OK);
 }
 
 async fn json_error_body(res: axum::response::Response) -> (StatusCode, Value) {

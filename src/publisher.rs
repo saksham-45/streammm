@@ -102,7 +102,11 @@ impl Publisher {
             if msg.contains("\"clipboard\"") {
                 latest.retain(|m| !m.contains("\"clipboard\""));
             }
-            latest.push(msg.clone());
+            if msg.contains("\"type\":\"file\"") {
+                // File blobs are transient; do not replay on publisher reconnect.
+            } else {
+                latest.push(msg.clone());
+            }
         }
         let _ = self.wire_out.send(msg);
     }

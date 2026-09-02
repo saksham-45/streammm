@@ -3,6 +3,7 @@
 use crate::capture::{enumerate_devices, Capture};
 use crate::computer_use::{self, ActionModel};
 use crate::config::{self, Config};
+use crate::files::Inbox;
 use crate::headers::stream_header_map;
 use crate::hub::Hub;
 use crate::input::{self, FakeInjector, Injector};
@@ -55,6 +56,7 @@ pub struct App {
     pub controller: Mutex<Option<String>>,
     pub ai_cancel: Arc<AtomicBool>,
     pub clip_tx: tokio::sync::broadcast::Sender<String>,
+    pub files: Inbox,
 }
 
 impl App {
@@ -94,6 +96,10 @@ impl App {
         let publisher = Publisher::new(hub.clone(), cfg.clone(), inbound_tx);
         let (events, _) = tokio::sync::broadcast::channel(128);
         let (clip_tx, _) = tokio::sync::broadcast::channel(16);
+        let inbox_dir = cfg_path
+            .parent()
+            .map(|p| p.join("inbox"))
+            .unwrap_or_else(|| PathBuf::from("inbox"));
         let app = Arc::new(Self {
             cfg: Mutex::new(cfg),
             cfg_path,
@@ -109,6 +115,7 @@ impl App {
             controller: Mutex::new(None),
             ai_cancel: Arc::new(AtomicBool::new(false)),
             clip_tx,
+            files: Inbox::new(inbox_dir),
         });
         let app2 = app.clone();
         tokio::spawn(async move {
@@ -171,6 +178,15 @@ impl App {
                 tokio::spawn(async move {
                     let _ = app.run_computer_use(&task).await;
                 });
+            }
+            "file" => {
+                if !self.cfg.lock().control.enabled {
+                    return;
+                }
+                for msg in self.files.handle_message(&v) {
+                    self.publisher.push_wire(msg.clone());
+                    let _ = self.clip_tx.send(msg);
+                }
             }
             "revoke" => {
                 *self.controller.lock() = None;
@@ -295,8 +311,11 @@ impl App {
             .route("/api/quality-check", post(api_quality_check))
             .route("/api/otp", get(api_otp_get).post(api_otp_mint))
             .route("/api/otp/redeem", post(api_otp_redeem))
+            .route("/api/login", post(api_login))
             .route("/api/computer-use", post(api_computer_use))
             .route("/api/computer-use/cancel", post(api_computer_use_cancel))
+            .route("/api/files", get(api_files_list).post(api_files_put))
+            .route("/api/files/download", get(api_files_download))
             .with_state(self)
     }
 
@@ -350,6 +369,7 @@ impl App {
                 "enabled": cfg.control.enabled,
                 "ai_enabled": cfg.control.ai_enabled,
                 "controller": self.controller.lock().is_some(),
+                "files": self.files.list().len(),
             },
             "otp": {
                 "has_pin": self.otp.current_pin().is_some(),
@@ -371,33 +391,85 @@ pub fn token_ok(given: &str, expected: &str) -> bool {
     a.ct_eq(&b).into()
 }
 
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2])) {
+                out.push((h << 4) | l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn percent_encode_cookie(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn cookie_named(headers: &HeaderMap, name: &str) -> String {
+    let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) else {
+        return String::new();
+    };
+    let prefix = format!("{name}=");
+    for part in c.split(';') {
+        let part = part.trim();
+        if let Some(v) = part.strip_prefix(&prefix) {
+            return percent_decode(v);
+        }
+    }
+    String::new()
+}
+
 fn request_token(headers: &HeaderMap, query: &str) -> String {
     if let Some(a) = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
     {
         if let Some(rest) = a.strip_prefix("Bearer ") {
-            return rest.to_string();
-        }
-    }
-    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
-        if k == "token" {
-            return v.into_owned();
-        }
-    }
-    if let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
-        for part in c.split(';') {
-            let part = part.trim();
-            if let Some(v) = part.strip_prefix("streamaid_token=") {
-                return v.to_string();
+            let rest = rest.trim();
+            if !rest.is_empty() {
+                return rest.to_string();
             }
         }
     }
-    String::new()
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        if k == "token" && !v.is_empty() {
+            return v.into_owned();
+        }
+    }
+    cookie_named(headers, "streamaid_token")
 }
 
 fn is_public(path: &str) -> bool {
-    matches!(path, "/" | "/app.js" | "/style.css" | "/api/otp/redeem")
+    matches!(
+        path,
+        "/" | "/app.js" | "/style.css" | "/api/otp/redeem" | "/api/login"
+    )
 }
 
 fn authorize(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
@@ -412,17 +484,13 @@ fn host_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
 
 fn request_session(headers: &HeaderMap, query: &str) -> String {
     for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
-        if k == "session" {
+        if k == "session" && !v.is_empty() {
             return v.into_owned();
         }
     }
-    if let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
-        for part in c.split(';') {
-            let part = part.trim();
-            if let Some(v) = part.strip_prefix("streamaid_session=") {
-                return v.to_string();
-            }
-        }
+    let from_cookie = cookie_named(headers, "streamaid_session");
+    if !from_cookie.is_empty() {
+        return from_cookie;
     }
     if let Some(a) = headers
         .get(header::AUTHORIZATION)
@@ -452,10 +520,19 @@ fn viewer_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
 
 fn session_cookie(token: &str) -> HeaderValue {
     let v = format!(
-        "streamaid_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        "streamaid_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        percent_encode_cookie(token),
         SESSION_TTL.as_secs()
     );
     HeaderValue::from_str(&v).unwrap_or_else(|_| HeaderValue::from_static("streamaid_session="))
+}
+
+fn token_auth_cookie(token: &str) -> HeaderValue {
+    let v = format!(
+        "streamaid_token={}; Path=/; SameSite=Lax; Max-Age=86400",
+        percent_encode_cookie(token)
+    );
+    HeaderValue::from_str(&v).unwrap_or_else(|_| HeaderValue::from_static("streamaid_token="))
 }
 
 fn viewer_flag_cookie() -> HeaderValue {
@@ -690,6 +767,37 @@ async fn api_otp_redeem(State(app): State<Arc<App>>, req: Request) -> Response {
     }
 }
 
+async fn api_login(State(app): State<Arc<App>>, req: Request) -> Response {
+    let body = axum::body::to_bytes(req.into_body(), 64_000)
+        .await
+        .unwrap_or_default();
+    let v: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid JSON body"),
+    };
+    if !v.is_object() {
+        return json_err(StatusCode::BAD_REQUEST, "expected JSON object");
+    }
+    let token = match v.get("token") {
+        None => return json_err(StatusCode::BAD_REQUEST, "missing token"),
+        Some(p) => match p.as_str() {
+            None => return json_err(StatusCode::BAD_REQUEST, "token must be a string"),
+            Some(s) => s.trim(),
+        },
+    };
+    if token.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "missing token");
+    }
+    let expected = app.cfg.lock().token.clone();
+    if !token_ok(token, &expected) {
+        return json_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    let mut res = Json(json!({ "ok": true })).into_response();
+    res.headers_mut()
+        .append(header::SET_COOKIE, token_auth_cookie(token));
+    res
+}
+
 async fn api_computer_use(State(app): State<Arc<App>>, req: Request) -> Response {
     let headers = req.headers().clone();
     let uri = req.uri().clone();
@@ -724,6 +832,89 @@ async fn api_computer_use_cancel(State(app): State<Arc<App>>, req: Request) -> R
     }
     app.cancel_computer_use();
     Json(json!({"ok": true, "cancelled": true})).into_response()
+}
+
+fn files_ok(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> Result<(), Response> {
+    if host_ok(app, headers, uri) {
+        return Ok(());
+    }
+    if !viewer_ok(app, headers, uri) {
+        return Err(json_err(StatusCode::UNAUTHORIZED, "unauthorized"));
+    }
+    if !app.cfg.lock().control.enabled {
+        return Err(json_err(StatusCode::FORBIDDEN, "remote control disabled"));
+    }
+    Ok(())
+}
+
+async fn api_files_list(State(app): State<Arc<App>>, req: Request) -> Response {
+    if let Err(e) = files_ok(&app, req.headers(), req.uri()) {
+        return e;
+    }
+    let files: Vec<Value> = app.files.list().iter().map(|e| e.to_json()).collect();
+    Json(json!({"files": files, "dir": app.files.dir.display().to_string()})).into_response()
+}
+
+async fn api_files_put(State(app): State<Arc<App>>, req: Request) -> Response {
+    if let Err(e) = files_ok(&app, req.headers(), req.uri()) {
+        return e;
+    }
+    let body = axum::body::to_bytes(req.into_body(), crate::files::MAX_FILE * 2)
+        .await
+        .unwrap_or_default();
+    let v: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid JSON body"),
+    };
+    if !v.is_object() {
+        return json_err(StatusCode::BAD_REQUEST, "expected JSON object");
+    }
+    let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("").trim();
+    if name.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "missing name");
+    }
+    let data = match v.get("data").and_then(|d| d.as_str()) {
+        Some(s) => match crate::files::decode_b64(s) {
+            Ok(b) => b,
+            Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
+        },
+        None => return json_err(StatusCode::BAD_REQUEST, "missing data"),
+    };
+    match app.files.put_bytes(name, &data) {
+        Ok(ent) => Json(json!({"ok": true, "name": ent.name, "size": ent.size})).into_response(),
+        Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+async fn api_files_download(State(app): State<Arc<App>>, req: Request) -> Response {
+    if let Err(e) = files_ok(&app, req.headers(), req.uri()) {
+        return e;
+    }
+    let query = req.uri().query().unwrap_or("");
+    let mut name = String::new();
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        if k == "name" {
+            name = v.into_owned();
+        }
+    }
+    if name.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "missing name");
+    }
+    match app.files.get_bytes(&name) {
+        Ok(bytes) => {
+            let disp = format!("attachment; filename=\"{}\"", name.replace('"', ""));
+            let mut res = Response::new(Body::from(bytes));
+            res.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            );
+            if let Ok(v) = HeaderValue::from_str(&disp) {
+                res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+            }
+            res
+        }
+        Err(e) => json_err(StatusCode::NOT_FOUND, &e),
+    }
 }
 
 fn media_response(ctype: &str, rx: mpsc::Receiver<Result<Bytes, std::io::Error>>) -> Response {
@@ -974,6 +1165,13 @@ mod tests {
     }
 
     #[test]
+    fn percent_decode_matches_js_encode_uri_component() {
+        assert_eq!(percent_decode("s3cret"), "s3cret");
+        assert_eq!(percent_decode("p%40ss%2Fw%20d%2B"), "p@ss/w d+");
+        assert_eq!(percent_encode_cookie("p@ss/w d+"), "p%40ss%2Fw%20d%2B");
+    }
+
+    #[test]
     fn origin_does_not_push_encoder_hub_size_into_hid_mapping() {
         let src = include_str!("server.rs");
         let forbidden_fn = format!("fn refresh_{}", "injector_size");
@@ -1036,6 +1234,9 @@ mod tests {
         assert!(html.contains("id=\"llm-fields\""));
         assert!(html.contains("Have AI use this computer"));
         assert!(html.contains("cu-cancel"));
+        assert!(html.contains("id=\"login-overlay\""));
+        assert!(html.contains("id=\"login-token\""));
+        assert!(html.contains("id=\"login-error\""));
 
         let res = router
             .clone()
@@ -1306,6 +1507,94 @@ mod tests {
             got_clip,
             "origin must fan clipboard JSON back to the watcher"
         );
+    }
+
+    #[tokio::test]
+    async fn viewer_file_put_lists_and_gets_over_websocket() {
+        use crate::computer_use::DoneModel;
+        use crate::files::encode_b64;
+        use crate::input::FakeInjector;
+        use crate::otp::FakeClock;
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = crate::config::Config::default();
+        cfg.token = "s3cret".into();
+        cfg.control.enabled = true;
+        crate::config::save(&cfg, &path).unwrap();
+        let app = App::new_for_test(
+            cfg,
+            path,
+            FakeClock::new(),
+            FakeInjector::new(),
+            Arc::new(DoneModel),
+        );
+        app.hub
+            .publish_init(Bytes::from_static(b"ftyp-init"), 1920, 1080);
+        let pin = app.otp.mint().pin;
+        let sess = app.otp.redeem(&pin).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = app.router();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let url = format!("ws://{addr}/stream.ws?session={}", sess.token);
+        let (mut ws, _) = connect_async(&url).await.expect("ws");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await;
+        let payload = encode_b64(b"inbox-bytes");
+        ws.send(Message::Text(
+            format!(
+                r#"{{"type":"file","action":"put","name":"note.txt","data":"{payload}"}}"#
+            )
+            .into(),
+        ))
+        .await
+        .unwrap();
+        let mut saw_ok = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), ws.next()).await {
+                Ok(Some(Ok(Message::Text(t)))) => {
+                    if t.contains("note.txt") && t.contains("\"ok\"") {
+                        saw_ok = true;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_ok, "put must ack over the watch socket");
+        ws.send(Message::Text(r#"{"type":"file","action":"list"}"#.into()))
+            .await
+            .unwrap();
+        ws.send(Message::Text(
+            r#"{"type":"file","action":"get","name":"note.txt"}"#.into(),
+        ))
+        .await
+        .unwrap();
+        let mut saw_list = false;
+        let mut saw_blob = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline && !(saw_list && saw_blob) {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), ws.next()).await {
+                Ok(Some(Ok(Message::Text(t)))) => {
+                    if t.contains("note.txt") && t.contains("list") {
+                        saw_list = true;
+                    }
+                    if t.contains("blob") && t.contains(&payload) {
+                        saw_blob = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_list, "list must include the uploaded file");
+        assert!(saw_blob, "get must return the file bytes");
     }
 
     #[tokio::test]

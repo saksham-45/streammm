@@ -8,4 +8,5 @@ config.json
 /cloudflare/.dev.vars
 web/.watch-url
 /logs
+/inbox
 macos/Streamaid.app/Contents/_CodeSignature/

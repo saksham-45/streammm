@@ -19,13 +19,20 @@ function getCookie(name) {
 function setCookie(name, value) {
   document.cookie = name + "=" + encodeURIComponent(value) + "; path=/; Max-Age=86400; SameSite=Lax";
 }
-const token = getCookie("streamaid_token");
+function currentToken() {
+  try {
+    const q = new URLSearchParams(typeof location !== "undefined" ? location.search : "").get("token");
+    if (q && q.trim()) return q.trim();
+  } catch (e) { /* ignore */ }
+  return getCookie("streamaid_token");
+}
 function hasViewerSession() {
   return getCookie("streamaid_viewer") === "1" || !!getCookie("streamaid_session");
 }
 function url(path) {
   let out = path;
-  if (token) {
+  const token = currentToken();
+  if (token && out.indexOf("token=") < 0) {
     out += (out.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
   }
   const session = getCookie("streamaid_session");
@@ -96,7 +103,14 @@ function openDrawer() {
 }
 
 async function api(path, opts) {
-  const res = await fetch(path, opts);
+  opts = opts || {};
+  const headers = Object.assign({}, opts.headers || {});
+  const token = currentToken();
+  if (token && !headers.Authorization) headers.Authorization = "Bearer " + token;
+  const res = await fetch(url(path), Object.assign({}, opts, {
+    headers: headers,
+    credentials: "same-origin",
+  }));
   if (res.status === 401) {
     if (!hasViewerSession()) showLogin();
     throw new Error("unauthorized");
@@ -104,6 +118,10 @@ async function api(path, opts) {
   return res;
 }
 
+function showLoginError(msg) {
+  const el = $("login-error");
+  if (el) el.textContent = msg || "";
+}
 function showLogin() {
   const el = $("login-overlay");
   if (el) el.classList.remove("hidden");
@@ -111,6 +129,7 @@ function showLogin() {
 function hideLogin() {
   const el = $("login-overlay");
   if (el) el.classList.add("hidden");
+  showLoginError("");
 }
 
 function fmtTs(ts) {
@@ -704,30 +723,69 @@ function connectEvents() {
 }
 
 function onReady() {
+  const bootToken = currentToken();
+  if (bootToken && !getCookie("streamaid_token")) setCookie("streamaid_token", bootToken);
   const login = $("login-form");
   if (login) {
     login.addEventListener("submit", function (e) {
       e.preventDefault();
       const pin = ($("login-pin") && $("login-pin").value || "").trim();
-      const t = ($("login-token") && $("login-token").value || "").trim();
-      if (pin && pin.length === 6) {
+      const t = ($("login-token") && $("login-token").value || "").replace(/^Bearer\s+/i, "").trim();
+      showLoginError("");
+      function afterHostUnlock() {
+        hideLogin();
+        loadConfig().then(function () {
+          refreshPin();
+          connectEvents();
+        });
+      }
+      function tryToken() {
+        if (!t) {
+          showLoginError("Enter the 6-digit PIN or host token");
+          return;
+        }
+        fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ token: t }),
+        }).then(function (r) { return r.json().then(function (b) { return { status: r.status, b: b }; }); }).then(function (x) {
+          if (x.status !== 200 || !x.b.ok) {
+            showLoginError(x.b.error || "bad token");
+            return;
+          }
+          setCookie("streamaid_token", t);
+          afterHostUnlock();
+        }).catch(function (err) {
+          showLoginError(String(err && err.message || err));
+        });
+      }
+      if (pin) {
         fetch("/api/otp/redeem", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
           body: JSON.stringify({ pin: pin }),
-        }).then(function (r) { return r.json(); }).then(function (b) {
-          if (b.session) {
-            setCookie("streamaid_session", b.session);
-            setCookie("streamaid_viewer", "1");
-            hideLogin();
-            showH264();
+        }).then(function (r) { return r.json().then(function (b) { return { status: r.status, b: b }; }); }).then(function (x) {
+          if (x.status !== 200 || !x.b.session) {
+            if (t) {
+              tryToken();
+              return;
+            }
+            showLoginError(x.b.error || (x.status === 429 ? "too many tries" : "bad PIN"));
+            return;
           }
-        }).catch(function () {});
+          setCookie("streamaid_session", x.b.session);
+          setCookie("streamaid_viewer", "1");
+          hideLogin();
+          showH264();
+        }).catch(function (err) {
+          if (t) tryToken();
+          else showLoginError(String(err && err.message || err));
+        });
         return;
       }
-      if (!t) return;
-      setCookie("streamaid_token", t);
-      location.reload();
+      tryToken();
     });
   }
   function refreshPin() {
@@ -789,6 +847,7 @@ function onReady() {
         if (note) note.textContent = r.note || "saved";
         const rn = $("restart-note");
         if (rn) rn.classList.toggle("hidden", !r.restart_required);
+        if (form.token) setCookie("streamaid_token", form.token);
         if (r.applied) closeDrawer();
         if (r.applied && form.encoder.mode !== mode) {
           setTimeout(function () { location.reload(); }, 400);
@@ -925,6 +984,8 @@ if (typeof window !== "undefined") {
     setDrawerOpen: setDrawerOpen,
     syncFeatureUi: syncFeatureUi,
     featureFlags: featureFlags,
+    currentToken: currentToken,
+    url: url,
   };
 }
 
